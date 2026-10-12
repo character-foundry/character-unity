@@ -36,16 +36,25 @@ const stopChatRefresh = profile !== 'hub' && services.chat && scanSeconds > 0
   ? startChatRefresh({ chat: services.chat, workspaces: (actor) => services.cards.workspaces(actor), actor: localActor,
     intervalMs: scanSeconds * 1000, log: (event) => console.log(JSON.stringify(event)) })
   : undefined;
+let stopping = false;
+// Token counts for cards stored before counting existed (and anything a write path missed), in small batches.
+let measuring: ReturnType<typeof setTimeout> | undefined;
+const measure = async () => {
+  try { while (!stopping && await services.cards.measureMissing(50) === 50); }
+  catch (error) { console.log(JSON.stringify({ event: 'token-backfill-failed', message: error instanceof Error ? error.message : String(error) })); }
+  if (!stopping) { measuring = setTimeout(() => void measure(), 60_000); measuring.unref(); }
+};
+measuring = setTimeout(() => void measure(), 2_000); measuring.unref();
 const server = serve({ fetch: app.fetch, hostname, port }, (address) => {
   origin = `http://${urlHost}:${address.port}`;
   console.log(JSON.stringify({ event: 'listening', service: 'unity-api', profile, host: hostname, port: address.port }));
 });
-let stopping = false;
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     if (stopping) return;
     stopping = true;
     stopChatRefresh?.();
+    clearTimeout(measuring);
     server.close((error) => {
       services.close();
       process.exitCode = error ? 1 : 0;

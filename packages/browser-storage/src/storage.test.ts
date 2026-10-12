@@ -129,6 +129,30 @@ describe('browser storage', () => {
     await expect(blobs.put('originals/huge', body(bytes), { ...expected, byteLength: 33 * 1024 * 1024 })).rejects.toMatchObject({ code: 'TOO_LARGE' });
   });
 
+  it('upgrades a version 1 library in place, keeping its cards', async () => {
+    const v1 = await new Promise<IDBDatabase>((resolve, reject) => {
+      const op = indexedDB.open(name, 1);
+      op.onupgradeneeded = () => {
+        const db = op.result;
+        db.createObjectStore('meta', { keyPath: 'key' }).add({ key: 'schema', format: 'character-unity-indexeddb', version: 1 });
+        db.createObjectStore('workspaces', { keyPath: 'id' }).createIndex('owner', ['ownerId', 'createdAt', 'id']);
+        const cards = db.createObjectStore('cards', { keyPath: 'id' });
+        cards.createIndex('workspace', ['workspaceId', 'id']); cards.createIndex('forks', ['workspaceId', 'forkedFromRevisionId', 'id']);
+        db.createObjectStore('revisions', { keyPath: 'id' }).createIndex('history', ['workspaceId', 'cardId', 'sequence'], { unique: true });
+        for (const store of ['assets', 'sources']) db.createObjectStore(store, { keyPath: store === 'sources' ? 'cardId' : 'id' });
+        db.createObjectStore('blobs', { keyPath: 'key' });
+        op.transaction!.objectStore('cards').add({ id: 'c1', workspaceId: 'w1', headRevisionId: null, originalHash: null, forkedFromRevisionId: null, createdAt: '2026-10-01T00:00:00.000Z' });
+      };
+      op.onsuccess = () => resolve(op.result); op.onerror = () => reject(op.error);
+    });
+    v1.close();
+    const { store } = await open();
+    expect(await store.readiness()).toEqual({ schemaVersion: 2 });
+    expect(await store.getCard('w1', 'c1')).toMatchObject({ id: 'c1' });
+    await store.deleteCard('w1', 'c1');
+    await expect(store.getCard('w1', 'c1')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
   it('refuses foreign schemas and namespaces without erasing data', async () => {
     await expect(openBrowserStorage({ name: 'archive' })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
     const db = await new Promise<IDBDatabase>((resolve, reject) => {
@@ -136,8 +160,12 @@ describe('browser storage', () => {
       op.onupgradeneeded = () => { op.result.createObjectStore('foreign').put('keep', 'original'); };
       op.onsuccess = () => resolve(op.result); op.onerror = () => reject(op.error);
     });
-    handles.push(db);
+    // An upgrade to the current version must refuse the foreign database and leave it untouched.
+    db.close();
     await expect(open()).rejects.toMatchObject({ code: 'SCHEMA_MISMATCH' });
-    expect(await transaction(db, ['foreign'], 'readonly', function* (tx) { return yield* request(tx.objectStore('foreign').get('original')); })).toBe('keep');
+    const reopened = await new Promise<IDBDatabase>((resolve, reject) => { const op = indexedDB.open(name); op.onsuccess = () => resolve(op.result); op.onerror = () => reject(op.error); });
+    handles.push(reopened);
+    expect(reopened.version).toBe(1);
+    expect(await transaction(reopened, ['foreign'], 'readonly', function* (tx) { return yield* request(tx.objectStore('foreign').get('original')); })).toBe('keep');
   });
 });

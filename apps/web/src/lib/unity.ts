@@ -57,7 +57,8 @@ export function libraryId(): Promise<string> {
 
 export interface LibraryQuery {
   q?: string; tags?: readonly string[]; tagMode?: 'all' | 'any'; exclude?: readonly string[];
-  has?: readonly string[]; fork?: 'only' | 'none'; sort?: string; offset?: number; limit?: number;
+  has?: readonly string[]; fork?: 'only' | 'none'; favorite?: 'fav' | 'not_fav'; source?: string; minTokens?: number;
+  sort?: string; offset?: number; limit?: number;
 }
 export async function listCards(query: LibraryQuery): Promise<CardSummaryList> {
   const workspace = await libraryId();
@@ -68,10 +69,27 @@ export async function listCards(query: LibraryQuery): Promise<CardSummaryList> {
   if (query.exclude?.length) params.set('exclude', query.exclude.join(','));
   if (query.has?.length) params.set('has', query.has.join(','));
   if (query.fork) params.set('fork', query.fork);
+  if (query.favorite) params.set('favorite', query.favorite);
+  if (query.source) params.set('source', query.source);
+  if (query.minTokens) params.set('minTokens', String(query.minTokens));
   if (query.sort && query.sort !== 'edited') params.set('sort', query.sort);
   if (query.offset) params.set('offset', String(query.offset));
   if (query.limit) params.set('limit', String(query.limit));
   return call(`/api/workspaces/${workspace}/card-summaries?${params}`);
+}
+
+const json = (value: unknown): RequestInit => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
+export async function setFavorite(cardId: string, favorite: boolean) {
+  await call(`/api/workspaces/${await libraryId()}/cards/${encodeURIComponent(cardId)}/favorite`, { method: favorite ? 'PUT' : 'DELETE' });
+}
+export async function deleteCard(cardId: string) {
+  await call(`/api/workspaces/${await libraryId()}/cards/${encodeURIComponent(cardId)}`, { method: 'DELETE' });
+}
+export async function followCreator(creator: string, follow: boolean) {
+  await call(`/api/workspaces/${await libraryId()}/followed-creators`, { method: follow ? 'PUT' : 'DELETE', ...json({ creator }) });
+}
+export async function listFollowedCreators(): Promise<string[]> {
+  return (await call<{ creators: string[] }>(`/api/workspaces/${await libraryId()}/followed-creators`)).creators;
 }
 
 export async function listCardTags(): Promise<{ tag: string; count: number }[]> {

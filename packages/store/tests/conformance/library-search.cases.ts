@@ -74,4 +74,53 @@ export async function librarySearchCases(store: UnityStore, workspaceId: string)
   expect(tags.find((entry) => entry.tag.toLowerCase() === 'female')).toEqual({ tag: 'female', count: 2 });
   expect(tags.map((entry) => entry.tag.toLowerCase()).sort()).toEqual(['fantasy', 'female', 'male', 'nsfw', 'robot', 'scifi']);
   expect(await store.listCardTags(workspaceId, { limit: 2 })).toHaveLength(2);
+
+  // Local favorites and followed creators (creator match is trimmed and case-insensitive).
+  await store.setFavorite(workspaceId, ember.card.id, true);
+  await store.setFavorite(workspaceId, ember.card.id, true);
+  expect(await ids({ favorite: 'fav' })).toEqual([ember.card.id]);
+  expect(await ids({ favorite: 'not_fav' })).toEqual(sorted(wolf.card.id, zed.card.id, fork.card.id));
+  expect((await store.listCardSummaries(workspaceId, { ids: [ember.card.id] })).items[0]).toMatchObject({ favorite: true });
+  await store.followCreator(workspaceId, ' ASH ', true);
+  expect(await store.listFollowedCreators(workspaceId)).toEqual(['ASH']);
+  expect(await ids({ has: ['followed'] })).toEqual(sorted(ember.card.id, zed.card.id));
+  await store.followCreator(workspaceId, 'ash', false);
+  expect(await ids({ has: ['followed'] })).toEqual([]);
+  await expect(store.followCreator(workspaceId, '   ', true)).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+
+  // Token counts: unknown counts never meet a minimum and sort last.
+  await store.putRevisionMetrics(workspaceId, ember.revision.id, { tokenizer: 'test', total: 500, tokens: { description: 500 } });
+  await store.putRevisionMetrics(workspaceId, wolf.revision.id, { tokenizer: 'test', total: 120, tokens: { description: 120 } });
+  expect(await ids({ minTokens: 200 })).toEqual([ember.card.id]);
+  expect(await ids({ minTokens: 100 })).toEqual(sorted(ember.card.id, wolf.card.id));
+  expect((await order('tokens_desc')).slice(0, 2)).toEqual([ember.card.id, wolf.card.id]);
+  expect((await order('tokens_asc')).slice(0, 2)).toEqual([wolf.card.id, ember.card.id]);
+  expect((await store.listCardSummaries(workspaceId, { ids: [wolf.card.id, zed.card.id] })).items.map((item) => item.tokensTotal).sort()).toEqual([120, null]);
+  expect((await store.revisionsMissingMetrics()).map((item) => item.revisionId)).not.toContain(ember.revision.id);
+
+  // Archive-style content flags and source.
+  const rich = await store.createCard(input(card({ name: 'Gallery Girl', creator: 'Birch', system_prompt: 'Stay in character.', mes_example: '<START>',
+    first_mes: 'Look: ![smile](https://example.test/a.png)', extensions: { chub: { expressions: { happy: 'https://example.test/h.png' } } },
+    assets: [{ type: 'icon', uri: 'ccdefault:', name: 'main', ext: 'png' }, { type: 'other', uri: 'embeded://x.png', name: 'bg', ext: 'png' }] })));
+  const plain = await store.createCard(input(card({ name: 'Plain', alternate_greetings: ['<img src="x.png">'], extensions: { chub: { expressions: null } },
+    assets: [{ type: 'emotion', uri: 'embeded://joy.png', name: 'joy', ext: 'png' }] })));
+  expect(await ids({ has: ['gallery'] })).toEqual([rich.card.id]);
+  expect(await ids({ has: ['embeddedImages'] })).toEqual(sorted(rich.card.id, plain.card.id));
+  expect(await ids({ has: ['expressions'] })).toEqual(sorted(rich.card.id, plain.card.id));
+  expect(await ids({ has: ['systemPrompt', 'exampleDialogues'] })).toEqual([rich.card.id]);
+  expect(await ids({ source: 'chub' })).toEqual(sorted(rich.card.id, plain.card.id));
+  expect(await ids({ source: 'file', q: 'creator:birch' })).toEqual([wolf.card.id]);
+  expect((await store.listCardSummaries(workspaceId, { ids: [rich.card.id] })).items[0]).toMatchObject({ source: 'chub', favorite: false, tokensTotal: null });
+
+  // Delete is a tombstone: the card disappears from every read, its fork stays.
+  await store.deleteCard(workspaceId, ember.card.id);
+  await expect(store.getCard(workspaceId, ember.card.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  await expect(store.deleteCard(workspaceId, ember.card.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  await expect(store.setFavorite(workspaceId, ember.card.id, true)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(await ids({ q: 'ember' })).toEqual([fork.card.id]);
+  expect(await ids({ favorite: 'fav' })).toEqual([]);
+  expect((await store.listCards(workspaceId)).map((item) => item.id)).not.toContain(ember.card.id);
+  expect((await store.listCardTags(workspaceId)).map((entry) => entry.tag.toLowerCase())).not.toContain('nsfw');
+  expect((await store.listCardSummaries(workspaceId, { ids: [fork.card.id] })).items[0]!.card.forkedFromRevisionId).toBe(ember.revision.id);
+  expect((await store.revisionsMissingMetrics({ limit: 100 })).map((item) => item.revisionId)).not.toContain(ember.revision.id);
 }

@@ -111,9 +111,9 @@ class UnityApiClient extends ApiClient {
     return this.getCard(created.data.card.id);
   }
 
-  override async deleteCard(_id: string): Promise<Result<void>> {
-    void _id;
-    return { error: 'Deleting library cards is not available yet' };
+  override async deleteCard(id: string): Promise<Result<void>> {
+    const result = await unity<null>(`${base()}/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return result.error ? { error: result.error } : { data: undefined };
   }
 
   override getCardImageUrl(cardId: string): string {

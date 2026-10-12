@@ -1,7 +1,7 @@
 import { StoreError } from '@character-unity/store';
 import type { Asset, Card, CardSource, CardSourceInput, Revision, RevisionInput, UnityStore, Workspace } from '@character-unity/store';
 import * as validate from '@character-unity/store/validation';
-import { fold, libraryComparator, libraryMatcher } from '@character-unity/store/library-query';
+import { fold, libraryComparator, libraryMatcher, librarySource } from '@character-unity/store/library-query';
 import { inspectDatabase } from './database.js';
 import { request, transaction } from './transaction.js';
 
@@ -17,6 +17,8 @@ function* workspace(tx: IDBTransaction, id: string) {
 function* scoped<T extends { workspaceId: string }>(tx: IDBTransaction, table: string, workspaceId: string, id: string) {
   const row = yield* get<T>(tx, table, id);
   if (!row || row.workspaceId !== workspaceId) throw new StoreError('NOT_FOUND', 'Record not found in this workspace');
+  // Deleted cards are tombstoned (revisions are immutable); every transaction that reads cards also reads deletions.
+  if (table === 'cards' && (yield* get(tx, 'deletions', id))) throw new StoreError('NOT_FOUND', 'Record not found in this workspace');
   return row;
 }
 function* ready(tx: IDBTransaction, workspaceId: string, assetId: string) {
@@ -47,20 +49,27 @@ function* insertSource(tx: IDBTransaction, card: Card, source?: CardSourceInput)
   yield* ready(tx, card.workspaceId, source.assetId);
   yield* request(tx.objectStore('sources').add({ ...source, cardId: card.id, workspaceId: card.workspaceId }));
 }
-const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources'];
+const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources', 'deletions'];
 
 /** Same trusted domain contract as SQL; each write is one native IDB transaction. */
 export function createBrowserStore(db: IDBDatabase): UnityStore {
   function headRows(workspaceId: string) {
-    return transaction(db, ['cards', 'revisions', 'sources'], 'readonly', function* (tx) {
+    return transaction(db, ['cards', 'revisions', 'sources', 'deletions', 'favorites', 'metrics'], 'readonly', function* (tx) {
       const cards = yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
-      const rows: { card: Card; revision: Revision; source: CardSource | undefined }[] = [];
+      const rows: { card: Card; revision: Revision; source: CardSource | undefined; favorite: boolean; tokens: number | null }[] = [];
       for (const card of cards) {
-        if (!card.headRevisionId) continue;
-        rows.push({ card, revision: yield* scoped<Revision>(tx, 'revisions', workspaceId, card.headRevisionId), source: yield* get<CardSource>(tx, 'sources', card.id) });
+        if (!card.headRevisionId || (yield* get(tx, 'deletions', card.id))) continue;
+        const metrics = yield* get<{ total: number }>(tx, 'metrics', card.headRevisionId);
+        rows.push({ card, revision: yield* scoped<Revision>(tx, 'revisions', workspaceId, card.headRevisionId), source: yield* get<CardSource>(tx, 'sources', card.id),
+          favorite: !!(yield* get(tx, 'favorites', card.id)), tokens: metrics ? metrics.total : null });
       }
       return rows;
     });
+  }
+  async function followedKeys(workspaceId: string) {
+    return new Set((await transaction(db, ['follows'], 'readonly', function* (tx) {
+      return yield* request<{ key: string }[]>(tx.objectStore('follows').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
+    })).map((row) => row.key));
   }
   return {
     readiness: () => inspectDatabase(db),
@@ -77,10 +86,10 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         return yield* request<Workspace[]>(tx.objectStore('workspaces').index('owner').getAll(IDBKeyRange.bound([ownerId], [ownerId, []]), 100));
       });
     },
-    getCard: (workspaceId, id) => transaction(db, ['cards'], 'readonly', (tx) => scoped<Card>(tx, 'cards', workspaceId, id)),
+    getCard: (workspaceId, id) => transaction(db, ['cards', 'deletions'], 'readonly', (tx) => scoped<Card>(tx, 'cards', workspaceId, id)),
     getRevision: (workspaceId, id) => transaction(db, ['revisions'], 'readonly', (tx) => scoped<Revision>(tx, 'revisions', workspaceId, id)),
     getAsset: (workspaceId, id) => transaction(db, ['assets'], 'readonly', (tx) => scoped<Asset>(tx, 'assets', workspaceId, id)),
-    getSource: (workspaceId, cardId) => transaction(db, ['cards', 'sources'], 'readonly', function* (tx) {
+    getSource: (workspaceId, cardId) => transaction(db, ['cards', 'sources', 'deletions'], 'readonly', function* (tx) {
       yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
       return (yield* get<CardSource>(tx, 'sources', cardId)) ?? null;
     }),
@@ -133,8 +142,12 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
     async listCards(workspaceId, options = {}) {
       const range = IDBKeyRange.bound([workspaceId, options.afterId ?? ''], [workspaceId, []], true);
       const limit = validate.limit(options.limit);
-      return transaction(db, ['cards'], 'readonly', function* (tx) {
-        return yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(range, limit));
+      // Tombstoned cards are skipped, so a page can be short; callers page by the last returned id.
+      return transaction(db, ['cards', 'deletions'], 'readonly', function* (tx) {
+        const rows = yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(range, limit));
+        const live: Card[] = [];
+        for (const row of rows) if (!(yield* get(tx, 'deletions', row.id))) live.push(row);
+        return live;
       });
     },
     /** Same ordering and filters as the SQL store (library-query.ts); a browser library is small enough to scan. */
@@ -147,18 +160,19 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         const parentCard = card.forkedFromRevisionId ? revisionCards.get(card.forkedFromRevisionId) : undefined;
         if (parentCard) forks.set(parentCard, (forks.get(parentCard) ?? 0) + 1);
       }
-      const matcher = libraryMatcher({ ...query, tags: [...(query.tags ?? []), ...(query.tag?.trim() ? [query.tag] : [])] });
+      const matcher = libraryMatcher({ ...query, tags: [...(query.tags ?? []), ...(query.tag?.trim() ? [query.tag] : [])] }, await followedKeys(workspaceId));
       const ids = query.ids ? new Set(query.ids) : null;
       const rows = scan.filter(({ card }) => (!ids || ids.has(card.id))
         && (!query.forkOf || (card.forkedFromRevisionId !== null && revisionCards.get(card.forkedFromRevisionId) === query.forkOf)))
         .map((entry) => ({ ...entry, row: { cardId: entry.card.id, cardCreatedAt: entry.card.createdAt, forkedFromRevisionId: entry.card.forkedFromRevisionId,
           revisionCreatedAt: entry.revision.createdAt, sequence: entry.revision.sequence, document: entry.revision.document,
-          assetPaths: entry.revision.assets.map((asset) => asset.path), forkCount: forks.get(entry.card.id) ?? 0 } }))
+          assetPaths: entry.revision.assets.map((asset) => asset.path), forkCount: forks.get(entry.card.id) ?? 0,
+          provenance: entry.source?.provenance ?? null, favorite: entry.favorite, inChat: false, tokens: entry.tokens } }))
         .filter(({ row }) => matcher(row));
       const order = libraryComparator(query.sort ?? 'edited');
       rows.sort((a, b) => order(a.row, b.row));
       return { total: rows.length, items: rows.slice(offset, offset + limit).map(({ card, revision, source, row }) => ({
-        card, revision, forkCount: row.forkCount,
+        card, revision, forkCount: row.forkCount, favorite: row.favorite, tokensTotal: row.tokens, source: librarySource(row.provenance, row.document),
         sourceFormat: typeof (source?.provenance as { format?: unknown } | undefined)?.format === 'string' ? (source!.provenance as { format: string }).format : null,
       })) };
     },
@@ -179,6 +193,54 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
       return [...counts.entries()].map(([key, { tag, cards }]) => ({ key, tag, count: cards.size }))
         .sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, limit).map(({ tag, count }) => ({ tag, count }));
     },
+    async deleteCard(workspaceId, cardId) {
+      await transaction(db, ['cards', 'deletions', 'favorites'], 'readwrite', function* (tx) {
+        yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
+        yield* request(tx.objectStore('deletions').add({ cardId, workspaceId, deletedAt: new Date().toISOString() }));
+        yield* request(tx.objectStore('favorites').delete(cardId));
+      });
+    },
+    async setFavorite(workspaceId, cardId, favorite) {
+      await transaction(db, ['cards', 'deletions', 'favorites'], 'readwrite', function* (tx) {
+        yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
+        if (favorite) yield* request(tx.objectStore('favorites').put({ cardId, workspaceId, createdAt: new Date().toISOString() }));
+        else yield* request(tx.objectStore('favorites').delete(cardId));
+      });
+    },
+    async followCreator(workspaceId, creator, follow) {
+      const name = creator.replace(/^ +| +$/g, '');
+      if (!name || name.length > 200) throw new StoreError('INVALID_INPUT', 'Creator name must be 1 to 200 characters');
+      await transaction(db, ['workspaces', 'follows'], 'readwrite', function* (tx) {
+        yield* workspace(tx, workspaceId);
+        if (follow) { if (!(yield* request(tx.objectStore('follows').get([workspaceId, fold(name)])))) yield* request(tx.objectStore('follows').add({ workspaceId, key: fold(name), creator: name, createdAt: new Date().toISOString() })); }
+        else yield* request(tx.objectStore('follows').delete([workspaceId, fold(name)]));
+      });
+    },
+    async listFollowedCreators(workspaceId) {
+      return (await transaction(db, ['follows'], 'readonly', function* (tx) {
+        return yield* request<{ creator: string }[]>(tx.objectStore('follows').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []]), 5000));
+      })).map((row) => row.creator);
+    },
+    async putRevisionMetrics(workspaceId, revisionId, metrics) {
+      validate.count(metrics.total, 'total');
+      await transaction(db, ['revisions', 'metrics'], 'readwrite', function* (tx) {
+        yield* scoped<Revision>(tx, 'revisions', workspaceId, revisionId);
+        yield* request(tx.objectStore('metrics').put({ revisionId, workspaceId, tokenizer: validate.text(metrics.tokenizer, 'tokenizer'), total: metrics.total, tokens: { ...metrics.tokens } }));
+      });
+    },
+    async revisionsMissingMetrics(options = {}) {
+      const limit = validate.limit(options.limit ?? 100);
+      return transaction(db, ['cards', 'deletions', 'metrics'], 'readonly', function* (tx) {
+        const cards = yield* request<Card[]>(tx.objectStore('cards').getAll());
+        const missing: { workspaceId: string; revisionId: string }[] = [];
+        for (const card of cards) {
+          if (missing.length >= limit) break;
+          if (!card.headRevisionId || (yield* get(tx, 'deletions', card.id)) || (yield* get(tx, 'metrics', card.headRevisionId))) continue;
+          missing.push({ workspaceId: card.workspaceId, revisionId: card.headRevisionId });
+        }
+        return missing;
+      });
+    },
     async listRevisions(workspaceId, cardId, options = {}) {
       const range = IDBKeyRange.bound([workspaceId, cardId, validate.count(options.afterSequence ?? 0, 'afterSequence')], [workspaceId, cardId, []], true);
       const limit = validate.limit(options.limit);
@@ -189,8 +251,11 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
     async listForks(workspaceId, sourceRevisionId, options = {}) {
       const range = IDBKeyRange.bound([workspaceId, sourceRevisionId, options.afterId ?? ''], [workspaceId, sourceRevisionId, []], true);
       const limit = validate.limit(options.limit);
-      return transaction(db, ['cards'], 'readonly', function* (tx) {
-        return yield* request<Card[]>(tx.objectStore('cards').index('forks').getAll(range, limit));
+      return transaction(db, ['cards', 'deletions'], 'readonly', function* (tx) {
+        const rows = yield* request<Card[]>(tx.objectStore('cards').index('forks').getAll(range, limit));
+        const live: Card[] = [];
+        for (const row of rows) if (!(yield* get(tx, 'deletions', row.id))) live.push(row);
+        return live;
       });
     },
     async stageAsset(input) {

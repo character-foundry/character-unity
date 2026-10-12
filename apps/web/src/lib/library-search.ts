@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useSearchParams } from 'react-router';
-import { libraryId, listCardTags, listCards } from './unity';
+import { libraryId, listCardTags, listCards, listFollowedCreators } from './unity';
 import type { LibraryQuery } from './unity';
 import { toListItem } from './adapt';
 import type { CardListItem } from '@/types/card';
@@ -15,9 +15,12 @@ export interface LibrarySearch {
   exclude: string[];
   has: string[];
   fork: '' | 'only' | 'none';
+  favorite: '' | 'fav' | 'not_fav';
+  source: string;
+  minTokens: string;
   sort: string;
 }
-export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', sort: 'edited' };
+export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', favorite: '', source: '', minTokens: '', sort: 'edited' };
 
 export const sortOptions = [
   { value: 'edited', label: 'Recently edited' },
@@ -25,21 +28,37 @@ export const sortOptions = [
   { value: 'oldest', label: 'Oldest first' },
   { value: 'name', label: 'Name A–Z' },
   { value: 'name_desc', label: 'Name Z–A' },
+  { value: 'tokens_desc', label: 'Most tokens' },
+  { value: 'tokens_asc', label: 'Fewest tokens' },
   { value: 'greetings', label: 'Most greetings' },
   { value: 'lorebook', label: 'Biggest lorebook' },
   { value: 'revisions', label: 'Most revisions' },
   { value: 'forks', label: 'Most forks' },
 ] as const;
 export const flagOptions = [
-  { value: 'greetings', label: 'Has alternate greetings' },
-  { value: 'lorebook', label: 'Has lorebook' },
-  { value: 'portrait', label: 'Has portrait' },
-  { value: 'assets', label: 'Has extra assets' },
+  { value: 'greetings', label: 'Alternate greetings' },
+  { value: 'lorebook', label: 'Lorebook' },
+  { value: 'gallery', label: 'Gallery' },
+  { value: 'embeddedImages', label: 'Embedded images' },
+  { value: 'expressions', label: 'Expressions' },
+  { value: 'chat', label: 'Loaded in a chat app' },
+  { value: 'followed', label: 'Followed creators only' },
+  { value: 'portrait', label: 'Portrait' },
+  { value: 'systemPrompt', label: 'System prompt' },
+  { value: 'exampleDialogues', label: 'Example dialogues' },
+] as const;
+export const sourceOptions = [
+  { value: '', label: 'All' },
+  { value: 'chub', label: 'Chub' },
+  { value: 'ct', label: 'Character Tavern' },
+  { value: 'risuai', label: 'RisuAI' },
+  { value: 'wyvern', label: 'Wyvern' },
+  { value: 'file', label: 'Imported file' },
 ] as const;
 
 const list = (value: string | null) => (value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
 export function readSearch(params: URLSearchParams): LibrarySearch {
-  const fork = params.get('fork');
+  const fork = params.get('fork'), favorite = params.get('favorite'), tokens = params.get('minTokens') ?? '';
   return {
     // `search` and `tags` are the Hub names that card links already use.
     q: params.get('search') ?? params.get('q') ?? '',
@@ -49,6 +68,9 @@ export function readSearch(params: URLSearchParams): LibrarySearch {
     exclude: list(params.get('exclude')),
     has: list(params.get('has')),
     fork: fork === 'only' || fork === 'none' ? fork : '',
+    favorite: favorite === 'fav' || favorite === 'not_fav' ? favorite : '',
+    source: sourceOptions.some((option) => option.value && option.value === params.get('source')) ? params.get('source')! : '',
+    minTokens: /^[1-9][0-9]{0,6}$/.test(tokens) ? tokens : '',
     sort: sortOptions.some((option) => option.value === params.get('sort')) ? params.get('sort')! : 'edited',
   };
 }
@@ -61,6 +83,9 @@ export function writeSearch(search: LibrarySearch): URLSearchParams {
   if (search.exclude.length) params.set('exclude', search.exclude.join(','));
   if (search.has.length) params.set('has', search.has.join(','));
   if (search.fork) params.set('fork', search.fork);
+  if (search.favorite) params.set('favorite', search.favorite);
+  if (search.source) params.set('source', search.source);
+  if (search.minTokens) params.set('minTokens', search.minTokens);
   if (search.sort !== 'edited') params.set('sort', search.sort);
   return params;
 }
@@ -81,7 +106,8 @@ export function useSearchState() {
   return { search: readSearch(params), update, replace };
 }
 export function isFiltered(search: LibrarySearch) {
-  return !!(search.q.trim() || search.expr.trim() || search.tags.length || search.exclude.length || search.has.length || search.fork);
+  return !!(search.q.trim() || search.expr.trim() || search.tags.length || search.exclude.length || search.has.length || search.fork
+    || search.favorite || search.source || search.minTokens);
 }
 export const sameTag = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -107,6 +133,19 @@ export function useCardTags() {
   return tags;
 }
 
+let lastFollowed: string[] = [];
+/** Creators followed in this library; refreshed after follow changes (libraryChanged). */
+export function useFollowedCreators() {
+  const version = useLibraryVersion();
+  const [creators, setCreators] = useState(lastFollowed);
+  useEffect(() => {
+    let active = true;
+    listFollowedCreators().then((value) => { lastFollowed = value; if (active) setCreators(value); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [version]);
+  return creators;
+}
+
 // ---- Infinite list with place-keeping ------------------------------------------------------------
 
 export const PAGE_SIZE = 48;
@@ -118,7 +157,8 @@ export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly s
   const exclude = [...new Set([...search.exclude, ...hidden.tags, ...(hidden.hideNsfw ? ['nsfw'] : [])].map((tag) => tag.toLowerCase()))];
   const text = [search.q.trim(), search.expr.trim()].filter(Boolean);
   const query: LibraryQuery = { q: text.length > 1 ? text.map((part) => `(${part})`).join(' ') : text[0] ?? '', tags: search.tags, tagMode: search.tagMode, exclude, has: search.has,
-    ...(search.fork ? { fork: search.fork } : {}), sort: search.sort };
+    ...(search.fork ? { fork: search.fork } : {}), ...(search.favorite ? { favorite: search.favorite } : {}),
+    ...(search.source ? { source: search.source } : {}), ...(search.minTokens ? { minTokens: Number(search.minTokens) } : {}), sort: search.sort };
   const key = JSON.stringify(query);
   const version = useLibraryVersion();
   const cached = views.get(key);

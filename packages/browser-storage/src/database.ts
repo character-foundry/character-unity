@@ -1,8 +1,10 @@
 import { StoreError } from '@character-unity/store';
 import { request, transaction } from './transaction.js';
 
-const version = 1;
-const stores = ['meta', 'workspaces', 'cards', 'revisions', 'assets', 'sources', 'blobs'];
+const version = 2;
+const storesV1 = ['meta', 'workspaces', 'cards', 'revisions', 'assets', 'sources', 'blobs'];
+// Version 2: library annotations (deleted cards, favorites, followed creators, revision token counts).
+const stores = [...storesV1, 'deletions', 'favorites', 'follows', 'metrics'];
 const marker = { key: 'schema', format: 'character-unity-indexeddb', version };
 
 export async function openDatabase(name: string): Promise<IDBDatabase> {
@@ -10,14 +12,19 @@ export async function openDatabase(name: string): Promise<IDBDatabase> {
   if (typeof indexedDB === 'undefined') throw new Error('This browser does not provide IndexedDB storage');
   const db = await new Promise<IDBDatabase>((resolve, reject) => {
     const opening = indexedDB.open(name, version);
-    let cancelled = false;
+    let cancelled = false, foreign = false;
     opening.onblocked = () => { cancelled = true; reject(new Error('Another tab is blocking the storage upgrade. Close it and reopen this app.')); };
-    opening.onerror = () => reject(opening.error);
+    opening.onerror = () => reject(foreign ? new StoreError('SCHEMA_MISMATCH', 'This is not a recognized Unity browser database') : opening.error);
     opening.onupgradeneeded = (event) => {
-      if (cancelled || event.oldVersion !== 0 || opening.result.objectStoreNames.length !== 0) {
-        opening.transaction!.abort(); return;
+      const db = opening.result, names = [...db.objectStoreNames].sort().join();
+      if (!cancelled && event.oldVersion === 1 && names === [...storesV1].sort().join()) {
+        addAnnotations(db);
+        opening.transaction!.objectStore('meta').put(marker);
+        return;
       }
-      const db = opening.result;
+      if (cancelled || event.oldVersion !== 0 || db.objectStoreNames.length !== 0) {
+        foreign = !cancelled; opening.transaction!.abort(); return;
+      }
       db.createObjectStore('meta', { keyPath: 'key' }).add(marker);
       db.createObjectStore('workspaces', { keyPath: 'id' }).createIndex('owner', ['ownerId', 'createdAt', 'id']);
       const cards = db.createObjectStore('cards', { keyPath: 'id' });
@@ -27,6 +34,7 @@ export async function openDatabase(name: string): Promise<IDBDatabase> {
       db.createObjectStore('assets', { keyPath: 'id' });
       db.createObjectStore('sources', { keyPath: 'cardId' });
       db.createObjectStore('blobs', { keyPath: 'key' });
+      addAnnotations(db);
     };
     opening.onsuccess = () => {
       if (cancelled) opening.result.close();
@@ -36,6 +44,13 @@ export async function openDatabase(name: string): Promise<IDBDatabase> {
   db.onversionchange = () => db.close();
   try { await inspectDatabase(db); return db; }
   catch (error) { db.close(); throw error; }
+}
+
+function addAnnotations(db: IDBDatabase) {
+  db.createObjectStore('deletions', { keyPath: 'cardId' });
+  db.createObjectStore('favorites', { keyPath: 'cardId' });
+  db.createObjectStore('follows', { keyPath: ['workspaceId', 'key'] }).createIndex('workspace', ['workspaceId', 'key']);
+  db.createObjectStore('metrics', { keyPath: 'revisionId' });
 }
 
 export async function inspectDatabase(db: IDBDatabase): Promise<{ schemaVersion: typeof version }> {

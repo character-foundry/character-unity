@@ -29,7 +29,7 @@ it('persists through reopen and rejects stale writers across separate SQLite con
     for (const handle of handles.splice(0)) handle.close();
     const reopened = await openNodeStore(filename);
     handles.push(reopened);
-    expect(await reopened.store.readiness()).toEqual({ schemaVersion: 11 });
+    expect(await reopened.store.readiness()).toEqual({ schemaVersion: 12 });
     expect(await reopened.store.listRevisions(workspaceId, base.card.id)).toHaveLength(2);
   } finally {
     for (const handle of handles) handle.close();

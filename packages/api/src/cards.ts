@@ -3,8 +3,8 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { CardError, importByteLimit } from '@character-unity/cards/contract';
 import type { Actor, CardService } from '@character-unity/cards';
-import type { CardDocument, LibraryFlag, LibrarySort } from '@character-unity/store';
-import { isLibraryFlag, isLibrarySort } from '@character-unity/store';
+import type { CardDocument, LibraryFlag, LibrarySort, LibrarySource } from '@character-unity/store';
+import { isLibraryFlag, isLibrarySort, librarySources } from '@character-unity/store';
 import type { ArchiveImportService } from '@character-unity/cards/archive';
 import { input, parseSearchQuery, isSearchSort, parseSnapshot } from '@character-unity/archive-client/contract';
 import { assetRevisionBody } from './asset-body.js';
@@ -46,7 +46,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   routes.get('/:workspaceId/card-summaries', async (c) => {
     const { cards, actor } = await required(c);
     const params = new URL(c.req.url).searchParams;
-    const keys = ['q', 'tag', 'tags', 'tagMode', 'exclude', 'has', 'fork', 'sort', 'offset', 'limit'];
+    const keys = ['q', 'tag', 'tags', 'tagMode', 'exclude', 'has', 'fork', 'favorite', 'source', 'minTokens', 'sort', 'offset', 'limit'];
     const list = (key: string) => (params.get(key) ?? '').split(',').map((value) => value.trim()).filter(Boolean);
     const tags = list('tags'), exclude = list('exclude'), has = list('has');
     if ([...params.keys()].some((key) => !keys.includes(key) || params.getAll(key).length !== 1)
@@ -56,7 +56,10 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
       || tags.length > 20 || exclude.length > 100 || [...tags, ...exclude].some((tag) => tag.length > 200)
       || !has.every(isLibraryFlag) || (params.has('sort') && !isLibrarySort(params.get('sort')!))
       || (params.has('tagMode') && !['all', 'any'].includes(params.get('tagMode')!))
-      || (params.has('fork') && !['only', 'none'].includes(params.get('fork')!))) throw new CardError('INVALID_INPUT', 'Invalid library query');
+      || (params.has('fork') && !['only', 'none'].includes(params.get('fork')!))
+      || (params.has('favorite') && !['fav', 'not_fav'].includes(params.get('favorite')!))
+      || (params.has('source') && !(librarySources as readonly string[]).includes(params.get('source')!))
+      || (params.has('minTokens') && !/^(0|[1-9][0-9]{0,6})$/.test(params.get('minTokens')!))) throw new CardError('INVALID_INPUT', 'Invalid library query');
     return c.json(await cards.summaries(actor, c.req.param('workspaceId'), {
       ...(params.get('q') ? { q: params.get('q')! } : {}), ...(params.get('tag') ? { tag: params.get('tag')! } : {}),
       ...(tags.length ? { tags } : {}), ...(exclude.length ? { excludeTags: exclude } : {}),
@@ -64,8 +67,34 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
       ...(params.has('tagMode') ? { tagMode: params.get('tagMode') as 'all' | 'any' } : {}),
       ...(params.has('fork') ? { fork: params.get('fork') as 'only' | 'none' } : {}),
       ...(params.has('sort') ? { sort: params.get('sort') as LibrarySort } : {}),
+      ...(params.has('favorite') ? { favorite: params.get('favorite') as 'fav' | 'not_fav' } : {}),
+      ...(params.has('source') ? { source: params.get('source') as LibrarySource } : {}),
+      ...(Number(params.get('minTokens')) > 0 ? { minTokens: Number(params.get('minTokens')) } : {}),
       ...(params.has('offset') ? { offset: Number(params.get('offset')) } : {}), ...(params.has('limit') ? { limit: Number(params.get('limit')) } : {}),
     }));
+  });
+  routes.delete('/:workspaceId/cards/:cardId', async (c) => {
+    const { cards, actor } = await required(c);
+    await cards.delete(actor, c.req.param('workspaceId'), c.req.param('cardId'));
+    return c.body(null, 204);
+  });
+  for (const method of ['put', 'delete'] as const) {
+    routes[method]('/:workspaceId/cards/:cardId/favorite', async (c) => {
+      const { cards, actor } = await required(c);
+      await cards.favorite(actor, c.req.param('workspaceId'), c.req.param('cardId'), method === 'put');
+      return c.body(null, 204);
+    });
+    routes[method]('/:workspaceId/followed-creators', async (c) => {
+      const { cards, actor } = await required(c);
+      const body = await json(c, 2_000);
+      if (Object.keys(body).some((key) => key !== 'creator') || typeof body.creator !== 'string') throw new CardError('INVALID_INPUT', 'Expected { creator }');
+      await cards.follow(actor, c.req.param('workspaceId'), body.creator, method === 'put');
+      return c.body(null, 204);
+    });
+  }
+  routes.get('/:workspaceId/followed-creators', async (c) => {
+    const { cards, actor } = await required(c);
+    return c.json({ creators: await cards.followed(actor, c.req.param('workspaceId')) });
   });
   routes.get('/:workspaceId/card-tags', async (c) => {
     const { cards, actor } = await required(c);

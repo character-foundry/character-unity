@@ -1,6 +1,6 @@
 import { useCallback, useState } from 'react';
 import { cn } from '@/lib/utils/cn';
-import { emptySearch, flagOptions, isFiltered, readSearch, sortOptions, useCardTags, useDebouncedText } from '@/lib/library-search';
+import { emptySearch, flagOptions, isFiltered, readSearch, sortOptions, sourceOptions, useCardTags, useDebouncedText, useFollowedCreators } from '@/lib/library-search';
 import type { LibrarySearch, SavedSearch } from '@/lib/library-search';
 import { TagPicker } from './tag-picker';
 
@@ -57,6 +57,8 @@ export function FilterBar({ search, update, replace, advanced = false, saved, on
   const tags = useCardTags();
   const [text, setText, flush] = useDebouncedText(search.q, useCallback((q: string) => update({ q }), [update]));
   const [expr, setExpr] = useDebouncedText(search.expr, useCallback((value: string) => update({ expr: value }), [update]), 600);
+  const [minTokens, setMinTokens] = useDebouncedText(search.minTokens, useCallback((value: string) => update({ minTokens: value }), [update]), 500);
+  const followed = useFollowedCreators();
   const [help, setHelp] = useState(false);
 
   return (
@@ -96,30 +98,46 @@ export function FilterBar({ search, update, replace, advanced = false, saved, on
           </>
         )}
 
-        <div className="space-y-1.5">
-          <div className="flex items-center justify-between">
-            <span className={heading}>Tag filters</span>
-            <div className="flex items-center gap-0.5 rounded-md border border-nebula/30 p-0.5 text-xs font-medium">
-              {(['any', 'all'] as const).map((mode) => (
-                <button key={mode} type="button" onClick={() => update({ tagMode: mode })} aria-pressed={search.tagMode === mode}
-                  className={cn('rounded px-2 py-0.5', search.tagMode === mode ? 'bg-nebula text-white' : 'text-starlight/60 hover:text-starlight')}>
-                  Match {mode.toUpperCase()}
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            <TagPicker label="Include tags" tone="include" value={search.tags} options={tags} blocked={search.exclude} onChange={(next) => update({ tags: next })} placeholder="Add tag" />
-            <TagPicker label="Exclude tags" tone="exclude" value={search.exclude} options={tags} blocked={search.tags} onChange={(next) => update({ exclude: next })} placeholder="Add tag" />
+        {/* Include, exclude and match mode on one line. */}
+        <div className="grid items-end gap-2 md:grid-cols-[1fr_1fr_auto]">
+          <TagPicker label="Include tags" tone="include" value={search.tags} options={tags} blocked={search.exclude} onChange={(next) => update({ tags: next })} placeholder="Add tag" />
+          <TagPicker label="Exclude tags" tone="exclude" value={search.exclude} options={tags} blocked={search.tags} onChange={(next) => update({ exclude: next })} placeholder="Add tag" />
+          <div className="flex h-[34px] items-center gap-0.5 rounded-md border border-nebula/30 p-0.5 text-xs font-medium" role="radiogroup" aria-label="Tag match mode">
+            {(['any', 'all'] as const).map((mode) => (
+              <button key={mode} type="button" role="radio" onClick={() => update({ tagMode: mode })} aria-checked={search.tagMode === mode}
+                className={cn('h-full rounded px-2', search.tagMode === mode ? 'bg-nebula text-white' : 'text-starlight/60 hover:text-starlight')}>
+                Match {mode.toUpperCase()}
+              </button>
+            ))}
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-          <label className={cn(heading, 'flex min-w-0 flex-col gap-1 md:col-span-2')}>
+        <div className="grid grid-cols-2 gap-2 md:grid-cols-6">
+          <label className={cn(heading, 'flex min-w-0 flex-col gap-1')}>
             Sort
             <select value={search.sort} onChange={(event) => update({ sort: event.target.value })} className={cn(control, 'font-normal normal-case tracking-normal')}>
               {sortOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
+          </label>
+          <label className={cn(heading, 'flex min-w-0 flex-col gap-1')}>
+            Favorites
+            <select value={search.favorite} onChange={(event) => update({ favorite: event.target.value as LibrarySearch['favorite'] })} className={cn(control, 'font-normal normal-case tracking-normal')}>
+              <option value="">All</option>
+              <option value="fav">Favorited</option>
+              <option value="not_fav">Not favorited</option>
+            </select>
+          </label>
+          <label className={cn(heading, 'flex min-w-0 flex-col gap-1')}>
+            Source
+            <select value={search.source} onChange={(event) => update({ source: event.target.value })} className={cn(control, 'font-normal normal-case tracking-normal')}>
+              {sourceOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label className={cn(heading, 'flex min-w-0 flex-col gap-1')}>
+            Min tokens
+            <input type="number" min={0} step={100} inputMode="numeric" value={minTokens} placeholder="0"
+              onChange={(event) => setMinTokens(event.target.value.replace(/[^0-9]/g, '').replace(/^0+/, ''))}
+              className={cn(control, 'font-normal normal-case tracking-normal')} />
           </label>
           <label className={cn(heading, 'flex min-w-0 flex-col gap-1')}>
             Cards
@@ -130,7 +148,7 @@ export function FilterBar({ search, update, replace, advanced = false, saved, on
             </select>
           </label>
           <div className="flex items-end">
-            <button type="button" disabled={!isFiltered(search)} onClick={() => { setText(''); setExpr(''); replace({ ...emptySearch, sort: search.sort }); }}
+            <button type="button" disabled={!isFiltered(search)} onClick={() => { setText(''); setExpr(''); setMinTokens(''); replace({ ...emptySearch, sort: search.sort }); }}
               className="w-full rounded-md border border-nebula/30 px-3 py-1.5 text-sm font-semibold text-starlight/70 hover:border-nebula disabled:opacity-40">
               Clear filters
             </button>
@@ -139,14 +157,19 @@ export function FilterBar({ search, update, replace, advanced = false, saved, on
 
         <Disclosure title={<span className="uppercase tracking-wide">Advanced flags</span>} defaultOpen={search.has.length > 0}
           badge={search.has.length ? <span className="rounded bg-nebula/20 px-1.5 py-0.5 text-[10px] text-nebula">{search.has.length}</span> : null}>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-            {flagOptions.map((flag) => (
-              <label key={flag.value} className="flex cursor-pointer items-center gap-2 rounded-md border border-nebula/20 px-3 py-1.5 text-sm text-starlight/80 hover:border-nebula/50">
-                <input type="checkbox" checked={search.has.includes(flag.value)}
-                  onChange={(event) => update({ has: event.target.checked ? [...search.has, flag.value] : search.has.filter((value) => value !== flag.value) })} />
-                {flag.label.replace(/^Has /, '').replace(/^./, (char) => char.toUpperCase())}
-              </label>
-            ))}
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            {flagOptions.map((flag) => {
+              const disabled = flag.value === 'followed' && followed.length === 0 && !search.has.includes('followed');
+              return (
+                <label key={flag.value} title={disabled ? 'Follow a creator from a card first' : undefined}
+                  className={cn('flex items-center gap-2 rounded-md border px-3 py-1.5 text-sm',
+                    disabled ? 'cursor-not-allowed border-dashed border-nebula/20 text-starlight/40' : 'cursor-pointer border-nebula/20 text-starlight/80 hover:border-nebula/50')}>
+                  <input type="checkbox" disabled={disabled} checked={search.has.includes(flag.value)}
+                    onChange={(event) => update({ has: event.target.checked ? [...search.has, flag.value] : search.has.filter((value) => value !== flag.value) })} />
+                  {flag.label}
+                </label>
+              );
+            })}
           </div>
         </Disclosure>
       </form>

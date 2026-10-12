@@ -16,5 +16,5 @@
   "S15": "Accepted-source provenance is immutable, workspace-scoped, ready-only and atomic with card creation.",
   "S16": "A populated v1 schema upgrades without changing existing revisions or inventing source bytes.",
   "S17": "Library summaries list head revisions newest-touched first with text/tag filters, totals, fork counts and offsets.",
-  "S18": "Library search shares one meaning across drivers: words, quoted phrases, OR/NOT/-/parentheses, name:/creator:/description:/tag: fields, include-all/any and exclude tags, content flags, fork filter, allowlisted sorts and case-insensitive tag counts."
+  "S18": "Library search shares one meaning across drivers: words, quoted phrases, OR/NOT/-/parentheses, name:/creator:/description:/tag: fields, include-all/any and exclude tags, Archive content flags (gallery, embedded images, expressions, system prompt, example dialogues, followed creators), fork filter, favorites, source, minimum tokens, allowlisted sorts including tokens, case-insensitive tag counts, and tombstone deletes that hide a card from every read while its forks remain."
 }

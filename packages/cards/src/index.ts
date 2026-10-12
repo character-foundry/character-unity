@@ -6,6 +6,7 @@ import type { CardSummaryList } from './summary.js';
 export type { CardSummary, CardSummaryList } from './summary.js';
 import type { AssetService } from '@character-unity/assets';
 import { prepareImport } from './import.js';
+import { measureMissing, measureRevision } from './metrics.js';
 import { revisionIdentityOptions } from './revision-assets.js';
 import { exportRevision } from './export.js';
 import { saveAssetRevision } from './asset-edit.js';
@@ -30,6 +31,10 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     const revision = await store.getRevision(workspaceId, card.headRevisionId);
     return { card, revision, source: await store.getSource(workspaceId, cardId) };
   }
+  async function measured<T extends { revision: { id: string; workspaceId: string } }>(result: T): Promise<T> {
+    await measureRevision(store, result.revision.workspaceId, result.revision.id).catch(() => undefined);
+    return result;
+  }
   return {
     async workspaces(actor: Actor) { return store.listWorkspaces(actor.id); },
     async createWorkspace(actor: Actor, name: string) { return store.createWorkspace({ ownerId: actor.id, name }); },
@@ -39,9 +44,30 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     },
     async summaries(actor: Actor, workspaceId: string, query: CardSummaryQuery = {}): Promise<CardSummaryList> {
       await authorize(actor, workspaceId);
+      // Token filters and sorts need counts; measure anything new first (a bounded amount per request).
+      if (query.minTokens || query.sort === 'tokens_desc' || query.sort === 'tokens_asc') for (let round = 0; round < 5 && await measureMissing(store, 100) === 100; round++);
       const page = await store.listCardSummaries(workspaceId, query);
       return { cards: page.items.map(summarizeCard), total: page.total };
     },
+    /** Removes a card from the library (tombstoned; its revisions stay for forks and history integrity). */
+    async delete(actor: Actor, workspaceId: string, cardId: string) {
+      await authorize(actor, workspaceId);
+      await store.deleteCard(workspaceId, cardId);
+    },
+    async favorite(actor: Actor, workspaceId: string, cardId: string, favorite: boolean) {
+      await authorize(actor, workspaceId);
+      await store.setFavorite(workspaceId, cardId, favorite);
+    },
+    async follow(actor: Actor, workspaceId: string, creator: string, follow: boolean) {
+      await authorize(actor, workspaceId);
+      await store.followCreator(workspaceId, creator, follow);
+    },
+    async followed(actor: Actor, workspaceId: string) {
+      await authorize(actor, workspaceId);
+      return store.listFollowedCreators(workspaceId);
+    },
+    /** Background backfill of token counts for cards stored before counting existed. */
+    measureMissing: (limit?: number) => measureMissing(store, limit),
     /** Tags on current card versions with card counts, for filter pickers. */
     async tags(actor: Actor, workspaceId: string) {
       await authorize(actor, workspaceId);
@@ -58,8 +84,8 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       const forked = await createCardRevision(current.revision.document, { ...options, originalHash: current.card.originalHash,
         parents: previous ? [previous] : [], operation: 'fork', author: actor.uri, createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
       // Same workspace: the fork references the parent's stored assets; no bytes are copied or changed.
-      return store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: current.revision.id, authorId: actor.id,
-        document: forked.card, identity: forked.lineage.content, assets: current.revision.assets });
+      return measured(await store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: current.revision.id, authorId: actor.id,
+        document: forked.card, identity: forked.lineage.content, assets: current.revision.assets }));
     },
     /** The card this one was forked from (if any) and the cards forked from it. */
     async family(actor: Actor, workspaceId: string, cardId: string) {
@@ -149,9 +175,9 @@ export function createCardService(store: UnityStore, assets: AssetService) {
         const stored = await persistBytes(workspaceId, resource);
         references.push({ path: resource.path, assetId: stored.id });
       }
-      return store.createCard({ workspaceId, authorId: actor.id, document: prepared.document, identity: prepared.identity,
+      return measured(await store.createCard({ workspaceId, authorId: actor.id, document: prepared.document, identity: prepared.identity,
         originalHash: prepared.rootHash ?? prepared.acceptedHash, assets: references,
-        source: { assetId: original.id, provenance: { ...sourceProvenance, format: prepared.format } } });
+        source: { assetId: original.id, provenance: { ...sourceProvenance, format: prepared.format } } }));
     },
     async save(actor: Actor, workspaceId: string, cardId: string, expectedHead: string, input: CardDocument) {
       actor = { ...actor };
@@ -175,8 +201,10 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       }
       const saved = await createCardRevision(document, { ...options, originalHash: current.card.originalHash,
         parents: previous ? [previous] : [], operation: 'edit', author: actor.uri, createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
-      return store.saveRevision({ workspaceId, cardId, expectedHead, authorId: actor.id,
+      const revision = await store.saveRevision({ workspaceId, cardId, expectedHead, authorId: actor.id,
         document: saved.card, identity: saved.lineage.content, assets: current.revision.assets });
+      await measureRevision(store, workspaceId, revision.id).catch(() => undefined);
+      return revision;
     },
     async original(actor: Actor, workspaceId: string, cardId: string) {
       const current = await open(actor, workspaceId, cardId);

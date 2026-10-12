@@ -37,7 +37,8 @@ export interface Revision {
 export interface CardSummaryQuery extends LibraryFilter { tag?: string; offset?: number; limit?: number; sort?: LibrarySort;
   /** Only cards forked from any revision of this card. */ forkOf?: string;
   /** Only these cards (at most 100). */ ids?: readonly string[] }
-export interface CardSummaryItem { card: Card; revision: Revision; sourceFormat: string | null; forkCount: number }
+export interface CardSummaryItem { card: Card; revision: Revision; sourceFormat: string | null; forkCount: number;
+  favorite: boolean; tokensTotal: number | null; /** chub, ct, risuai, wyvern or file */ source: string }
 export interface CardSummaryPage { items: CardSummaryItem[]; total: number }
 export interface Asset {
   id: string;

@@ -17,6 +17,11 @@ export interface CardSummary {
   revisionCount: number;
   forkedFromRevisionId: string | null;
   forkCount: number;
+  favorite: boolean;
+  /** Token count of the current version; null until measured. */
+  tokensTotal: number | null;
+  /** chub, ct, risuai, wyvern or file */
+  source: string;
   createdAt: string;
   /** Last time this card was touched: its newest saved revision. */
   updatedAt: string;
@@ -26,7 +31,7 @@ export interface CardSummaryList { cards: CardSummary[]; total: number }
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 
-export function summarizeCard({ card, revision, sourceFormat, forkCount }: CardSummaryItem): CardSummary {
+export function summarizeCard({ card, revision, sourceFormat, forkCount, favorite, tokensTotal, source }: CardSummaryItem): CardSummary {
   const document = revision.document as { spec?: unknown; data?: Record<string, unknown> };
   const data = document.data ?? {};
   const book = data.character_book as { entries?: unknown } | null | undefined;
@@ -47,6 +52,9 @@ export function summarizeCard({ card, revision, sourceFormat, forkCount }: CardS
     revisionCount: revision.sequence,
     forkedFromRevisionId: card.forkedFromRevisionId,
     forkCount,
+    favorite,
+    tokensTotal,
+    source,
     createdAt: card.createdAt,
     updatedAt: revision.createdAt,
   };

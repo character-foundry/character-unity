@@ -10,10 +10,10 @@ export function toListItem(workspace: string, summary: CardSummary): CardListIte
   const image = summary.hasPortrait ? portraitUrl(workspace, summary.id, summary.headRevisionId) : null;
   return {
     id: summary.id, slug: summary.id, name: summary.name, description: null,
-    creator: summary.creator || null, creatorNotes: summary.creatorNotes || null,
+    creator: summary.creator.trim() || 'Anonymous', creatorNotes: summary.creatorNotes || null,
     specVersion: summary.spec, sourceFormat: summary.sourceFormat ?? 'json',
     hasAssets: summary.assetsCount > 0, assetsCount: summary.assetsCount,
-    imagePath: image, thumbnailPath: image, tokensTotal: null,
+    imagePath: image, thumbnailPath: image, tokensTotal: summary.tokensTotal, isFavorited: summary.favorite,
     upvotes: 0, downvotes: 0, score: 0, favoritesCount: 0, downloadsCount: 0, commentsCount: 0, forksCount: summary.forkCount,
     visibility: 'private',
     hasAlternateGreetings: summary.greetingsCount > 1, alternateGreetingsCount: Math.max(0, summary.greetingsCount - 1),
@@ -39,7 +39,7 @@ export function toDetail(workspace: string, opened: OpenedCard, tokens: TokenBre
   const format = opened.source?.provenance.format?.split('_')[0];
   return {
     id: opened.card.id, slug: opened.card.id, name: text(data.name) || 'Untitled', description: text(data.description) || null,
-    creator: text(data.creator) || null, creatorNotes: text(data.creator_notes) || null,
+    creator: text(data.creator).trim() || 'Anonymous', creatorNotes: text(data.creator_notes) || null,
     specVersion: cardData.spec === 'chara_card_v3' ? 'v3' : 'v2',
     sourceFormat: format === 'png' || format === 'json' || format === 'charx' || format === 'voxta' ? format : 'json',
     hasAssets: assets > 0, assetsCount: assets, imagePath: portrait, thumbnailPath: portrait,

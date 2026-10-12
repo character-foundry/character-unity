@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils/cn';
 import { formatCount, formatRelative } from '@/lib/utils/format';
 import { CoinIcon, ThumbsUpIcon, DownloadIcon, HeartIcon, MetadataBadge } from '@/components/ui';
 import { PlacementChips, SendMenu } from '@/components/chat/send-menu';
+import { FavoriteButton } from './card-actions';
 import type { ChatPlacement } from '@/lib/chat';
 import { downloadExport } from '@/lib/unity';
 import { buildCardExportFilename } from '@/lib/utils';
@@ -304,9 +305,10 @@ export function CardItem({ card, onQuickView, placements }: CardItemProps) {
                 <span>{formatCount(favoritesCount)}</span>
               </button>
               </>)}
-              {!features.social && (
+              {!features.social && (<>
+                <FavoriteButton cardId={card.id} initial={card.isFavorited ?? false} />
                 <span className="text-white/70" title="Last touched">{formatRelative(card.updatedAt)}</span>
-              )}
+              </>)}
             </div>
 
             {/* Tokens with coin icon */}

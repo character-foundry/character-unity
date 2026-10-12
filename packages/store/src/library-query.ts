@@ -15,9 +15,11 @@ export type QueryNode =
   | { kind: 'and' | 'or'; nodes: QueryNode[] }
   | { kind: 'not'; node: QueryNode };
 
-export const librarySorts = ['edited', 'added', 'oldest', 'name', 'name_desc', 'revisions', 'forks', 'greetings', 'lorebook'] as const;
+export const librarySorts = ['edited', 'added', 'oldest', 'name', 'name_desc', 'tokens_desc', 'tokens_asc', 'revisions', 'forks', 'greetings', 'lorebook'] as const;
 export type LibrarySort = typeof librarySorts[number];
-export const libraryFlags = ['lorebook', 'greetings', 'assets', 'portrait'] as const;
+export const libraryFlags = ['greetings', 'lorebook', 'gallery', 'embeddedImages', 'expressions', 'chat', 'followed', 'portrait', 'systemPrompt', 'exampleDialogues'] as const;
+export const librarySources = ['chub', 'ct', 'risuai', 'wyvern', 'file'] as const;
+export type LibrarySource = typeof librarySources[number];
 export type LibraryFlag = typeof libraryFlags[number];
 export function isLibrarySort(value: string): value is LibrarySort { return (librarySorts as readonly string[]).includes(value); }
 export function isLibraryFlag(value: string): value is LibraryFlag { return (libraryFlags as readonly string[]).includes(value); }
@@ -134,9 +136,22 @@ const searchText = `(${[...textPaths.map(str), `coalesce(${tagValues}, '')`].joi
 const hasTag = (placeholders: string) => `EXISTS (SELECT 1 FROM json_each(${doc}, '$.data.tags') t WHERE t.type = 'text' AND lower(t.value) IN (${placeholders}))`;
 const arrayLength = (path: string) => `coalesce(CASE WHEN json_type(${doc}, '${path}') = 'array' THEN json_array_length(${doc}, '${path}') END, 0)`;
 const blank = ` ' ' || char(9) || char(10) || char(13)`;
+const imageText = `(${['$.data.description', '$.data.first_mes', '$.data.creator_notes', '$.data.scenario', '$.data.personality', '$.data.mes_example'].map(str).join(' || char(10) || ')}
+  || char(10) || coalesce((SELECT group_concat(lower(g.value), char(10)) FROM json_each(${doc}, '$.data.alternate_greetings') g WHERE g.type = 'text'), ''))`;
+const assetTypes = (condition: string) => `EXISTS (SELECT 1 FROM json_each(${doc}, '$.data.assets') a WHERE json_type(a.value) = 'object' AND ${condition})`;
+const assetType = `lower(coalesce(json_extract(a.value, '$.type'), ''))`;
+const nonEmptyObject = (path: string) => `(json_type(${doc}, '${path}') = 'object' AND EXISTS (SELECT 1 FROM json_each(${doc}, '${path}')))`;
+const creatorKey = `lower(trim(CASE WHEN json_type(${doc}, '$.data.creator') = 'text' THEN json_extract(${doc}, '$.data.creator') ELSE '' END))`;
+/** Where a card came from: the Archive provider for Archive imports, else markers sites leave in the card. */
+export const librarySourceSql = `(CASE
+  WHEN json_extract(s.provenance_json, '$.kind') = 'archive' THEN lower(coalesce(json_extract(s.provenance_json, '$.source.provider'), 'file'))
+  WHEN json_type(${doc}, '$.data.extensions.chub') IS NOT NULL THEN 'chub'
+  WHEN json_type(${doc}, '$.data.extensions.risuai') IS NOT NULL THEN 'risuai'
+  ELSE 'file' END)`;
+export const libraryTokensSql = '(SELECT m.tokens_total FROM unity_revision_metrics m WHERE m.revision_id = r.id)';
 const greetings = `((CASE WHEN trim(${str('$.data.first_mes')},${blank}) <> '' THEN 1 ELSE 0 END) + ${arrayLength('$.data.alternate_greetings')} + ${arrayLength('$.data.group_only_greetings')})`;
 
-function termSql(node: Extract<QueryNode, { kind: 'term' }>, params: string[]): string {
+function termSql(node: Extract<QueryNode, { kind: 'term' }>, params: (string | number)[]): string {
   const value = fold(node.value);
   params.push(value);
   switch (node.field) {
@@ -147,7 +162,7 @@ function termSql(node: Extract<QueryNode, { kind: 'term' }>, params: string[]): 
     default: return `instr(${searchText}, ?) > 0`;
   }
 }
-function nodeSql(node: QueryNode, params: string[]): string {
+function nodeSql(node: QueryNode, params: (string | number)[]): string {
   if (node.kind === 'term') return termSql(node, params);
   if (node.kind === 'not') return `NOT (${nodeSql(node.node, params)})`;
   return `(${node.nodes.map((child) => nodeSql(child, params)).join(node.kind === 'and' ? ' AND ' : ' OR ')})`;
@@ -161,6 +176,10 @@ export interface LibraryFilter {
   excludeTags?: readonly string[] | undefined;
   has?: readonly LibraryFlag[] | undefined;
   fork?: 'only' | 'none' | undefined;
+  favorite?: 'fav' | 'not_fav' | undefined;
+  source?: LibrarySource | undefined;
+  /** Cards whose token count is not known yet never match a minimum. */
+  minTokens?: number | undefined;
 }
 
 function cleanTags(tags: readonly string[] | undefined): string[] {
@@ -168,8 +187,8 @@ function cleanTags(tags: readonly string[] | undefined): string[] {
 }
 
 /** WHERE fragments over `c` (unity_cards) joined to `r` (its head revision). */
-export function libraryFilterSql(filter: LibraryFilter): { where: string[]; params: string[] } {
-  const where: string[] = [], params: string[] = [];
+export function libraryFilterSql(filter: LibraryFilter): { where: string[]; params: (string | number)[] } {
+  const where: string[] = [], params: (string | number)[] = [];
   const query = parseLibraryQuery(filter.q ?? '');
   if (query) where.push(nodeSql(query, params));
   const include = cleanTags(filter.tags);
@@ -179,14 +198,26 @@ export function libraryFilterSql(filter: LibraryFilter): { where: string[]; para
   }
   const exclude = cleanTags(filter.excludeTags);
   if (exclude.length) { where.push(`NOT ${hasTag(exclude.map(() => '?').join(', '))}`); params.push(...exclude); }
-  for (const flag of new Set(filter.has ?? [])) {
-    if (flag === 'lorebook') where.push(`${arrayLength('$.data.character_book.entries')} > 0`);
-    else if (flag === 'greetings') where.push(`${arrayLength('$.data.alternate_greetings')} > 0`);
-    else if (flag === 'portrait') where.push(`EXISTS (SELECT 1 FROM unity_revision_assets a WHERE a.revision_id = r.id AND a.path = 'portrait')`);
-    else where.push(`EXISTS (SELECT 1 FROM unity_revision_assets a WHERE a.revision_id = r.id AND a.path <> 'portrait')`);
-  }
+  const flagSql: Record<LibraryFlag, string> = {
+    greetings: `${arrayLength('$.data.alternate_greetings')} > 0`,
+    lorebook: `${arrayLength('$.data.character_book.entries')} > 0`,
+    gallery: assetTypes(`${assetType} NOT IN ('icon', 'emotion', 'expression')`),
+    embeddedImages: `(instr(${imageText}, '![') > 0 OR instr(${imageText}, '<img') > 0)`,
+    expressions: `(${assetTypes(`${assetType} IN ('emotion', 'expression')`)} OR ${nonEmptyObject('$.data.extensions.chub.expressions')} OR ${nonEmptyObject('$.data.extensions.expressions')})`,
+    chat: `EXISTS (SELECT 1 FROM unity_chat_placements p WHERE p.card_id = c.id AND p.workspace_id = c.workspace_id AND p.remote_state <> 'missing')`,
+    followed: `EXISTS (SELECT 1 FROM unity_followed_creators f WHERE f.workspace_id = c.workspace_id AND f.creator_key = ${creatorKey} AND ${creatorKey} <> '')`,
+    portrait: `EXISTS (SELECT 1 FROM unity_revision_assets a WHERE a.revision_id = r.id AND a.path = 'portrait')`,
+    systemPrompt: `trim(${str('$.data.system_prompt')},${blank}) <> ''`,
+    exampleDialogues: `trim(${str('$.data.mes_example')},${blank}) <> ''`,
+  };
+  for (const flag of new Set(filter.has ?? [])) where.push(flagSql[flag]);
   if (filter.fork === 'only') where.push('c.forked_from_revision_id IS NOT NULL');
   else if (filter.fork === 'none') where.push('c.forked_from_revision_id IS NULL');
+  const favorite = 'EXISTS (SELECT 1 FROM unity_card_favorites v WHERE v.card_id = c.id)';
+  if (filter.favorite === 'fav') where.push(favorite);
+  else if (filter.favorite === 'not_fav') where.push(`NOT ${favorite}`);
+  if (filter.source) { where.push(`${librarySourceSql} = ?`); params.push(filter.source); }
+  if (filter.minTokens) { where.push(`${libraryTokensSql} >= ?`); params.push(filter.minTokens); }
   return { where, params };
 }
 
@@ -197,6 +228,8 @@ export const librarySortSql: Record<LibrarySort, string> = {
   oldest: 'c.created_at ASC, c.id',
   name: `${str('$.data.name')} ASC, c.id`,
   name_desc: `${str('$.data.name')} DESC, c.id`,
+  tokens_desc: `coalesce(${libraryTokensSql}, -1) DESC, r.created_at DESC, c.id`,
+  tokens_asc: `${libraryTokensSql} IS NULL, ${libraryTokensSql} ASC, r.created_at DESC, c.id`,
   revisions: 'r.sequence DESC, r.created_at DESC, c.id',
   forks: 'forkCount DESC, r.created_at DESC, c.id',
   greetings: `${greetings} DESC, r.created_at DESC, c.id`,
@@ -214,6 +247,11 @@ export interface LibraryRow {
   document: unknown;
   assetPaths: readonly string[];
   forkCount: number;
+  provenance: unknown;
+  favorite: boolean;
+  /** Live copies in connected chat apps (always false where chat apps do not exist). */
+  inChat: boolean;
+  tokens: number | null;
 }
 
 function data(document: unknown): Record<string, unknown> {
@@ -238,8 +276,20 @@ function evaluate(node: QueryNode, fields: Record<string, unknown>, all: string)
   }
 }
 
-/** The JS twin of `libraryFilterSql`. */
-export function libraryMatcher(filter: LibraryFilter): (row: LibraryRow) => boolean {
+const trimSpaces = (value: string) => value.replace(/^ +| +$/g, '');
+/** The JS twin of `librarySourceSql`. */
+export function librarySource(provenance: unknown, document: unknown): string {
+  const record = provenance as { kind?: unknown; source?: { provider?: unknown } } | null | undefined;
+  if (record?.kind === 'archive') return typeof record.source?.provider === 'string' ? fold(record.source.provider) : 'file';
+  const extensions = data(document).extensions as Record<string, unknown> | undefined;
+  if (extensions && typeof extensions === 'object' && extensions.chub !== undefined) return 'chub';
+  if (extensions && typeof extensions === 'object' && extensions.risuai !== undefined) return 'risuai';
+  return 'file';
+}
+const nonEmpty = (value: unknown) => !!value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length > 0;
+
+/** The JS twin of `libraryFilterSql`. `followed` holds folded creator keys. */
+export function libraryMatcher(filter: LibraryFilter, followed: ReadonlySet<string> = new Set()): (row: LibraryRow) => boolean {
   const query = parseLibraryQuery(filter.q ?? '');
   const include = cleanTags(filter.tags), exclude = cleanTags(filter.excludeTags), flags = new Set(filter.has ?? []);
   return (row) => {
@@ -255,9 +305,28 @@ export function libraryMatcher(filter: LibraryFilter): (row: LibraryRow) => bool
     if (flags.has('lorebook') && !(length(book?.entries) > 0)) return false;
     if (flags.has('greetings') && !(length(fields.alternate_greetings) > 0)) return false;
     if (flags.has('portrait') && !row.assetPaths.includes('portrait')) return false;
-    if (flags.has('assets') && !row.assetPaths.some((path) => path !== 'portrait')) return false;
+    const assets = Array.isArray(fields.assets) ? fields.assets.filter((asset): asset is Record<string, unknown> => !!asset && typeof asset === 'object' && !Array.isArray(asset)) : [];
+    const types = assets.map((asset) => text(asset.type));
+    if (flags.has('gallery') && !types.some((type) => !['icon', 'emotion', 'expression'].includes(type))) return false;
+    if (flags.has('expressions')) {
+      const extensions = (fields.extensions ?? {}) as { chub?: { expressions?: unknown }; expressions?: unknown };
+      if (!types.some((type) => type === 'emotion' || type === 'expression') && !nonEmpty(extensions.chub?.expressions) && !nonEmpty(extensions.expressions)) return false;
+    }
+    if (flags.has('embeddedImages')) {
+      const images = [...['description', 'first_mes', 'creator_notes', 'scenario', 'personality', 'mes_example'].map((key) => text(fields[key])),
+        ...(Array.isArray(fields.alternate_greetings) ? fields.alternate_greetings.filter((item): item is string => typeof item === 'string').map(fold) : [])].join('\n');
+      if (!images.includes('![') && !images.includes('<img')) return false;
+    }
+    if (flags.has('chat') && !row.inChat) return false;
+    if (flags.has('followed')) { const key = trimSpaces(text(fields.creator)); if (!key || !followed.has(key)) return false; }
+    if (flags.has('systemPrompt') && !trimBlank(text(fields.system_prompt))) return false;
+    if (flags.has('exampleDialogues') && !trimBlank(text(fields.mes_example))) return false;
     if (filter.fork === 'only' && row.forkedFromRevisionId === null) return false;
     if (filter.fork === 'none' && row.forkedFromRevisionId !== null) return false;
+    if (filter.favorite === 'fav' && !row.favorite) return false;
+    if (filter.favorite === 'not_fav' && row.favorite) return false;
+    if (filter.source && librarySource(row.provenance, row.document) !== filter.source) return false;
+    if (filter.minTokens && !(row.tokens !== null && row.tokens >= filter.minTokens)) return false;
     return true;
   };
 }
@@ -279,6 +348,8 @@ export function libraryComparator(sort: LibrarySort): (a: LibraryRow, b: Library
     case 'oldest': return (a, b) => compare(a.cardCreatedAt, b.cardCreatedAt) || id(a, b);
     case 'name': return (a, b) => compare(name(a), name(b)) || id(a, b);
     case 'name_desc': return (a, b) => compare(name(b), name(a)) || id(a, b);
+    case 'tokens_desc': return numeric((row) => row.tokens ?? -1);
+    case 'tokens_asc': return (a, b) => Number(a.tokens === null) - Number(b.tokens === null) || (a.tokens ?? 0) - (b.tokens ?? 0) || edited(a, b) || id(a, b);
     case 'revisions': return numeric((row) => row.sequence);
     case 'forks': return numeric((row) => row.forkCount);
     case 'greetings': return numeric(greetingCount);

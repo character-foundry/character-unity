@@ -11,6 +11,8 @@ import { cn } from '@/lib/utils/cn';
 import { features } from '@/lib/features';
 import type { ExportFormat } from '@/lib/unity';
 import { SendMenu } from '@/components/chat/send-menu';
+import { DeleteCardButton, FollowButton } from '@/components/cards/card-actions';
+import { useNavigate } from 'react-router';
 
 // Format badge component
 function FormatBadge({ format, specVersion, className }: { format: SourceFormat; specVersion: string; className?: string }) {
@@ -72,6 +74,7 @@ function VisibilityBadge({ visibility }: { visibility: CardVisibility }) {
 export function CardHero({ card, permanentTokens, tokensReady, onDownload, onFork, forking, parent }: CardHeroProps) {
   const { user } = useAuth();
   const { settings } = useSettings();
+  const navigate = useNavigate();
   const [isFavorited, setIsFavorited] = useState(false);
   const [favoritesCount, setFavoritesCount] = useState(card.favoritesCount);
   const [isTogglingFavorite, setIsTogglingFavorite] = useState(false);
@@ -197,13 +200,12 @@ export function CardHero({ card, permanentTokens, tokensReady, onDownload, onFor
             <h1 className="text-3xl font-bold gradient-text mb-1" data-card-name>{card.name}</h1>
 
             {card.creator && (
-              <Link
-                href={`/explore?search=${encodeURIComponent(`creator:"${card.creator}"`)}`}
-                className="text-sm text-starlight/60 hover:text-nebula mb-2 block"
-                data-card-creator
-              >
-                by <span className="text-nebula">{card.creator}</span>
-              </Link>
+              <div className="mb-2 text-sm" data-card-creator>
+                <Link href={`/explore?search=${encodeURIComponent(`creator:"${card.creator}"`)}`} className="text-starlight/60 hover:text-nebula">
+                  by <span className="text-nebula">{card.creator}</span>
+                </Link>
+                <FollowButton creator={card.creator} />
+              </div>
             )}
 
             <p className="text-starlight/70 text-sm mb-3 line-clamp-2" data-card-description>
@@ -408,6 +410,7 @@ export function CardHero({ card, permanentTokens, tokensReady, onDownload, onFor
               <Button variant="ghost" size="sm" onClick={() => onDownload('sillytavern-png')} title="PNG shaped for SillyTavern import">
                 SillyTavern PNG
               </Button>
+              <DeleteCardButton cardId={card.id} name={card.name} onDeleted={() => navigate('/')} />
             </div>
           </div>
         </div>

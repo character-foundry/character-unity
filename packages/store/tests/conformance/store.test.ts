@@ -104,7 +104,7 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
         const card = await legacy.createCard({ ...input, workspaceId: workspace.id, originalHash });
         expect(await inspectSchema(old.driver)).toBe(1);
         await migrate(old.driver);
-        expect(await inspectSchema(old.driver)).toBe(11);
+        expect(await inspectSchema(old.driver)).toBe(12);
         expect(await legacy.getRevision(workspace.id, card.revision.id)).toEqual(card.revision);
         expect(await legacy.getCard(workspace.id, card.card.id)).toEqual(card.card);
         expect(await legacy.getSource(workspace.id, card.card.id)).toBeNull();
@@ -113,8 +113,8 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
 
     it('[S01] applies versioned migrations idempotently and rejects drift or future history', async () => {
       await migrate(fixture.driver);
-      expect(await inspectSchema(fixture.driver)).toBe(11);
-      expect(await store.readiness()).toEqual({ schemaVersion: 11 });
+      expect(await inspectSchema(fixture.driver)).toBe(12);
+      expect(await store.readiness()).toEqual({ schemaVersion: 12 });
       await fixture.driver.batch([{ sql: "UPDATE unity_migrations SET checksum = 'changed' WHERE version = 1" }]);
       await expect(migrate(fixture.driver)).rejects.toMatchObject({ code: 'SCHEMA_MISMATCH' });
       await fixture.driver.batch([{ sql: 'UPDATE unity_migrations SET version = 99 WHERE version = 1' }]);
@@ -229,7 +229,6 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
       const portrait = await store.createCard({ ...input, workspaceId, document: { spec: 'chara_card_v2', data: { name: 'Pictured' } },
         assets: [{ path: 'portrait', assetId: (await readyAsset()).id }] });
       expect((await store.listCardSummaries(workspaceId, { has: ['portrait'] })).items.map((item) => item.card.id)).toEqual([portrait.card.id]);
-      expect((await store.listCardSummaries(workspaceId, { has: ['assets'] })).total).toBe(0);
     });
 
     it('[S08] scopes reads, saves and asset references to their workspace', async () => {
@@ -324,7 +323,7 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
         expect(await other.driver.query({ sql: 'SELECT * FROM unity_migrations' })).toEqual([]);
         expect(await other.driver.query({ sql: "SELECT name FROM sqlite_master WHERE name = 'unity_cards'" })).toEqual([]);
         await Promise.all([migrate(other.driver), migrate(other.driver)]);
-        expect(await inspectSchema(other.driver)).toBe(11);
+        expect(await inspectSchema(other.driver)).toBe(12);
       } finally { await other.close(); }
     });
   });

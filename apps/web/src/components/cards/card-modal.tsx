@@ -11,6 +11,7 @@ import { formatDate, stripHtml } from '@/lib/utils/format';
 import { useSettings } from '@/lib/settings';
 import { features } from '@/lib/features';
 import { PlacementChips, SendMenu } from '@/components/chat/send-menu';
+import { DeleteCardButton, FollowButton } from './card-actions';
 import type { ChatPlacement } from '@/lib/chat';
 
 // Format badge component
@@ -133,13 +134,16 @@ export function CardModal({ card, isOpen, onClose, placements }: CardModalProps)
               <div>
                 <h2 className="text-2xl font-bold gradient-text">{card.name}</h2>
                 {card.creator && (
-                  <Link
-                    href={`/explore?search=${encodeURIComponent(`creator:"${card.creator}"`)}`}
-                    className="text-sm text-starlight/60 hover:text-nebula mt-1 block"
-                    onClick={onClose}
-                  >
-                    by <span className="text-nebula">{card.creator}</span>
-                  </Link>
+                  <div className="mt-1 text-sm">
+                    <Link
+                      href={`/explore?search=${encodeURIComponent(`creator:"${card.creator}"`)}`}
+                      className="text-starlight/60 hover:text-nebula"
+                      onClick={onClose}
+                    >
+                      by <span className="text-nebula">{card.creator}</span>
+                    </Link>
+                    <FollowButton creator={card.creator} />
+                  </div>
                 )}
               </div>
               <button
@@ -313,6 +317,7 @@ export function CardModal({ card, isOpen, onClose, placements }: CardModalProps)
                 <SendMenu cardId={card.id} placements={placements} variant="wide" className="flex-1" />
                 <PlacementChips placements={placements} />
               </div>
+              <DeleteCardButton cardId={card.id} name={card.name} onDeleted={onClose} className="w-full" />
             </div>
           </div>
         </div>
