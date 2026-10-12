@@ -12,11 +12,6 @@ interface HeaderProps {
 }
 
 const libraryPaths = new Set(['/', '/explore']);
-const blankCard = () => JSON.stringify({ spec: 'chara_card_v3', spec_version: '3.0', data: {
-  name: 'New character', description: '', personality: '', scenario: '', first_mes: '', mes_example: '',
-  creator_notes: '', system_prompt: '', post_history_instructions: '', alternate_greetings: [], group_only_greetings: [],
-  tags: [], creator: '', character_version: '1.0', extensions: {},
-} });
 
 const iconButton = 'flex items-center gap-1.5 rounded-lg px-3 py-2 text-sm text-starlight/80 hover:bg-cosmic-teal/30 hover:text-starlight disabled:opacity-50';
 
@@ -32,7 +27,7 @@ export function Header({ onMenuClick }: HeaderProps) {
     navigate(`${location.pathname}${next ? `?${next}` : ''}`, { replace: true });
   }, [onLibrary, navigate, location.pathname]);
   const [text, setText] = useDebouncedText(current?.q ?? '', commit);
-  const [busy, setBusy] = useState<'import' | 'new' | null>(null);
+  const [busy, setBusy] = useState<'import' | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -52,17 +47,6 @@ export function Header({ onMenuClick }: HeaderProps) {
     setNotice({ text: `Imported ${imported} card${imported === 1 ? '' : 's'}.${failed.length ? ` Could not import: ${failed.join(', ')}` : ''}`, error: failed.length > 0 });
     setTimeout(() => setNotice(null), failed.length ? 10_000 : 4000);
   }
-  async function createCard() {
-    setBusy('new');
-    try {
-      const { card } = await importFile(new File([blankCard()], 'new-character.json', { type: 'application/json' }));
-      libraryChanged();
-      navigate(`/card/${card.id}/edit`);
-    } catch (failure) {
-      setNotice({ text: failure instanceof Error ? failure.message : 'Could not create a card', error: true });
-    } finally { setBusy(null); }
-  }
-
   return (
     <header className="fixed top-0 left-0 right-0 z-50 nav-blur border-b border-nebula/20">
       <div className="flex items-center justify-between h-16 px-4">
@@ -97,9 +81,9 @@ export function Header({ onMenuClick }: HeaderProps) {
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
             <span className="hidden md:inline">{busy === 'import' ? 'Importing…' : 'Import'}</span>
           </button>
-          <button type="button" className={iconButton} onClick={() => void createCard()} disabled={!!busy} title="Create a new card in the editor">
+          <button type="button" className={iconButton} onClick={() => navigate('/new')} disabled={!!busy} title="Create a new card in the editor">
             <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-            <span className="hidden md:inline">{busy === 'new' ? 'Creating…' : 'New'}</span>
+            <span className="hidden md:inline">New</span>
           </button>
           <Link href="/settings" className="p-2 rounded-lg hover:bg-cosmic-teal/30 transition-colors text-starlight/80" title="Settings" aria-label="Settings">
             <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">

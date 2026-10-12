@@ -4,6 +4,7 @@ import { CardEditor } from '../features/editor/CardEditor';
 import { initializeModules } from '../lib/modules';
 import { registerCustomWidgets } from '../lib/schemas/widgets';
 import { useCardStore } from '../store/card-store';
+import type { Card, CCv3Data } from '../lib/types';
 import { useSettingsStore, THEMES } from '../store/settings-store';
 import { localDB } from '../lib/db';
 import { SettingsModal } from '../components/shared/SettingsModal';
@@ -36,7 +37,20 @@ function useScopedTheme(root: React.RefObject<HTMLDivElement | null>) {
   }, [root, themeId]);
 }
 
-export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: () => void }) {
+/** Architect's blank character (card-store createNewCard) without its immediate save. */
+function blankCard(): Card {
+  const now = new Date().toISOString();
+  return {
+    meta: { id: '', name: 'New Character', spec: 'v3', tags: [], createdAt: now, updatedAt: now },
+    data: { spec: 'chara_card_v3', spec_version: '3.0', data: {
+      name: 'New Character', description: '', personality: '', scenario: '', first_mes: '', mes_example: '', creator: '',
+      character_version: '1.0', tags: [], system_prompt: '', post_history_instructions: '', alternate_greetings: [], group_only_greetings: [],
+    } } as CCv3Data,
+  };
+}
+
+export function ArchitectEditor({ cardId, onExit, onCreated }: { cardId: string; onExit?: (() => void) | undefined; onCreated?: ((cardId: string) => void) | undefined }) {
+  const isDraft = cardId === '';
   const root = useRef<HTMLDivElement>(null);
   const currentCard = useCardStore((state) => state.currentCard);
   const isDirty = useCardStore((state) => state.isDirty);
@@ -52,6 +66,12 @@ export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: (
     let active = true;
     setLoading(true); setError(null); setDraft(null);
     useCardStore.getState().setCurrentCard(null);
+    if (isDraft) {
+      // Held in memory only: the store skips autosave and IndexedDB drafts for a card without an id.
+      useCardStore.setState({ currentCard: blankCard(), isDirty: false });
+      setLoading(false);
+      return () => { active = false; };
+    }
     void (async () => {
       await useCardStore.getState().loadCard(cardId);
       if (!active) return;
@@ -66,15 +86,18 @@ export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: (
       const state = useCardStore.getState();
       if (state.autoSaveTimeout) clearTimeout(state.autoSaveTimeout);
     };
-  }, [cardId]);
+  }, [cardId, isDraft]);
 
   async function save() {
     setError(null);
     try {
       const state = useCardStore.getState();
+      if (state.isSaving) return; // a second Ctrl+S on a draft would otherwise create a second card
       if (state.autoSaveTimeout) clearTimeout(state.autoSaveTimeout);
       await state.saveCard();
       setSavedAt(new Date().toLocaleTimeString());
+      const created = useCardStore.getState().currentCard?.meta.id;
+      if (isDraft && created) onCreated?.(created);
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'Save failed');
     }
@@ -106,7 +129,7 @@ export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: (
     setDraft(null);
   }
 
-  const status = isSaving ? 'Saving…' : isDirty ? 'Unsaved changes (autosaves after 30s idle)' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
+  const status = isSaving ? 'Saving…' : isDraft ? 'New card — not in the library until you save' : isDirty ? 'Unsaved changes (autosaves after 30s idle)' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
 
   return (
     <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 11rem)' }}>
@@ -114,7 +137,7 @@ export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: (
         <span className="text-sm opacity-80 flex-1">{status}</span>
         <SettingsButton onClick={() => setShowSettings(true)} />
         {onExit && <button className="btn-secondary text-sm" onClick={onExit}>Done</button>}
-        <button className="btn-primary text-sm" disabled={isSaving || !isDirty} onClick={() => { void save(); }} title="Save a new revision (Ctrl+S)">Save</button>
+        <button className="btn-primary text-sm" disabled={isSaving || (!isDirty && !isDraft)} onClick={() => { void save(); }} title="Save a new revision (Ctrl+S)">Save</button>
       </div>
       {draft && (
         <div className="flex items-center gap-3 px-4 py-2 text-sm bg-yellow-900/40 border-b">

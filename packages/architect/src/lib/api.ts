@@ -99,9 +99,16 @@ class UnityApiClient extends ApiClient {
     return { data: toCard(id, result.data, updates.meta?.createdAt ?? result.data.createdAt) };
   }
 
-  override async createCard(_card: unknown): Promise<Result<Card>> {
-    void _card;
-    return { error: 'Create new cards from the library (import or fork) in this version' };
+  /** First save of an editor draft: the document becomes a library card through the import path. */
+  override async createCard(card: unknown): Promise<Result<Card>> {
+    const document = (card as Partial<Card> | null)?.data;
+    if (!document) return { error: 'Nothing to save' };
+    const created = await unity<{ card: { id: string } }>(`${base().replace(/\/cards$/, '')}/imports`, {
+      method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-file-name': 'new-character.json' },
+      body: new TextEncoder().encode(JSON.stringify(document)),
+    });
+    if (created.error || !created.data) return { error: created.error };
+    return this.getCard(created.data.card.id);
   }
 
   override async deleteCard(_id: string): Promise<Result<void>> {
