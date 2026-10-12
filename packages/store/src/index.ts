@@ -4,9 +4,12 @@ import { createHubStore } from './hub.js';
 import type { Statement, StoreDriver } from './driver.js';
 import { inspectSchema, schemaVersion } from './migrations.js';
 import { StoreError } from './types.js';
+import { libraryFilterSql, librarySortSql } from './library-query.js';
 import type { Asset, Card, CardSource, CardSourceInput, CardSummaryPage, CardSummaryQuery, ContentIdentity, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
 import * as validate from './validation.js';
 export * from './types.js';
+export { isLibraryFlag, isLibrarySort, libraryFlags, librarySorts, parseLibraryQuery } from './library-query.js';
+export type { LibraryFilter, LibraryFlag, LibrarySort, QueryNode } from './library-query.js';
 
 interface RevisionRow {
   id: string; sequence: number; cardId: string; workspaceId: string; parentRevisionId: string | null;
@@ -190,21 +193,13 @@ export function createStore(driver: StoreDriver) {
       return driver.query<Card>({ sql: `SELECT ${cardColumns} FROM unity_cards WHERE workspace_id = ? AND id > ? ORDER BY id LIMIT ?`,
         params: [workspaceId, options.afterId ?? '', validate.limit(options.limit)] });
     },
-    /** Library browsing: newest-touched first, optional name/creator text and exact tag filters. */
+    /** Library browsing: filters and query syntax live in library-query.ts; newest-touched first by default. */
     async listCardSummaries(workspaceId: string, query: CardSummaryQuery = {}): Promise<CardSummaryPage> {
       const limit = validate.limit(query.limit ?? 48), offset = validate.count(query.offset ?? 0, 'offset');
       const where = ['c.workspace_id = ?', 'c.head_revision_id IS NOT NULL'];
       const params: (string | number)[] = [validate.text(workspaceId, 'workspaceId')];
-      if (query.q?.trim()) {
-        const like = `%${query.q.trim().toLowerCase().replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
-        where.push(`(lower(json_extract(r.document_json, '$.data.name')) LIKE ? ESCAPE '\\'
-          OR lower(json_extract(r.document_json, '$.data.creator')) LIKE ? ESCAPE '\\')`);
-        params.push(like, like);
-      }
-      if (query.tag?.trim()) {
-        where.push(`EXISTS (SELECT 1 FROM json_each(r.document_json, '$.data.tags') t WHERE lower(t.value) = ?)`);
-        params.push(query.tag.trim().toLowerCase());
-      }
+      const filter = libraryFilterSql({ ...query, tags: [...(query.tags ?? []), ...(query.tag?.trim() ? [query.tag] : [])] });
+      where.push(...filter.where); params.push(...filter.params);
       if (query.forkOf) {
         where.push(`c.forked_from_revision_id IN (SELECT id FROM unity_revisions WHERE workspace_id = c.workspace_id AND card_id = ?)`);
         params.push(validate.text(query.forkOf, 'forkOf'));
@@ -223,10 +218,20 @@ export function createStore(driver: StoreDriver) {
           (SELECT json_extract(s.provenance_json, '$.format') FROM unity_card_sources s WHERE s.card_id = c.id) AS sourceFormat,
           (SELECT count(*) FROM unity_cards f JOIN unity_revisions fr ON fr.id = f.forked_from_revision_id
             WHERE fr.card_id = c.id AND f.workspace_id = c.workspace_id) AS forkCount
-        ${from} ORDER BY r.created_at DESC, c.id LIMIT ? OFFSET ?`, params: [...params, limit, offset] });
+        ${from} ORDER BY ${librarySortSql[query.sort ?? 'edited'] ?? librarySortSql.edited} LIMIT ? OFFSET ?`, params: [...params, limit, offset] });
       const items = await Promise.all(rows.map(async ({ sourceFormat, forkCount, ...card }) =>
         ({ card, revision: await getRevision(workspaceId, card.headRevisionId), sourceFormat, forkCount: Number(forkCount) })));
       return { items, total: Number(count?.total ?? 0) };
+    },
+    /** Every tag on current card versions with how many cards carry it, grouped case-insensitively. */
+    async listCardTags(workspaceId: string, options: { limit?: number } = {}): Promise<{ tag: string; count: number }[]> {
+      const limit = options.limit ?? 1000;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError('INVALID_INPUT', 'Tag list size must be between 1 and 5000');
+      const rows = await driver.query<{ tag: string; count: number }>({ sql: `SELECT max(t.value) AS tag, count(DISTINCT c.id) AS count
+        FROM unity_cards c JOIN unity_revisions r ON r.id = c.head_revision_id, json_each(r.document_json, '$.data.tags') t
+        WHERE c.workspace_id = ? AND t.type = 'text' AND trim(t.value) <> ''
+        GROUP BY lower(t.value) ORDER BY count DESC, lower(t.value) LIMIT ?`, params: [validate.text(workspaceId, 'workspaceId'), limit] });
+      return rows.map((row) => ({ tag: row.tag, count: Number(row.count) }));
     },
     async listRevisions(workspaceId: string, cardId: string, options: { limit?: number; afterSequence?: number } = {}) {
       const rows = await driver.query<{ id: string }>({ sql: `SELECT id FROM unity_revisions

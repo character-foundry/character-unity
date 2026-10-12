@@ -7,6 +7,7 @@ import type { CardDocument, RevisionInput, UnityStore } from '../../src/index.js
 import { createNodeDriver } from '../../src/node.js';
 import { createD1Driver } from '../../src/d1.js';
 import { inspectSchema, migrate } from '../../src/migrations.js';
+import { librarySearchCases } from './library-search.cases.js';
 import { migrations } from '../../src/schema.js';
 import type { StoreDriver } from '../../src/driver.js';
 
@@ -221,6 +222,14 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
       const page = await store.listCardSummaries(workspaceId, { limit: 2, offset: 2 });
       expect(page).toMatchObject({ total: 4 });
       expect(page.items.map((item) => item.card.id)).toEqual(all.items.slice(2).map((item) => item.card.id));
+    });
+
+    it('[S18] library search: query syntax, tag include/exclude, flags, sorts and tag counts', async () => {
+      await librarySearchCases(store, workspaceId);
+      const portrait = await store.createCard({ ...input, workspaceId, document: { spec: 'chara_card_v2', data: { name: 'Pictured' } },
+        assets: [{ path: 'portrait', assetId: (await readyAsset()).id }] });
+      expect((await store.listCardSummaries(workspaceId, { has: ['portrait'] })).items.map((item) => item.card.id)).toEqual([portrait.card.id]);
+      expect((await store.listCardSummaries(workspaceId, { has: ['assets'] })).total).toBe(0);
     });
 
     it('[S08] scopes reads, saves and asset references to their workspace', async () => {

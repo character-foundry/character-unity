@@ -15,7 +15,8 @@
     "./sync": "./src/sync.ts",
     "./sync-outbox": "./src/sync-outbox.ts",
     "./asset-maintenance": "./src/asset-maintenance.ts",
-    "./chat": "./src/chat.ts"
+    "./chat": "./src/chat.ts",
+    "./library-query": "./src/library-query.ts"
   },
   "scripts": {
     "type-check": "tsc -p tsconfig.json"

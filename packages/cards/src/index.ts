@@ -42,6 +42,11 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       const page = await store.listCardSummaries(workspaceId, query);
       return { cards: page.items.map(summarizeCard), total: page.total };
     },
+    /** Tags on current card versions with card counts, for filter pickers. */
+    async tags(actor: Actor, workspaceId: string) {
+      await authorize(actor, workspaceId);
+      return store.listCardTags(workspaceId);
+    },
     /** Copies a library card's current revision into a new card in the same workspace. */
     async fork(actor: Actor, workspaceId: string, cardId: string) {
       actor = { ...actor };

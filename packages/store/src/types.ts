@@ -1,3 +1,4 @@
+import type { LibraryFilter, LibrarySort } from './library-query.js';
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type CardDocument = { [key: string]: JsonValue };
 
@@ -33,7 +34,7 @@ export interface Revision {
   createdAt: string;
   assets: RevisionAsset[];
 }
-export interface CardSummaryQuery { q?: string; tag?: string; offset?: number; limit?: number;
+export interface CardSummaryQuery extends LibraryFilter { tag?: string; offset?: number; limit?: number; sort?: LibrarySort;
   /** Only cards forked from any revision of this card. */ forkOf?: string;
   /** Only these cards (at most 100). */ ids?: readonly string[] }
 export interface CardSummaryItem { card: Card; revision: Revision; sourceFormat: string | null; forkCount: number }

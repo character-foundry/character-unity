@@ -1,6 +1,7 @@
 import { StoreError } from '@character-unity/store';
 import type { Asset, Card, CardSource, CardSourceInput, Revision, RevisionInput, UnityStore, Workspace } from '@character-unity/store';
 import * as validate from '@character-unity/store/validation';
+import { fold, libraryComparator, libraryMatcher } from '@character-unity/store/library-query';
 import { inspectDatabase } from './database.js';
 import { request, transaction } from './transaction.js';
 
@@ -50,6 +51,17 @@ const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources'];
 
 /** Same trusted domain contract as SQL; each write is one native IDB transaction. */
 export function createBrowserStore(db: IDBDatabase): UnityStore {
+  function headRows(workspaceId: string) {
+    return transaction(db, ['cards', 'revisions', 'sources'], 'readonly', function* (tx) {
+      const cards = yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
+      const rows: { card: Card; revision: Revision; source: CardSource | undefined }[] = [];
+      for (const card of cards) {
+        if (!card.headRevisionId) continue;
+        rows.push({ card, revision: yield* scoped<Revision>(tx, 'revisions', workspaceId, card.headRevisionId), source: yield* get<CardSource>(tx, 'sources', card.id) });
+      }
+      return rows;
+    });
+  }
   return {
     readiness: () => inspectDatabase(db),
     async findSyncFork() { throw new StoreError('INVALID_INPUT', 'Signed sync writes require a SQL host'); },
@@ -125,39 +137,47 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         return yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(range, limit));
       });
     },
-    /** Same ordering and filters as the SQL store; a browser library is small enough to scan. */
+    /** Same ordering and filters as the SQL store (library-query.ts); a browser library is small enough to scan. */
     async listCardSummaries(workspaceId, query = {}) {
       const limit = validate.limit(query.limit ?? 48), offset = validate.count(query.offset ?? 0, 'offset');
-      const text = query.q?.trim().toLowerCase(), tag = query.tag?.trim().toLowerCase();
-      const scan = await transaction(db, ['cards', 'revisions', 'sources'], 'readonly', function* (tx) {
-        const cards = yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
-        const rows: { card: Card; revision: Revision; source: CardSource | undefined }[] = [];
-        for (const card of cards) {
-          if (!card.headRevisionId) continue;
-          rows.push({ card, revision: yield* scoped<Revision>(tx, 'revisions', workspaceId, card.headRevisionId), source: yield* get<CardSource>(tx, 'sources', card.id) });
-        }
-        return rows;
-      });
+      const scan = await headRows(workspaceId);
       const revisionCards = new Map(scan.map(({ revision }) => [revision.id, revision.cardId]));
       const forks = new Map<string, number>();
       for (const { card } of scan) {
         const parentCard = card.forkedFromRevisionId ? revisionCards.get(card.forkedFromRevisionId) : undefined;
         if (parentCard) forks.set(parentCard, (forks.get(parentCard) ?? 0) + 1);
       }
-      const field = (revision: Revision, key: string) => {
-        const value = (revision.document as { data?: Record<string, unknown> }).data?.[key];
-        return typeof value === 'string' ? value.toLowerCase() : '';
-      };
+      const matcher = libraryMatcher({ ...query, tags: [...(query.tags ?? []), ...(query.tag?.trim() ? [query.tag] : [])] });
       const ids = query.ids ? new Set(query.ids) : null;
-      const matches = scan.filter(({ card }) => (!ids || ids.has(card.id))
+      const rows = scan.filter(({ card }) => (!ids || ids.has(card.id))
         && (!query.forkOf || (card.forkedFromRevisionId !== null && revisionCards.get(card.forkedFromRevisionId) === query.forkOf)))
-        .filter(({ revision }) => (!text || field(revision, 'name').includes(text) || field(revision, 'creator').includes(text))
-        && (!tag || ((revision.document as { data?: { tags?: unknown } }).data?.tags as unknown[] | undefined ?? []).some((value) => typeof value === 'string' && value.toLowerCase() === tag)))
-        .sort((a, b) => b.revision.createdAt.localeCompare(a.revision.createdAt) || a.card.id.localeCompare(b.card.id));
-      return { total: matches.length, items: matches.slice(offset, offset + limit).map(({ card, revision, source }) => ({
-        card, revision, forkCount: forks.get(card.id) ?? 0,
+        .map((entry) => ({ ...entry, row: { cardId: entry.card.id, cardCreatedAt: entry.card.createdAt, forkedFromRevisionId: entry.card.forkedFromRevisionId,
+          revisionCreatedAt: entry.revision.createdAt, sequence: entry.revision.sequence, document: entry.revision.document,
+          assetPaths: entry.revision.assets.map((asset) => asset.path), forkCount: forks.get(entry.card.id) ?? 0 } }))
+        .filter(({ row }) => matcher(row));
+      const order = libraryComparator(query.sort ?? 'edited');
+      rows.sort((a, b) => order(a.row, b.row));
+      return { total: rows.length, items: rows.slice(offset, offset + limit).map(({ card, revision, source, row }) => ({
+        card, revision, forkCount: row.forkCount,
         sourceFormat: typeof (source?.provenance as { format?: unknown } | undefined)?.format === 'string' ? (source!.provenance as { format: string }).format : null,
       })) };
+    },
+    async listCardTags(workspaceId, options = {}) {
+      const limit = options.limit ?? 1000;
+      if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError('INVALID_INPUT', 'Tag list size must be between 1 and 5000');
+      const counts = new Map<string, { tag: string; cards: Set<string> }>();
+      for (const { card, revision } of await headRows(workspaceId)) {
+        const tags = (revision.document as { data?: { tags?: unknown } }).data?.tags;
+        if (!Array.isArray(tags)) continue;
+        for (const tag of tags) {
+          if (typeof tag !== 'string' || !tag.replace(/^ +| +$/g, '')) continue;
+          const key = fold(tag), entry = counts.get(key) ?? { tag, cards: new Set<string>() };
+          if (tag > entry.tag) entry.tag = tag;
+          entry.cards.add(card.id); counts.set(key, entry);
+        }
+      }
+      return [...counts.entries()].map(([key, { tag, cards }]) => ({ key, tag, count: cards.size }))
+        .sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, limit).map(({ tag, count }) => ({ tag, count }));
     },
     async listRevisions(workspaceId, cardId, options = {}) {
       const range = IDBKeyRange.bound([workspaceId, cardId, validate.count(options.afterSequence ?? 0, 'afterSequence')], [workspaceId, cardId, []], true);

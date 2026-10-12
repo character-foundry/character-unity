@@ -4,6 +4,7 @@ import { openBrowserStorage } from './index.js';
 import { openDatabase } from './database.js';
 import { request, transaction } from './transaction.js';
 import type { RevisionInput } from '@character-unity/store';
+import { librarySearchCases } from '../../store/tests/conformance/library-search.cases.js';
 
 const input: RevisionInput = { authorId: 'alice', document: { spec: 'chara_card_v3', data: { name: 'Aster', opaque: [null, 2] } },
   identity: { algorithm: 'fixture', hash: 'a'.repeat(64) } };
@@ -81,6 +82,11 @@ describe('browser storage', () => {
     await expect(store.saveRevision({ ...input, workspaceId, cardId: created.card.id, expectedHead: created.revision.id, assets: [{ path: 'portrait', assetId: staged.id }] })).rejects.toMatchObject({ code: 'ASSET_NOT_READY' });
     expect((await store.getCard(workspaceId, created.card.id)).headRevisionId).toBe(created.revision.id);
     expect(await counts()).toEqual([1, 1, 1]);
+  });
+
+  it('searches the library with the same meaning as the SQL store (S18)', async () => {
+    const { store } = await open();
+    await librarySearchCases(store, (await store.createWorkspace({ ownerId: 'alice', name: 'Library' })).id);
   });
 
   it('preserves fork roots and scoped pagination without importing ancestor assets', async () => {

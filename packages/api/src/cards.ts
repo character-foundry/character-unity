@@ -3,7 +3,8 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import { CardError, importByteLimit } from '@character-unity/cards/contract';
 import type { Actor, CardService } from '@character-unity/cards';
-import type { CardDocument } from '@character-unity/store';
+import type { CardDocument, LibraryFlag, LibrarySort } from '@character-unity/store';
+import { isLibraryFlag, isLibrarySort } from '@character-unity/store';
 import type { ArchiveImportService } from '@character-unity/cards/archive';
 import { input, parseSearchQuery, isSearchSort, parseSnapshot } from '@character-unity/archive-client/contract';
 import { assetRevisionBody } from './asset-body.js';
@@ -45,14 +46,31 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   routes.get('/:workspaceId/card-summaries', async (c) => {
     const { cards, actor } = await required(c);
     const params = new URL(c.req.url).searchParams;
-    if ([...params.keys()].some((key) => !['q', 'tag', 'offset', 'limit'].includes(key) || params.getAll(key).length !== 1)
+    const keys = ['q', 'tag', 'tags', 'tagMode', 'exclude', 'has', 'fork', 'sort', 'offset', 'limit'];
+    const list = (key: string) => (params.get(key) ?? '').split(',').map((value) => value.trim()).filter(Boolean);
+    const tags = list('tags'), exclude = list('exclude'), has = list('has');
+    if ([...params.keys()].some((key) => !keys.includes(key) || params.getAll(key).length !== 1)
       || (params.has('offset') && !/^(0|[1-9][0-9]{0,6})$/.test(params.get('offset')!))
       || (params.has('limit') && !/^[1-9][0-9]{0,2}$/.test(params.get('limit')!))
-      || (params.get('q')?.length ?? 0) > 200 || (params.get('tag')?.length ?? 0) > 200) throw new CardError('INVALID_INPUT', 'Invalid library query');
+      || (params.get('q')?.length ?? 0) > 500 || (params.get('tag')?.length ?? 0) > 200
+      || tags.length > 20 || exclude.length > 100 || [...tags, ...exclude].some((tag) => tag.length > 200)
+      || !has.every(isLibraryFlag) || (params.has('sort') && !isLibrarySort(params.get('sort')!))
+      || (params.has('tagMode') && !['all', 'any'].includes(params.get('tagMode')!))
+      || (params.has('fork') && !['only', 'none'].includes(params.get('fork')!))) throw new CardError('INVALID_INPUT', 'Invalid library query');
     return c.json(await cards.summaries(actor, c.req.param('workspaceId'), {
       ...(params.get('q') ? { q: params.get('q')! } : {}), ...(params.get('tag') ? { tag: params.get('tag')! } : {}),
+      ...(tags.length ? { tags } : {}), ...(exclude.length ? { excludeTags: exclude } : {}),
+      ...(has.length ? { has: has as LibraryFlag[] } : {}),
+      ...(params.has('tagMode') ? { tagMode: params.get('tagMode') as 'all' | 'any' } : {}),
+      ...(params.has('fork') ? { fork: params.get('fork') as 'only' | 'none' } : {}),
+      ...(params.has('sort') ? { sort: params.get('sort') as LibrarySort } : {}),
       ...(params.has('offset') ? { offset: Number(params.get('offset')) } : {}), ...(params.has('limit') ? { limit: Number(params.get('limit')) } : {}),
     }));
+  });
+  routes.get('/:workspaceId/card-tags', async (c) => {
+    const { cards, actor } = await required(c);
+    if (new URL(c.req.url).search) throw new CardError('INVALID_INPUT', 'Card tags take no query parameters');
+    return c.json({ tags: await cards.tags(actor, c.req.param('workspaceId')) });
   });
   routes.post('/:workspaceId/imports', async (c) => {
     const { cards, actor } = await required(c);
