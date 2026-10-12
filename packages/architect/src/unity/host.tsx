@@ -18,14 +18,17 @@ export function architectEditor(config: UnityHostConfig) {
   return editor;
 }
 
-/** An empty `cardId` opens an unsaved draft; nothing is stored until Save, which reports the new id via `onCreated`. */
-export function ArchitectEditorHost({ config, cardId, onExit, onCreated }: {
-  config: UnityHostConfig; cardId: string; onExit?: () => void; onCreated?: (cardId: string) => void;
+/**
+ * An empty `cardId` opens an unsaved draft: blank, or a copy of `forkOf`. Nothing is stored until Save, which
+ * reports the new id via `onCreated`.
+ */
+export function ArchitectEditorHost({ config, cardId, forkOf, onExit, onCreated }: {
+  config: UnityHostConfig; cardId: string; forkOf?: string; onExit?: () => void; onCreated?: (cardId: string) => void;
 }) {
   const Editor = architectEditor(config);
   return (
     <Suspense fallback={<div className="p-12 text-center opacity-60">Loading editor…</div>}>
-      <Editor cardId={cardId} onExit={onExit} onCreated={onCreated} />
+      <Editor cardId={cardId} forkOf={forkOf} onExit={onExit} onCreated={onCreated} />
     </Suspense>
   );
 }

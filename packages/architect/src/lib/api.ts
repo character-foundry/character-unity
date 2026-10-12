@@ -103,6 +103,17 @@ class UnityApiClient extends ApiClient {
   override async createCard(card: unknown): Promise<Result<Card>> {
     const document = (card as Partial<Card> | null)?.data;
     if (!document) return { error: 'Nothing to save' };
+    const forkOf = (card as Partial<Card>).meta?.forkOf;
+    if (forkOf) {
+      // A fork draft: the fork and its edits are created together, against the head the draft was opened from.
+      const expectedHead = heads.get(forkOf);
+      if (!expectedHead) return { error: 'Reload the original card before saving this fork' };
+      const forked = await unity<{ card: { id: string } }>(`${base()}/${encodeURIComponent(forkOf)}/forks`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ expectedHead, document }),
+      });
+      if (forked.error || !forked.data) return { error: forked.error };
+      return this.getCard(forked.data.card.id);
+    }
     const created = await unity<{ card: { id: string } }>(`${base().replace(/\/cards$/, '')}/imports`, {
       method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-file-name': 'new-character.json' },
       body: new TextEncoder().encode(JSON.stringify(document)),

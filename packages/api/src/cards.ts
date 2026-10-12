@@ -160,7 +160,12 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   });
   routes.post('/:workspaceId/cards/:cardId/forks', async (c) => {
     const { cards, actor } = await required(c);
-    return c.json(await cards.fork(actor, c.req.param('workspaceId'), c.req.param('cardId')), 201);
+    // An empty body copies the card as is; `{ expectedHead, document }` saves an edited fork draft in one step.
+    if (!c.req.header('content-type')?.includes('json')) return c.json(await cards.fork(actor, c.req.param('workspaceId'), c.req.param('cardId')), 201);
+    const input = await json(c, 262_144);
+    if (typeof input.expectedHead !== 'string' || !input.document || typeof input.document !== 'object' || Array.isArray(input.document)
+      || Object.keys(input).some((key) => !['expectedHead', 'document'].includes(key))) throw new CardError('INVALID_INPUT', 'Expected a document and revision head');
+    return c.json(await cards.fork(actor, c.req.param('workspaceId'), c.req.param('cardId'), { expectedHead: input.expectedHead, document: input.document as CardDocument }), 201);
   });
   routes.get('/:workspaceId/cards/:cardId/family', async (c) => {
     const { cards, actor } = await required(c);

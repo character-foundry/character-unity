@@ -23,6 +23,7 @@ createRoot(root).render(
           <Route path="/card/:id" element={<CardDetailPage />} />
           <Route path="/card/:id/edit" element={<EditPage />} />
           <Route path="/new" element={<NewCardPage />} />
+          <Route path="/card/:id/fork" element={<NewCardPage key="fork" />} />
           <Route path="/search" element={<SearchPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/chat-apps" element={<Navigate to="/settings#chat-apps" replace />} />

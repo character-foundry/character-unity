@@ -151,9 +151,6 @@ export const editorApi = {
   },
 };
 
-export async function forkCard(id: string) {
-  return call<{ card: { id: string } }>(`${await cardPath(id)}/forks`, { method: 'POST' });
-}
 export interface CardFamily { parent: CardSummary | null; forks: CardSummary[]; forkTotal: number }
 export async function cardFamily(id: string) {
   return call<CardFamily>(`${await cardPath(id)}/family`);

@@ -35,7 +35,15 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     await measureRevision(store, result.revision.workspaceId, result.revision.id).catch(() => undefined);
     return result;
   }
-  return {
+  /** The document carrying `lineageSource`'s foundry lineage in place of its own. */
+  function withLineage(input: CardDocument, lineageSource: CardDocument): CardDocument {
+    const document = JSON.parse(canonicalJson(input)) as { data?: { extensions?: { foundry?: Record<string, unknown> } } };
+    const lineage = (lineageSource.data as { extensions?: { foundry?: { lineage?: unknown } } } | undefined)?.extensions?.foundry?.lineage;
+    const data = document.data ??= {}, extensions = data.extensions ??= {}, foundry = extensions.foundry ??= {};
+    if (lineage === undefined) delete foundry.lineage; else foundry.lineage = lineage;
+    return document as CardDocument;
+  }
+  const service = {
     async workspaces(actor: Actor) { return store.listWorkspaces(actor.id); },
     async createWorkspace(actor: Actor, name: string) { return store.createWorkspace({ ownerId: actor.id, name }); },
     async list(actor: Actor, workspaceId: string, options: { limit?: number; afterId?: string } = {}) {
@@ -73,10 +81,17 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       await authorize(actor, workspaceId);
       return store.listCardTags(workspaceId);
     },
-    /** Copies a library card's current revision into a new card in the same workspace. */
-    async fork(actor: Actor, workspaceId: string, cardId: string) {
+    /**
+     * Copies a library card's current revision into a new card in the same workspace. With `edit`, the editor's
+     * unsaved fork draft is saved onto the new card as its first edit; nothing is created if that save fails.
+     */
+    async fork(actor: Actor, workspaceId: string, cardId: string, edit?: { expectedHead: string; document: CardDocument }) {
       actor = { ...actor };
       const current = await open(actor, workspaceId, cardId);
+      if (edit) {
+        if (current.card.headRevisionId !== edit.expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed since the fork was opened; reload before saving');
+        if (canonicalJson(readCardLineage(edit.document)) !== canonicalJson(readCardLineage(current.revision.document))) throw new CardError('INVALID_LINEAGE', 'Draft cannot replace its lineage');
+      }
       if (!current.card.originalHash) throw new CardError('INVALID_LINEAGE', 'Card has no accepted original root');
       const options = await revisionIdentityOptions(store, current.revision);
       const previous = readCardLineage(current.revision.document);
@@ -84,8 +99,16 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       const forked = await createCardRevision(current.revision.document, { ...options, originalHash: current.card.originalHash,
         parents: previous ? [previous] : [], operation: 'fork', author: actor.uri, createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
       // Same workspace: the fork references the parent's stored assets; no bytes are copied or changed.
-      return measured(await store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: current.revision.id, authorId: actor.id,
+      const created = await measured(await store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: current.revision.id, authorId: actor.id,
         document: forked.card, identity: forked.lineage.content, assets: current.revision.assets }));
+      if (!edit) return created;
+      try {
+        const revision = await service.save(actor, workspaceId, created.card.id, created.revision.id, withLineage(edit.document, created.revision.document));
+        return { ...created, card: { ...created.card, headRevisionId: revision.id }, revision };
+      } catch (error) {
+        await store.deleteCard(workspaceId, created.card.id).catch(() => undefined);
+        throw error;
+      }
     },
     /** The card this one was forked from (if any) and the cards forked from it. */
     async family(actor: Actor, workspaceId: string, cardId: string) {
@@ -212,5 +235,6 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       return assets.download(workspaceId, current.source.assetId);
     },
   };
+  return service;
 }
 export type CardService = ReturnType<typeof createCardService>;

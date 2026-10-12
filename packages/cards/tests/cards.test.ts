@@ -129,6 +129,28 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     expect(await database.store.listRevisions(workspaceId, imported.card.id)).toHaveLength(2);
   });
 
+  it('saves an edited fork draft as the new card\'s first edit, creating nothing when the draft is refused', async () => {
+    const imported = await service.import(alice, workspaceId, encoded());
+    const source = await service.save(alice, workspaceId, imported.card.id, imported.revision.id,
+      { ...imported.revision.document, data: { ...imported.revision.document.data as CardDocument, scenario: 'Saved once' } });
+    const draft = structuredClone(source.document); (draft.data as CardDocument).name = 'Aster (fork)';
+    const before = (await service.list(alice, workspaceId)).length;
+    await expect(service.fork(alice, workspaceId, imported.card.id, { expectedHead: imported.revision.id, document: draft })).rejects.toMatchObject({ code: 'HEAD_CONFLICT' });
+    const moved = structuredClone(draft); (moved.data as CardDocument).assets = [{ type: 'icon', uri: 'ccdefault:', name: 'main', ext: 'png' }];
+    await expect(service.fork(alice, workspaceId, imported.card.id, { expectedHead: source.id, document: moved })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    expect((await service.list(alice, workspaceId)).length).toBe(before);
+
+    const forked = await service.fork(alice, workspaceId, imported.card.id, { expectedHead: source.id, document: draft });
+    expect(forked.card.forkedFromRevisionId).toBe(source.id);
+    expect(forked.card.headRevisionId).toBe(forked.revision.id);
+    expect(forked.revision.sequence).toBe(2);
+    expect((forked.revision.document.data as CardDocument).name).toBe('Aster (fork)');
+    expect((forked.revision.document.data as CardDocument).scenario).toBe('Saved once');
+    expect(await verifyCardLineage(forked.revision.document)).toBe(true);
+    expect((await service.open(alice, workspaceId, imported.card.id)).revision.id).toBe(source.id);
+    expect((await service.list(alice, workspaceId)).length).toBe(before + 1);
+  });
+
   it('authorizes every workspace operation before accessing original bytes or mutating cards', async () => {
     const imported = await service.import(alice, workspaceId, encoded());
     for (const operation of [

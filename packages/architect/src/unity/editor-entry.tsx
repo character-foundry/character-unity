@@ -49,7 +49,9 @@ function blankCard(): Card {
   };
 }
 
-export function ArchitectEditor({ cardId, onExit, onCreated }: { cardId: string; onExit?: (() => void) | undefined; onCreated?: ((cardId: string) => void) | undefined }) {
+export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
+  cardId: string; forkOf?: string | undefined; onExit?: (() => void) | undefined; onCreated?: ((cardId: string) => void) | undefined;
+}) {
   const isDraft = cardId === '';
   const root = useRef<HTMLDivElement>(null);
   const currentCard = useCardStore((state) => state.currentCard);
@@ -66,6 +68,18 @@ export function ArchitectEditor({ cardId, onExit, onCreated }: { cardId: string;
     let active = true;
     setLoading(true); setError(null); setDraft(null);
     useCardStore.getState().setCurrentCard(null);
+    if (isDraft && forkOf) {
+      // A fork draft is the original's current version without an id, so it is held in memory like a new card.
+      void (async () => {
+        await useCardStore.getState().loadCard(forkOf);
+        if (!active) return;
+        const loaded = useCardStore.getState().currentCard;
+        if (!loaded || loaded.meta.id !== forkOf) { setError('The card to fork could not be opened.'); setLoading(false); return; }
+        useCardStore.setState({ currentCard: { ...loaded, meta: { ...loaded.meta, id: '', forkOf } }, isDirty: false });
+        setLoading(false);
+      })();
+      return () => { active = false; };
+    }
     if (isDraft) {
       // Held in memory only: the store skips autosave and IndexedDB drafts for a card without an id.
       useCardStore.setState({ currentCard: blankCard(), isDirty: false });
@@ -86,7 +100,7 @@ export function ArchitectEditor({ cardId, onExit, onCreated }: { cardId: string;
       const state = useCardStore.getState();
       if (state.autoSaveTimeout) clearTimeout(state.autoSaveTimeout);
     };
-  }, [cardId, isDraft]);
+  }, [cardId, forkOf, isDraft]);
 
   async function save() {
     setError(null);
@@ -129,7 +143,7 @@ export function ArchitectEditor({ cardId, onExit, onCreated }: { cardId: string;
     setDraft(null);
   }
 
-  const status = isSaving ? 'Saving…' : isDraft ? 'New card — not in the library until you save' : isDirty ? 'Unsaved changes (autosaves after 30s idle)' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
+  const status = isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? 'Unsaved changes (autosaves after 30s idle)' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
 
   return (
     <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 11rem)' }}>

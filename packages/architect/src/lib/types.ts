@@ -42,6 +42,8 @@ export function isLorebookSpec(spec: Spec): boolean {
 export interface CardMeta {
   favorite?: boolean;
   id: string;
+  /** Unity: an unsaved fork draft of this card; its first Save creates the fork. */
+  forkOf?: string;
   name: string;
   spec: Spec;
   tags: string[];
