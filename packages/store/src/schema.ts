@@ -4,6 +4,7 @@ import { syncSchema } from './sync-schema.js';
 import { syncOperationsSchema } from './sync-operations-schema.js';
 import { syncOutboxSchema } from './sync-outbox-schema.js';
 import { assetMaintenanceSchema } from './asset-maintenance-schema.js';
+import { chatSchema } from './chat-schema.js';
 /** Append migrations; never edit a migration that has been applied to real data. */
 export const migrations = [{
   version: 1,
@@ -124,4 +125,5 @@ export const migrations = [{
 ] }, { version: 6, name: 'sync_peers_and_nonces', statements: syncSchema },
 { version: 7, name: 'sync_operation_receipts', statements: syncOperationsSchema },
 { version: 8, name: 'durable_sync_outbox', statements: syncOutboxSchema },
-{ version: 9, name: 'asset_retirement_fences', statements: assetMaintenanceSchema }] as const;
+{ version: 9, name: 'asset_retirement_fences', statements: assetMaintenanceSchema },
+{ version: 10, name: 'chat_placements', statements: chatSchema }] as const;

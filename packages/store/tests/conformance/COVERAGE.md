@@ -50,3 +50,9 @@ responses, persistent immutable tombstones and populated v8 migration. Separate
 `asset-sweeps.test.ts` tests actual filesystem and local R2 removal, lost deletion
 acknowledgments and late uploads. `apps/api/src/assets-cli.test.ts` checks the
 operator commands across separate processes with persisted SQLite and D1/R2.
+
+`chat.test.ts` runs C01–C03 from `chat-requirements.json` on both drivers:
+workspace-scoped chat-app targets with credentials kept out of listings,
+placement status derived against the card head (current/behind) and from complete
+scans (edited/missing), failed scans that keep known copies, and resolving exported
+copies back to library revisions by lineage revision hash, then content hash.

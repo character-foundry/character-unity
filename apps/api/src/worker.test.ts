@@ -179,7 +179,7 @@ describe('account Worker in workerd with D1 and R2', () => {
     expect((await db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'unity_%'").all()).results).toEqual([]);
     const { driver, a } = await setup();
     expect((await request('sync/v1/capabilities', a)).status).toBe(404);
-    expect(await (await request('ready')).json()).toEqual({ status: 'ready', storage: { schemaVersion: 9 } });
+    expect(await (await request('ready')).json()).toEqual({ status: 'ready', storage: { schemaVersion: 10 } });
     await driver.batch([{ sql: "UPDATE unity_migrations SET checksum = 'changed' WHERE version = 5" }]);
     expect((await request('workspaces', a, 'POST', { name: 'Must not write' })).status).toBe(503);
     expect(await driver.query({ sql: 'SELECT id FROM unity_workspaces' })).toEqual([]);

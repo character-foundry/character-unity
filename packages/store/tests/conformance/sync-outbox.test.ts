@@ -151,7 +151,7 @@ for (const adapter of ['sqlite', 'd1']) describe(`sync-outbox contract / ${adapt
     const faulty: StoreDriver = { query: (query) => driver.query(query), batch: (statements) => driver.batch(statements.length > 1 ? [...statements, { sql: 'INSERT INTO nonexistent_table VALUES (1)' }] : statements) };
     await expect(migrate(faulty)).rejects.toThrow(); expect(await inspectSchema(driver)).toBe(7);
     expect(await driver.query({ sql: "SELECT name FROM sqlite_master WHERE name LIKE 'unity_sync_outbox%'" })).toEqual([]);
-    await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(9);
+    await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(10);
     expect(await driver.query({ sql: 'SELECT * FROM unity_migrations WHERE version <= 7 ORDER BY version' })).toEqual(history);
     expect(await createStore(driver).getRevision(input.workspaceId, input.revisionId)).toEqual(revision);
     expect(await createSyncOutboxStore(driver).enqueue(input)).toMatchObject({ state: 'prepared' });

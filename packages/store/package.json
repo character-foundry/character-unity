@@ -14,7 +14,8 @@
     "./accounts": "./src/accounts.ts",
     "./sync": "./src/sync.ts",
     "./sync-outbox": "./src/sync-outbox.ts",
-    "./asset-maintenance": "./src/asset-maintenance.ts"
+    "./asset-maintenance": "./src/asset-maintenance.ts",
+    "./chat": "./src/chat.ts"
   },
   "scripts": {
     "type-check": "tsc -p tsconfig.json"
