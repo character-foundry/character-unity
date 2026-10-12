@@ -133,7 +133,7 @@ export function createChatStore(driver: StoreDriver) {
           JOIN unity_cards c ON c.id = p.card_id JOIN unity_revisions h ON h.id = c.head_revision_id
           LEFT JOIN unity_revisions r ON r.id = p.revision_id
           WHERE p.workspace_id = ? ${cardIds ? `AND p.card_id IN (${cardIds.map(() => '?').join(', ')})` : ''}
-          ORDER BY t.created_at, p.remote_name, p.remote_id`,
+          ORDER BY t.created_at, p.remote_state = 'missing', p.remote_name, p.remote_id`,
         params: [workspaceId, ...(cardIds ?? [])],
       });
       return rows.map(({ remoteState, headRevisionId, ...row }) => ({ ...row,

@@ -14,7 +14,7 @@ export async function openLocalServices(options: { databasePath: string; blobDir
   try {
     const blobs = await createNodeBlobStore(options.blobDirectory);
     const archiveClient = options.archiveOrigin ? createArchiveClient(options.archiveOrigin) : undefined;
-    function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'>) {
+    function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'> & { chat?: typeof database.chat }) {
       return composeServices(storage, blobs, archiveClient, options.remoteConnections);
     }
     return { ...compose(database), accounts: database.accounts, sync: database.sync,

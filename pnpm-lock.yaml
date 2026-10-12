@@ -500,6 +500,9 @@ importers:
       '@character-unity/assets':
         specifier: workspace:*
         version: link:../assets
+      '@character-unity/chat-apps':
+        specifier: workspace:*
+        version: link:../chat-apps
       '@character-unity/store':
         specifier: workspace:*
         version: link:../store
@@ -513,6 +516,8 @@ importers:
       fake-indexeddb:
         specifier: 6.2.5
         version: 6.2.5
+
+  packages/chat-apps: {}
 
   packages/editor:
     dependencies:

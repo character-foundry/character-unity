@@ -6,6 +6,7 @@ for (const contract of [
   { name: 'asset-maintenance', requirements: 'packages/store/tests/conformance/asset-maintenance-requirements.json', drivers: ['sqlite', 'd1'], labels: 'SQLite | Local D1' },
   { name: 'store', requirements: 'packages/store/tests/conformance/requirements.json', drivers: ['sqlite', 'd1'], labels: 'SQLite | Local D1' },
   { name: 'hub', requirements: 'packages/store/tests/conformance/hub-requirements.json', drivers: ['sqlite', 'd1'], labels: 'SQLite | Local D1' },
+  { name: 'chat', requirements: 'packages/store/tests/conformance/chat-requirements.json', drivers: ['sqlite', 'd1'], labels: 'SQLite | Local D1' },
   { name: 'accounts', requirements: 'packages/store/tests/conformance/accounts-requirements.json', drivers: ['sqlite', 'd1'], labels: 'SQLite | Local D1' },
   { name: 'sync', requirements: 'packages/store/tests/conformance/sync-requirements.json', drivers: ['sqlite', 'd1'], labels: 'SQLite | Local D1' },
   { name: 'sync-operations', requirements: 'packages/store/tests/conformance/sync-operations-requirements.json', drivers: ['sqlite', 'd1'], labels: 'SQLite | Local D1' },

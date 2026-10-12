@@ -11,16 +11,23 @@ import { hubRoutes } from './hub.js';
 import type { HubService } from '@character-unity/cards/hub';
 import type { RemoteConnectionsService } from '@character-unity/cards/connections';
 import { remoteRoutes } from './remotes.js';
+import { chatRoutes } from './chat.js';
+import type { ChatService } from '@character-unity/cards/chat';
+import { ChatAppError } from '@character-unity/cards/chat';
 import { SyncCommandError, SyncReadError } from '@character-foundry/character-foundry/sync';
 
 /** Shared Architect/hub API. Hosts supply storage, card operations and authentication. */
-export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; hub?: HubService; remotes?: RemoteConnectionsService; authenticate?: Authenticate } = {}) {
+export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; hub?: HubService; remotes?: RemoteConnectionsService; chat?: ChatService; authenticate?: Authenticate } = {}) {
   const app = new Hono();
   app.onError((error, c) => {
     if (error instanceof SyncCommandError || error instanceof SyncReadError) {
       // A peer's credentials or policy error must not sign the user out of this host.
       const status = ['CHANGED', 'OPERATION_CONFLICT'].includes(error.code) ? 409 : error.code === 'TOO_LARGE' ? 413 : 502;
       return c.json({ error: { code: `REMOTE_${error.code}`, message: `The remote hub reported ${error.code.toLowerCase().replaceAll('_', ' ')}. Refresh the job before retrying a return.` } }, status);
+    }
+    if (error instanceof ChatAppError) {
+      const status = error.code === 'NOT_FOUND' ? 404 : 502;
+      return c.json({ error: { code: `CHAT_${error.code}`, message: error.message } }, status);
     }
     if (error instanceof ArchiveError) {
       const status = error.code === 'SNAPSHOT_CHANGED' ? 409 : error.code === 'NOT_FOUND' ? 404 : error.code === 'TOO_LARGE' ? 413 : error.code === 'INVALID_INPUT' ? 400 : 503;
@@ -36,6 +43,7 @@ export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; card
     }
     return c.json({ error: { code: 'UNAVAILABLE', message: 'Card service unavailable' } }, 503);
   });
+  if (options.chat) app.route('/api/workspaces', chatRoutes(options));
   app.route('/api/workspaces', cardRoutes(options));
   app.route('/api/hub', hubRoutes(options));
   app.route('/api/remotes', remoteRoutes(options));

@@ -10,7 +10,8 @@
     "./hub": "./src/hub.ts",
     "./remote": "./src/remote.ts",
     "./remote-outbox": "./src/remote-outbox.ts",
-    "./connections": "./src/connections.ts"
+    "./connections": "./src/connections.ts",
+    "./chat": "./src/chat.ts"
   },
   "scripts": {
     "type-check": "tsc -p tsconfig.json"
@@ -19,7 +20,8 @@
     "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
     "@character-unity/assets": "workspace:*",
     "@character-unity/store": "workspace:*",
-    "@character-unity/archive-client": "workspace:*"
+    "@character-unity/archive-client": "workspace:*",
+    "@character-unity/chat-apps": "workspace:*"
   },
   "devDependencies": {
     "@character-unity/blob-store": "workspace:*",

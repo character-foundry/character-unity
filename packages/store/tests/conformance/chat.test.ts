@@ -52,14 +52,14 @@ for (const adapter of ['sqlite', 'd1']) describe(`chat placements contract / ${a
     expect((await chat.placements(ws, [card]))[0]).toMatchObject({ status: 'behind', revisionSequence: 1, headSequence: 2 });
     await chat.recordPlacements(ws, target.id, [{ remoteId: 'Aster1.png', remoteName: 'Aster', cardId: card, revisionId: second.id, edited: true }], { complete: true });
     const rows = await chat.placements(ws);
-    expect(rows.map((row) => [row.remoteId, row.status])).toEqual([['Aster.png', 'missing'], ['Aster1.png', 'edited']]);
-    expect(rows[0]!.sentAt).not.toBeNull();
+    expect(rows.map((row) => [row.remoteId, row.status])).toEqual([['Aster1.png', 'edited'], ['Aster.png', 'missing']]);
+    expect(rows[1]!.sentAt).not.toBeNull();
     expect((await chat.targets(ws))[0]!.scannedAt).not.toBeNull();
     await chat.recordPlacements(ws, target.id, [], { complete: false, error: 'offline' });
-    expect((await chat.placements(ws)).map((row) => row.status)).toEqual(['missing', 'edited']);
+    expect((await chat.placements(ws)).map((row) => row.status)).toEqual(['edited', 'missing']);
     expect((await chat.targets(ws))[0]).toMatchObject({ scanError: 'offline' });
     await chat.forgetPlacement(ws, target.id, 'Aster.png');
-    expect(await chat.placements(ws)).toHaveLength(1);
+    expect((await chat.placements(ws)).map((row) => row.remoteId)).toEqual(['Aster1.png']);
     await chat.removeTarget(ws, target.id);
     expect(await chat.placements(ws)).toEqual([]);
   });
