@@ -23,7 +23,7 @@ function AddForm({ onDone }: { onDone: () => void }) {
     let created: ChatTarget | null = null;
     try {
       created = await chatApi.add({ kind, baseUrl, ...(name.trim() ? { name: name.trim() } : {}),
-        credentials: info.auth === 'basic' ? { ...(username ? { username, password } : {}) } : { ...(apiKey ? { apiKey } : {}) } });
+        credentials: { ...(username ? { username, password } : {}), ...(info.auth === 'login' && apiKey ? { apiKey } : {}) } });
       await chatApi.check(created.id);
       // First look: find copies of library cards that are already there.
       await chatApi.scan(created.id).catch(() => undefined);
@@ -49,20 +49,19 @@ function AddForm({ onDone }: { onDone: () => void }) {
       </div>
       <div className="grid gap-3 sm:grid-cols-2">
         <label className="space-y-1 text-xs text-starlight/60">Address
-          <input className={input} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="http://127.0.0.1:8000" required />
+          <input className={input} value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={info.defaultUrl} required />
         </label>
         <label className="space-y-1 text-xs text-starlight/60">Name (optional)
           <input className={input} value={name} onChange={(event) => setName(event.target.value)} placeholder={info.label} />
         </label>
-        {info.auth === 'basic' ? (<>
-          <label className="space-y-1 text-xs text-starlight/60">Username (only if basic auth is on)
-            <input className={input} value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" />
-          </label>
-          <label className="space-y-1 text-xs text-starlight/60">Password
-            <input className={input} type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" />
-          </label>
-        </>) : (
-          <label className="space-y-1 text-xs text-starlight/60 sm:col-span-2">Session token
+        <label className="space-y-1 text-xs text-starlight/60">{info.auth === 'basic' ? 'Username (only if basic auth is on)' : 'Username (only if login is on)'}
+          <input className={input} value={username} onChange={(event) => setUsername(event.target.value)} autoComplete="off" />
+        </label>
+        <label className="space-y-1 text-xs text-starlight/60">Password
+          <input className={input} type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" />
+        </label>
+        {info.auth === 'login' && (
+          <label className="space-y-1 text-xs text-starlight/60 sm:col-span-2">Or a session token instead of username and password
             <input className={input} type="password" value={apiKey} onChange={(event) => setApiKey(event.target.value)} autoComplete="off" />
           </label>
         )}

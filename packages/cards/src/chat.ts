@@ -40,7 +40,7 @@ export function createChatService(store: UnityStore, chat: ChatStore, assets: As
     return connect({ kind: target.kind, baseUrl: target.baseUrl, credentials: target.credentials });
   }
   /** Resolves one remote copy to a library revision and decides whether it was edited inside the app. */
-  async function observe(workspaceId: string, client: ChatApp, copy: RemoteCopy, known?: { cardId: string; revisionId: string | null }): Promise<ObservedPlacement | null> {
+  async function observe(workspaceId: string, client: ChatApp, copy: RemoteCopy, known?: { cardId: string; revisionId: string | null; fingerprint: string | null }): Promise<ObservedPlacement | null> {
     const found = marker(copy.extensions);
     if (!found) {
       // The marker is gone: the copy was rewritten inside the app. Keep tracking it as edited.
@@ -48,6 +48,12 @@ export function createChatService(store: UnityStore, chat: ChatStore, assets: As
     }
     const hit = await chat.resolveRevision(workspaceId, { ...found, ...(known ? { preferCardId: known.cardId } : {}) });
     if (!hit) return null;
+    if (copy.fingerprint !== undefined) {
+      // Apps that rebuild cards on export: compare with the fingerprint taken when the copy was sent or first seen.
+      // A copy now carrying a different revision was re-sent from elsewhere, so it starts a new baseline.
+      const baseline = known?.fingerprint && known.revisionId === hit.id ? known.fingerprint : copy.fingerprint;
+      return { remoteId: copy.remoteId, remoteName: copy.name, cardId: hit.cardId, revisionId: hit.id, edited: baseline !== copy.fingerprint, fingerprint: baseline };
+    }
     const revision = await store.getRevision(workspaceId, hit.id);
     const exported = await client.read(copy.remoteId);
     // The SDK only restores an unchanged copy; any meaningful edit made inside the app is rejected.
@@ -119,10 +125,13 @@ export function createChatService(store: UnityStore, chat: ChatStore, assets: As
         exported = await exportRevision(store, assets, revision, 'sillytavern-json');
       }
       const type = exported.mediaType === 'image/png' ? 'png' : 'json';
+      // Field-updating apps take the card itself: the same transported card (and marker) the file embeds.
+      const cardJson = exported.transport ?? JSON.parse(new TextDecoder().decode(exported.bytes)) as Record<string, unknown>;
       const name = safeName((revision.document.data as { name?: unknown } | undefined)?.name);
-      const sent = await app(target).upload({ bytes: exported.bytes, type, fileName: `${name}.${type}` },
+      const sent = await app(target).upload({ bytes: exported.bytes, type, fileName: `${name}.${type}`, card: cardJson, portrait: type === 'png' ? exported.bytes : null },
         { ...(existing ? { replace: existing.remoteId } : {}), preferredName: cardId });
-      await chat.recordPlacements(workspaceId, targetId, [{ remoteId: sent.remoteId, remoteName: name, cardId, revisionId: revision.id, edited: false, sent: true }], { complete: false });
+      await chat.recordPlacements(workspaceId, targetId, [{ remoteId: sent.remoteId, remoteName: name, cardId, revisionId: revision.id, edited: false, sent: true,
+        fingerprint: sent.fingerprint ?? null }], { complete: false });
       return (await chat.placements(workspaceId, [cardId])).find((row) => row.targetId === targetId && row.remoteId === sent.remoteId)!;
     },
     async placements(actor: Actor, workspaceId: string, cardIds?: readonly string[]) {

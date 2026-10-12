@@ -18,10 +18,14 @@ export interface ChatPlacement {
   targetId: string; targetName: string; kind: ChatKind; remoteId: string; remoteName: string;
   cardId: string; revisionId: string | null; revisionSequence: number | null; headSequence: number;
   status: PlacementStatus; sentAt: string | null; seenAt: string | null;
+  /** The copy's fingerprint when it was sent or first seen, for apps that rebuild cards on export. */
+  fingerprint: string | null;
 }
 /** One copy found during a scan (or created by a send), already resolved to a library card. */
 export interface ObservedPlacement {
   remoteId: string; remoteName: string; cardId: string; revisionId: string | null; edited: boolean; sent?: boolean;
+  /** Baseline fingerprint to keep for this copy; null leaves the stored one unchanged. */
+  fingerprint?: string | null;
 }
 
 interface TargetRow extends ChatTarget { credentials: string }
@@ -104,13 +108,14 @@ export function createChatStore(driver: StoreDriver) {
         statements.push({ sql: `UPDATE unity_chat_placements SET remote_state = 'missing' WHERE target_id = ?`, params: [targetId] });
       }
       for (const item of observed) {
-        statements.push({ sql: `INSERT INTO unity_chat_placements(target_id, remote_id, remote_name, card_id, workspace_id, revision_id, remote_state, sent_at, seen_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        statements.push({ sql: `INSERT INTO unity_chat_placements(target_id, remote_id, remote_name, card_id, workspace_id, revision_id, remote_state, sent_at, seen_at, remote_fingerprint)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(target_id, remote_id) DO UPDATE SET remote_name = excluded.remote_name, card_id = excluded.card_id,
             revision_id = excluded.revision_id, remote_state = excluded.remote_state, seen_at = excluded.seen_at,
-            sent_at = COALESCE(excluded.sent_at, unity_chat_placements.sent_at)`,
+            sent_at = COALESCE(excluded.sent_at, unity_chat_placements.sent_at),
+            remote_fingerprint = COALESCE(excluded.remote_fingerprint, unity_chat_placements.remote_fingerprint)`,
         params: [targetId, validate.text(item.remoteId, 'remoteId', 500), item.remoteName.slice(0, 200) || item.remoteId, item.cardId, workspaceId,
-          item.revisionId, item.edited ? 'edited' : 'matched', item.sent ? now : null, now] });
+          item.revisionId, item.edited ? 'edited' : 'matched', item.sent ? now : null, now, item.fingerprint ?? null] });
       }
       if (options.complete) statements.push({ sql: 'UPDATE unity_chat_targets SET scanned_at = ?, scan_error = NULL WHERE id = ?', params: [now, targetId] });
       // A failed scan keeps the last successful scan time and every known copy.
@@ -128,7 +133,8 @@ export function createChatStore(driver: StoreDriver) {
       const rows = await driver.query<Omit<ChatPlacement, 'status'> & { remoteState: RemoteState; headRevisionId: string }>({
         sql: `SELECT p.target_id AS targetId, t.name AS targetName, t.kind, p.remote_id AS remoteId, p.remote_name AS remoteName,
             p.card_id AS cardId, p.revision_id AS revisionId, r.sequence AS revisionSequence, h.sequence AS headSequence,
-            c.head_revision_id AS headRevisionId, p.remote_state AS remoteState, p.sent_at AS sentAt, p.seen_at AS seenAt
+            c.head_revision_id AS headRevisionId, p.remote_state AS remoteState, p.sent_at AS sentAt, p.seen_at AS seenAt,
+            p.remote_fingerprint AS fingerprint
           FROM unity_chat_placements p JOIN unity_chat_targets t ON t.id = p.target_id
           JOIN unity_cards c ON c.id = p.card_id JOIN unity_revisions h ON h.id = c.head_revision_id
           LEFT JOIN unity_revisions r ON r.id = p.revision_id

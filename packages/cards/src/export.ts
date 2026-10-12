@@ -47,9 +47,11 @@ export async function exportRevision(store: UnityStore, assets: AssetService, re
     } finally { deadline.removeEventListener('abort', cancel); await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }
   let bytes: Uint8Array;
+  let transport: Record<string, unknown> | undefined;
   if (format === 'json' || format === 'sillytavern-json') {
     if (resources.size) throw new CardError('EXPORT_LOSS', 'JSON cannot carry this revision’s asset bytes. Choose a container format.');
-    bytes = fromString(canonicalJson(format === 'sillytavern-json' ? (await prepareSillyTavernTransport(document, options)).card : document));
+    if (format === 'sillytavern-json') transport = (await prepareSillyTavernTransport(document, options)).card as unknown as Record<string, unknown>;
+    bytes = fromString(canonicalJson(transport ?? document));
   } else if (format === 'png' || format === 'sillytavern-png') {
     const portrait = resources.get('portrait');
     if (!portrait || !isPNG(portrait)) throw new CardError('EXPORT_LOSS', 'PNG requires an existing PNG portrait. Adding or converting a portrait needs an explicit edit.');
@@ -61,7 +63,8 @@ export async function exportRevision(store: UnityStore, assets: AssetService, re
       // URI relocation is identity-neutral only when bound to the same verified bytes.
       descriptor.uri = format === 'sillytavern-png' ? 'ccdefault:' : `pngchunk:${index}`;
     }
-    const transported = format === 'sillytavern-png' ? (await prepareSillyTavernTransport(document, options)).card : document;
+    if (format === 'sillytavern-png') transport = (await prepareSillyTavernTransport(document, options)).card as unknown as Record<string, unknown>;
+    const transported = transport ?? document;
     bytes = embedIntoPNG(portrait, transported as unknown as CCv3Data, { key: document.spec === 'chara_card_v3' ? 'ccv3' : 'chara' });
     if (format === 'png') for (const [index] of declared.entries()) bytes = injectTextChunk(bytes, `chara-ext-asset_:${index}`, base64Encode(resources.get(`declared/${index}`)!));
   } else {
@@ -86,5 +89,7 @@ export async function exportRevision(store: UnityStore, assets: AssetService, re
     throw new CardError('EXPORT_LOSS', 'This format changes content or lineage. No export was produced.');
   }
   deadline.throwIfAborted();
-  return { bytes, mediaType: restored.mediaType, filename: `character.${format.startsWith('sillytavern-') ? format.slice(12) : format}`, revisionId: revision.id, hash: await hashBytes(bytes) };
+  return { bytes, mediaType: restored.mediaType, filename: `character.${format.startsWith('sillytavern-') ? format.slice(12) : format}`, revisionId: revision.id, hash: await hashBytes(bytes),
+    /** The card as embedded by a SillyTavern profile, for apps that take fields instead of files. */
+    ...(transport ? { transport } : {}) };
 }

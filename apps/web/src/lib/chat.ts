@@ -14,10 +14,10 @@ export interface ChatPlacement {
 }
 export interface ChatCredentials { username?: string; password?: string; apiKey?: string }
 
-export const chatKinds: { kind: ChatKind; label: string; short: string; defaultUrl: string; auth: 'basic' | 'token'; ready: boolean }[] = [
+export const chatKinds: { kind: ChatKind; label: string; short: string; defaultUrl: string; auth: 'basic' | 'login'; ready: boolean }[] = [
   { kind: 'sillytavern', label: 'SillyTavern', short: 'ST', defaultUrl: 'http://127.0.0.1:8000', auth: 'basic', ready: true },
-  { kind: 'lumiverse', label: 'Lumiverse', short: 'LV', defaultUrl: 'http://127.0.0.1:7860', auth: 'token', ready: false },
-  { kind: 'marinara', label: 'Marinara Engine', short: 'ME', defaultUrl: 'http://127.0.0.1:7860', auth: 'basic', ready: false },
+  { kind: 'lumiverse', label: 'Lumiverse', short: 'LV', defaultUrl: 'http://127.0.0.1:7861', auth: 'login', ready: true },
+  { kind: 'marinara', label: 'Marinara Engine', short: 'ME', defaultUrl: 'http://127.0.0.1:7860', auth: 'basic', ready: true },
 ];
 export const kindInfo = (kind: ChatKind) => chatKinds.find((item) => item.kind === kind)!;
 

@@ -24,3 +24,9 @@ export const chatSchema = [
   `CREATE INDEX unity_revisions_lineage_hash ON unity_revisions(workspace_id,
     json_extract(document_json, '$.data.extensions.foundry.lineage.revisionHash'))`,
 ];
+
+/**
+ * Migration 11: apps that rebuild cards on export (Lumiverse, Marinara) cannot be checked with the transport
+ * marker, so a send records a fingerprint of the copy as the app stores it; a later mismatch means it was edited there.
+ */
+export const chatFingerprintSchema = ['ALTER TABLE unity_chat_placements ADD COLUMN remote_fingerprint TEXT'];
