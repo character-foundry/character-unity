@@ -93,8 +93,8 @@ export function FilterBar({ search, update, replace, count, total }: {
   const applied = saved.find((item) => item.params === params);
 
   const advanced = search.exclude.length + search.has.length + (search.source ? 1 : 0) + (search.minTokens ? 1 : 0)
-    + (search.favorite === 'not_fav' ? 1 : 0) + (search.expr.trim() ? 1 : 0) + (search.tagMode === 'any' ? 1 : 0);
-  const hidden = [settings.hideNsfw ? 'NSFW' : '', settings.bannedTags.length ? `${settings.bannedTags.length} hidden tag${settings.bannedTags.length === 1 ? '' : 's'}` : ''].filter(Boolean);
+    + (search.favorite === 'not_fav' ? 1 : 0) + (search.expr.trim() ? 1 : 0);
+  const hidden = [settings.hideNsfw ? 'NSFW' : '', settings.bannedTags.length ? `${settings.bannedTags.length} tag${settings.bannedTags.length === 1 ? '' : 's'}` : ''].filter(Boolean);
 
   function save() {
     const name = window.prompt('Name this search', search.q.trim() || search.tags.join(', ') || 'My search')?.trim();
