@@ -5,6 +5,7 @@ import { SettingsProvider } from '@/lib/settings';
 import LibraryPage from '@/app/library';
 import CardDetailPage from '@/app/card/[slug]/page';
 import EditPage from '@/app/edit';
+import ChatAppsPage from '@/app/chat-apps';
 import '@character-unity/editor/styles.css';
 import './styles.css';
 
@@ -19,6 +20,7 @@ createRoot(root).render(
           <Route path="/explore" element={<LibraryPage />} />
           <Route path="/card/:id" element={<CardDetailPage />} />
           <Route path="/card/:id/edit" element={<EditPage />} />
+          <Route path="/chat-apps" element={<ChatAppsPage />} />
           <Route path="*" element={<LibraryPage />} />
         </Routes>
       </BrowserRouter>

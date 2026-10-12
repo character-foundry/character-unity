@@ -10,6 +10,10 @@ import { features } from '@/lib/features';
 import { cn } from '@/lib/utils/cn';
 import { formatCount, formatRelative } from '@/lib/utils/format';
 import { CoinIcon, ThumbsUpIcon, DownloadIcon, HeartIcon, MetadataBadge } from '@/components/ui';
+import { PlacementChips, SendMenu } from '@/components/chat/send-menu';
+import type { ChatPlacement } from '@/lib/chat';
+import { downloadExport } from '@/lib/unity';
+import { buildCardExportFilename } from '@/lib/utils';
 
 // Format badge component - matches the style of other top row badges
 function FormatBadge({ format, specVersion }: { format: SourceFormat; specVersion: string }) {
@@ -34,9 +38,10 @@ function isNewCard(createdAt: number): boolean {
 interface CardItemProps {
   card: CardListItem;
   onQuickView?: (card: CardListItem) => void;
+  placements?: ChatPlacement[] | undefined;
 }
 
-export function CardItem({ card, onQuickView }: CardItemProps) {
+export function CardItem({ card, onQuickView, placements }: CardItemProps) {
   const { settings } = useSettings();
   const { user } = useAuth();
   // Initialize from card data (API returns isFavorited for authenticated users)
@@ -84,6 +89,17 @@ export function CardItem({ card, onQuickView }: CardItemProps) {
     } finally {
       setIsTogglingFavorite(false);
     }
+  };
+
+  const [exporting, setExporting] = useState(false);
+  // Quick export: a PNG when the card has a portrait to carry it, otherwise JSON.
+  const handleQuickExport = async (e: React.MouseEvent) => {
+    e.stopPropagation(); e.preventDefault();
+    const format = card.imagePath ? 'png' : 'json';
+    setExporting(true);
+    try { await downloadExport(card.id, card.headRevisionId, format, buildCardExportFilename(card, format)); }
+    catch (error) { window.alert(error instanceof Error ? error.message : 'Export failed'); }
+    finally { setExporting(false); }
   };
 
   // Use Link wrapper for direct navigation, div for modal mode
@@ -142,6 +158,7 @@ export function CardItem({ card, onQuickView }: CardItemProps) {
           {card.isFork && (
             <div className="px-1.5 py-0.5 rounded bg-nebula/80 text-xs text-white font-medium" title="Your edited fork">FORK</div>
           )}
+          <PlacementChips placements={placements} />
           {card.forksCount > 0 && (
             <div className="px-1.5 py-0.5 rounded bg-black/60 text-xs text-starlight/80" title={`${card.forksCount} fork${card.forksCount === 1 ? '' : 's'}`}>⑂ {card.forksCount}</div>
           )}
@@ -155,6 +172,15 @@ export function CardItem({ card, onQuickView }: CardItemProps) {
               COLLECTION
             </Link>
           )}
+        </div>
+
+        {/* Quick actions - revealed on hover (always visible on touch screens) */}
+        <div className="absolute right-2 top-1/2 flex -translate-y-1/2 flex-col gap-1.5 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:focus-within:opacity-100">
+          <SendMenu cardId={card.id} placements={placements} variant="icon" />
+          <button onClick={handleQuickExport} disabled={exporting} title={card.imagePath ? 'Download PNG' : 'Download JSON'}
+            className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/70 text-white hover:bg-nebula disabled:opacity-60">
+            <DownloadIcon className={cn('h-4 w-4', exporting && 'animate-pulse')} />
+          </button>
         </div>
 
         {/* Bottom info overlay */}

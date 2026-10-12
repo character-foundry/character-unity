@@ -10,6 +10,7 @@ import { AppShell } from '@/components/layout';
 import type { CardDetail } from '@/types/card';
 import { buildCardExportFilename } from '@/lib/utils';
 import { features } from '@/lib/features';
+import { WhereItLives } from '@/components/chat/where-it-lives';
 import { cardFamily, downloadExport, forkCard, libraryId, type CardFamily, type ExportFormat } from '@/lib/unity';
 import {
   CardHero,
@@ -106,6 +107,7 @@ export function CardDetailClient({ card: displayCard, tokensReady }: CardDetailC
         forking={forking}
         parent={family?.value.parent ? { id: family.value.parent.id, name: family.value.parent.name } : null}
       />
+      <WhereItLives cardId={displayCard.id} />
       {downloadError && (
         <div className="mb-4 bg-red-500/20 border border-red-500/40 rounded-lg px-4 py-3 text-red-200/90" role="alert">{downloadError}</div>
       )}

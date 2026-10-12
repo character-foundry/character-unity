@@ -6,9 +6,10 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { access } from 'node:fs/promises';
 import { openLocalServices } from './services.js';
-import { createLocalApi } from './local.js';
+import { createLocalApi, localActor } from './local.js';
 import { createAccountApi } from '@character-unity/api/sessions';
 import { nodeConfig } from './node-config.js';
+import { startChatRefresh } from './chat-refresh.js';
 
 const { port, hostname, profile, publicOrigin, syncEnabled, syncWritesEnabled } = nodeConfig(process.env);
 const urlHost = hostname.includes(':') ? `[${hostname}]` : hostname;
@@ -29,6 +30,12 @@ if (process.env.UNITY_WEB_DIR) {
   app.get('/', serveStatic({ path: resolve(root, 'index.html') }));
   app.get('/assets/*', serveStatic({ root }));
 }
+// Local profile: rescan connected chat apps so "where it lives" stays current (UNITY_CHAT_SCAN_SECONDS=0 turns it off).
+const scanSeconds = Number(process.env.UNITY_CHAT_SCAN_SECONDS ?? 300);
+const stopChatRefresh = profile !== 'hub' && services.chat && scanSeconds > 0
+  ? startChatRefresh({ chat: services.chat, workspaces: (actor) => services.cards.workspaces(actor), actor: localActor,
+    intervalMs: scanSeconds * 1000, log: (event) => console.log(JSON.stringify(event)) })
+  : undefined;
 const server = serve({ fetch: app.fetch, hostname, port }, (address) => {
   origin = `http://${urlHost}:${address.port}`;
   console.log(JSON.stringify({ event: 'listening', service: 'unity-api', profile, host: hostname, port: address.port }));
@@ -38,6 +45,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     if (stopping) return;
     stopping = true;
+    stopChatRefresh?.();
     server.close((error) => {
       services.close();
       process.exitCode = error ? 1 : 0;

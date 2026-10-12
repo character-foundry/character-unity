@@ -2,9 +2,12 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { createApi } from '@character-unity/api';
 import type { openLocalServices } from './services.js';
 
+/** The single owner of a local install. */
+export const localActor = Object.freeze({ id: 'local', uri: 'urn:unity:user:local' });
+
 /** Local single-owner access. Hosted accounts must supply a different authenticator. */
 export function createLocalApi(services: Awaited<ReturnType<typeof openLocalServices>>, options: { origin: () => string }) {
-  const actor = Object.freeze({ id: 'local', uri: 'urn:unity:user:local' });
+  const actor = localActor;
   const secret = randomBytes(32).toString('base64url');
   const webOrigins = ['http://127.0.0.1:9310', 'http://127.0.0.1:9311', 'http://localhost:9310', 'http://localhost:9311',
     // Extra loopback dev origins, e.g. the unified web app: UNITY_WEB_ORIGINS=http://127.0.0.1:9430

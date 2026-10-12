@@ -10,6 +10,8 @@ import { cn } from '@/lib/utils/cn';
 import { formatDate, stripHtml } from '@/lib/utils/format';
 import { useSettings } from '@/lib/settings';
 import { features } from '@/lib/features';
+import { PlacementChips, SendMenu } from '@/components/chat/send-menu';
+import type { ChatPlacement } from '@/lib/chat';
 
 // Format badge component
 function FormatBadge({ format, specVersion, className }: { format: SourceFormat; specVersion: string; className?: string }) {
@@ -38,9 +40,10 @@ interface CardModalProps {
   card: CardListItem | null;
   isOpen: boolean;
   onClose: () => void;
+  placements?: ChatPlacement[] | undefined;
 }
 
-export function CardModal({ card, isOpen, onClose }: CardModalProps) {
+export function CardModal({ card, isOpen, onClose, placements }: CardModalProps) {
   const { user } = useAuth();
   const { settings } = useSettings();
   const [isFavorited, setIsFavorited] = useState(false);
@@ -306,6 +309,10 @@ export function CardModal({ card, isOpen, onClose }: CardModalProps) {
                   Edit
                 </Button>
               </Link>
+              <div className="flex items-center gap-2">
+                <SendMenu cardId={card.id} placements={placements} variant="wide" className="flex-1" />
+                <PlacementChips placements={placements} />
+              </div>
             </div>
           </div>
         </div>

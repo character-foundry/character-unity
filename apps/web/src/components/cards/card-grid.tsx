@@ -4,14 +4,17 @@ import { CardItem } from './card-item';
 import type { CardListItem } from '@/types/card';
 import { useSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils/cn';
+import type { ChatPlacement } from '@/lib/chat';
 
 interface CardGridProps {
   cards: CardListItem[];
   isLoading?: boolean;
   onQuickView?: (card: CardListItem) => void;
+  /** Chat app copies by card ID, for presence chips and quick send. */
+  placements?: Map<string, ChatPlacement[]>;
 }
 
-export function CardGrid({ cards = [], isLoading, onQuickView }: CardGridProps) {
+export function CardGrid({ cards = [], isLoading, onQuickView, placements }: CardGridProps) {
   const { settings } = useSettings();
 
   // Fewer columns for larger cards
@@ -44,7 +47,7 @@ export function CardGrid({ cards = [], isLoading, onQuickView }: CardGridProps) 
   return (
     <div className={cn('grid gap-4', gridClasses)}>
       {cards.map((card) => (
-        <CardItem key={card.id} card={card} onQuickView={onQuickView} />
+        <CardItem key={card.id} card={card} onQuickView={onQuickView} placements={placements?.get(card.id)} />
       ))}
     </div>
   );

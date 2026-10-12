@@ -8,6 +8,7 @@ import { importFile, libraryId, listCards } from '@/lib/unity';
 import { toListItem } from '@/lib/adapt';
 import type { CardListItem } from '@/types/card';
 import { CARDS_PER_PAGE } from '@/lib/constants';
+import { usePlacements } from '@/lib/chat';
 
 export default function LibraryPage() {
   const [params, setParams] = useSearchParams();
@@ -23,6 +24,7 @@ export default function LibraryPage() {
   const [selectedCard, setSelectedCard] = useState<CardListItem | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const totalPages = Math.ceil(total / CARDS_PER_PAGE);
+  const placements = usePlacements(cards.map((card) => card.id));
 
   const load = useCallback(async () => {
     setIsLoading(true); setError(null);
@@ -99,13 +101,13 @@ export default function LibraryPage() {
           </div>
         )}
 
-        <CardGrid cards={cards} isLoading={isLoading} onQuickView={setSelectedCard} />
+        <CardGrid cards={cards} isLoading={isLoading} onQuickView={setSelectedCard} placements={placements} />
 
         {!isLoading && totalPages > 1 && (
           <Pagination currentPage={page} totalPages={totalPages} onPageChange={(next) => update({ page: String(next) })} className="mt-8" />
         )}
 
-        <CardModal card={selectedCard} isOpen={!!selectedCard} onClose={() => setSelectedCard(null)} />
+        <CardModal card={selectedCard} isOpen={!!selectedCard} onClose={() => setSelectedCard(null)} placements={selectedCard ? placements.get(selectedCard.id) : undefined} />
       </div>
     </AppShell>
   );

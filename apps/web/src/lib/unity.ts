@@ -13,7 +13,7 @@ export class UnityError extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string) { super(message); }
 }
 
-async function call<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+export async function call<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   // The local API issues a new session secret when it restarts; reconnect once and retry.
   if (response.status === 401 && !retried && path !== '/api/local-session') {
@@ -24,6 +24,7 @@ async function call<T>(path: string, init: RequestInit = {}, retried = false): P
     const body = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
     throw new UnityError(response.status, body?.error?.code ?? 'UNAVAILABLE', body?.error?.message ?? `Request failed (${response.status})`);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }
 

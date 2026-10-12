@@ -10,6 +10,7 @@ import { useSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils/cn';
 import { features } from '@/lib/features';
 import type { ExportFormat } from '@/lib/unity';
+import { SendMenu } from '@/components/chat/send-menu';
 
 // Format badge component
 function FormatBadge({ format, specVersion, className }: { format: SourceFormat; specVersion: string; className?: string }) {
@@ -391,6 +392,7 @@ export function CardHero({ card, permanentTokens, tokensReady, onDownload, onFor
                 </svg>
                 {forking ? 'Forking…' : 'Fork'}
               </Button>
+              <SendMenu cardId={card.id} />
               <Button variant="secondary" size="sm" onClick={() => onDownload('png')}>
                 <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
