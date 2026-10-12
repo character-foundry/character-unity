@@ -3,7 +3,9 @@ import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 export default [
-  { ignores: ['**/dist/**', '**/runtime/**', '**/.wrangler/**', '**/worker-configuration.d.ts', '**/node_modules/**'] },
+  { ignores: ['**/dist/**', '**/runtime/**', '**/.wrangler/**', '**/worker-configuration.d.ts', '**/node_modules/**',
+    // Verbatim port of character-architect/apps/web (see packages/architect); linted upstream, refactored later.
+    'packages/architect/src/**', 'packages/architect-*/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   { languageOptions: { globals: { ...globals.node, ...globals.browser } } },

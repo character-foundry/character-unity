@@ -13,13 +13,26 @@ export class UnityError extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string) { super(message); }
 }
 
-async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function call<T>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
+  // The local API issues a new session secret when it restarts; reconnect once and retry.
+  if (response.status === 401 && !retried && path !== '/api/local-session') {
+    await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' } });
+    return call<T>(path, init, true);
+  }
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { code?: string; message?: string } } | null;
     throw new UnityError(response.status, body?.error?.code ?? 'UNAVAILABLE', body?.error?.message ?? `Request failed (${response.status})`);
   }
   return response.json() as Promise<T>;
+}
+
+/** Raw fetch (for binary responses) that reconnects the local session once on 401. */
+export async function fetchWithSession(path: string, init: RequestInit = {}) {
+  const response = await fetch(path, { credentials: 'same-origin', ...init });
+  if (response.status !== 401) return response;
+  await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' } });
+  return fetch(path, { credentials: 'same-origin', ...init });
 }
 
 let library: Promise<string> | null = null;
@@ -62,7 +75,7 @@ export function portraitUrl(workspace: string, cardId: string, revisionId: strin
 }
 
 export async function downloadExport(cardId: string, revisionId: string, format: ExportFormat, filename: string) {
-  const response = await fetch(`/api/workspaces/${await libraryId()}/cards/${cardId}/export?${new URLSearchParams({ format, revisionId })}`);
+  const response = await fetchWithSession(`/api/workspaces/${await libraryId()}/cards/${cardId}/export?${new URLSearchParams({ format, revisionId })}`);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
     throw new Error(body?.error?.message ?? `Export failed (${response.status})`);
@@ -96,7 +109,7 @@ export const editorApi = {
     return call(`${await cardPath(card)}/assets?revisionId=${encodeURIComponent(revisionId)}`, signalInit(signal));
   },
   async asset(card: string, revisionId: string, path: string, signal?: AbortSignal) {
-    const response = await fetch(`${await cardPath(card)}/asset?${new URLSearchParams({ revisionId, path })}`, { credentials: 'same-origin', ...signalInit(signal) });
+    const response = await fetchWithSession(`${await cardPath(card)}/asset?${new URLSearchParams({ revisionId, path })}`, signalInit(signal));
     if (!response.ok) throw new UnityError(response.status, 'ASSET', 'Asset download failed');
     return response.blob();
   },

@@ -1,0 +1,390 @@
+import { openDB, type IDBPDatabase } from 'idb';
+import type { Card } from './types';
+
+const DB_NAME = 'card-architect';
+const DB_VERSION = 5;
+const DRAFTS_STORE = 'drafts';
+const CARDS_STORE = 'cards';
+const IMAGES_STORE = 'images';
+const VERSIONS_STORE = 'versions';
+const ASSETS_STORE = 'assets';
+
+// 50MB max file size for client-side assets
+export const MAX_ASSET_SIZE = 50 * 1024 * 1024;
+
+interface DraftCard {
+  id: string;
+  card: Card;
+  lastSaved: string;
+}
+
+interface StoredImage {
+  cardId: string;
+  type: 'thumbnail' | 'icon' | 'background' | 'asset';
+  data: string; // base64 or data URL
+}
+
+export interface StoredVersion {
+  id: string;
+  cardId: string;
+  versionNumber: number;
+  message?: string;
+  data: Card['data'];
+  createdAt: string;
+}
+
+export interface StoredAsset {
+  id: string;
+  cardId: string;
+  name: string;
+  type: 'icon' | 'background' | 'emotion' | 'sound' | 'workflow' | 'lorebook' | 'custom' | 'package-original';
+  ext: string;
+  mimetype: string;
+  size: number;
+  width?: number;
+  height?: number;
+  data: string; // base64 data URL
+  isMain: boolean;
+  tags: string[];
+  actorIndex?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RestoreData {
+  cards: Card[];
+  images: Array<{ cardId: string; type: string; data: string }>;
+  versions: StoredVersion[];
+  assets: StoredAsset[];
+}
+
+export interface RestoreCounts {
+  imported: { cards: number; images: number; versions: number; assets: number };
+  skipped: number;
+}
+
+export class LocalDB {
+  private db: IDBPDatabase | null = null;
+
+  async init() {
+    this.db = await openDB(DB_NAME, DB_VERSION, {
+      upgrade(db, oldVersion) {
+        // Version 1: drafts store
+        if (!db.objectStoreNames.contains(DRAFTS_STORE)) {
+          db.createObjectStore(DRAFTS_STORE, { keyPath: 'id' });
+        }
+        // Version 2: cards store for client-side persistence
+        if (oldVersion < 2 && !db.objectStoreNames.contains(CARDS_STORE)) {
+          const store = db.createObjectStore(CARDS_STORE, { keyPath: 'meta.id' });
+          store.createIndex('name', 'meta.name');
+          store.createIndex('updatedAt', 'meta.updatedAt');
+        }
+        // Version 3: images store for card thumbnails/assets
+        if (oldVersion < 3 && !db.objectStoreNames.contains(IMAGES_STORE)) {
+          const store = db.createObjectStore(IMAGES_STORE, { keyPath: ['cardId', 'type'] });
+          store.createIndex('cardId', 'cardId');
+        }
+        // Version 4: versions store for client-side snapshots
+        if (oldVersion < 4 && !db.objectStoreNames.contains(VERSIONS_STORE)) {
+          const store = db.createObjectStore(VERSIONS_STORE, { keyPath: 'id' });
+          store.createIndex('cardId', 'cardId');
+          store.createIndex('cardId_versionNumber', ['cardId', 'versionNumber']);
+        }
+        // Version 5: assets store for client-side asset management
+        if (oldVersion < 5 && !db.objectStoreNames.contains(ASSETS_STORE)) {
+          const store = db.createObjectStore(ASSETS_STORE, { keyPath: 'id' });
+          store.createIndex('cardId', 'cardId');
+          store.createIndex('cardId_type', ['cardId', 'type']);
+        }
+      },
+    });
+  }
+
+  // Cards store (for client-side mode)
+  async saveCard(card: Card) {
+    if (!this.db) await this.init();
+    await this.db!.put(CARDS_STORE, card);
+  }
+
+  async getCard(id: string): Promise<Card | null> {
+    if (!this.db) await this.init();
+    return (await this.db!.get(CARDS_STORE, id)) || null;
+  }
+
+  async deleteCard(id: string) {
+    if (!this.db) await this.init();
+    await this.db!.delete(CARDS_STORE, id);
+  }
+
+  async listCards(): Promise<Card[]> {
+    if (!this.db) await this.init();
+    return this.db!.getAll(CARDS_STORE);
+  }
+
+  async saveDraft(id: string, card: Card) {
+    if (!this.db) await this.init();
+
+    const draft: DraftCard = {
+      id,
+      card,
+      lastSaved: new Date().toISOString(),
+    };
+
+    await this.db!.put(DRAFTS_STORE, draft);
+  }
+
+  async getDraft(id: string): Promise<DraftCard | null> {
+    if (!this.db) await this.init();
+    return (await this.db!.get(DRAFTS_STORE, id)) || null;
+  }
+
+  async deleteDraft(id: string) {
+    if (!this.db) await this.init();
+    await this.db!.delete(DRAFTS_STORE, id);
+  }
+
+  async listDrafts(): Promise<DraftCard[]> {
+    if (!this.db) await this.init();
+    return this.db!.getAll(DRAFTS_STORE);
+  }
+
+  // Images store (for card thumbnails in client-side mode)
+  async saveImage(cardId: string, type: StoredImage['type'], data: string) {
+    if (!this.db) await this.init();
+    const image: StoredImage = { cardId, type, data };
+    await this.db!.put(IMAGES_STORE, image);
+  }
+
+  async getImage(cardId: string, type: StoredImage['type']): Promise<string | null> {
+    if (!this.db) await this.init();
+    const image = await this.db!.get(IMAGES_STORE, [cardId, type]);
+    return image?.data || null;
+  }
+
+  async deleteCardImages(cardId: string) {
+    if (!this.db) await this.init();
+    const tx = this.db!.transaction(IMAGES_STORE, 'readwrite');
+    const index = tx.store.index('cardId');
+    const keys = await index.getAllKeys(cardId);
+    for (const key of keys) {
+      await tx.store.delete(key);
+    }
+    await tx.done;
+  }
+
+  // Versions store (for client-side snapshots)
+  async saveVersion(version: StoredVersion) {
+    if (!this.db) await this.init();
+    await this.db!.put(VERSIONS_STORE, version);
+  }
+
+  async getVersion(id: string): Promise<StoredVersion | null> {
+    if (!this.db) await this.init();
+    return (await this.db!.get(VERSIONS_STORE, id)) || null;
+  }
+
+  async getVersionsByCard(cardId: string): Promise<StoredVersion[]> {
+    if (!this.db) await this.init();
+    const tx = this.db!.transaction(VERSIONS_STORE, 'readonly');
+    const index = tx.store.index('cardId');
+    const versions = await index.getAll(cardId);
+    await tx.done;
+    // Sort by version number descending (newest first)
+    return versions.sort((a, b) => b.versionNumber - a.versionNumber);
+  }
+
+  async getNextVersionNumber(cardId: string): Promise<number> {
+    const versions = await this.getVersionsByCard(cardId);
+    if (versions.length === 0) return 1;
+    return Math.max(...versions.map(v => v.versionNumber)) + 1;
+  }
+
+  async deleteVersion(id: string) {
+    if (!this.db) await this.init();
+    await this.db!.delete(VERSIONS_STORE, id);
+  }
+
+  async deleteCardVersions(cardId: string) {
+    if (!this.db) await this.init();
+    const tx = this.db!.transaction(VERSIONS_STORE, 'readwrite');
+    const index = tx.store.index('cardId');
+    const keys = await index.getAllKeys(cardId);
+    for (const key of keys) {
+      await tx.store.delete(key);
+    }
+    await tx.done;
+  }
+
+  // Assets store (for client-side asset management)
+  async saveAsset(asset: StoredAsset) {
+    if (!this.db) await this.init();
+    await this.db!.put(ASSETS_STORE, asset);
+  }
+
+  async getAsset(id: string): Promise<StoredAsset | null> {
+    if (!this.db) await this.init();
+    return (await this.db!.get(ASSETS_STORE, id)) || null;
+  }
+
+  async getAssetsByCard(cardId: string): Promise<StoredAsset[]> {
+    if (!this.db) await this.init();
+    const tx = this.db!.transaction(ASSETS_STORE, 'readonly');
+    const index = tx.store.index('cardId');
+    const assets = await index.getAll(cardId);
+    await tx.done;
+    return assets;
+  }
+
+  async getAssetsByCardAndType(cardId: string, type: StoredAsset['type']): Promise<StoredAsset[]> {
+    if (!this.db) await this.init();
+    const tx = this.db!.transaction(ASSETS_STORE, 'readonly');
+    const index = tx.store.index('cardId_type');
+    const assets = await index.getAll([cardId, type]);
+    await tx.done;
+    return assets;
+  }
+
+  async updateAsset(id: string, updates: Partial<Omit<StoredAsset, 'id' | 'cardId' | 'data'>>) {
+    if (!this.db) await this.init();
+    const asset = await this.getAsset(id);
+    if (!asset) throw new Error('Asset not found');
+    const updated = { ...asset, ...updates, updatedAt: new Date().toISOString() };
+    await this.db!.put(ASSETS_STORE, updated);
+    return updated;
+  }
+
+  async deleteAsset(id: string) {
+    if (!this.db) await this.init();
+    await this.db!.delete(ASSETS_STORE, id);
+  }
+
+  async deleteCardAssets(cardId: string) {
+    if (!this.db) await this.init();
+    const tx = this.db!.transaction(ASSETS_STORE, 'readwrite');
+    const index = tx.store.index('cardId');
+    const keys = await index.getAllKeys(cardId);
+    for (const key of keys) {
+      await tx.store.delete(key);
+    }
+    await tx.done;
+  }
+
+  async setAssetAsMain(cardId: string, assetId: string, type: StoredAsset['type']) {
+    if (!this.db) await this.init();
+    // Unset all other assets of this type as main
+    const assets = await this.getAssetsByCardAndType(cardId, type);
+    const tx = this.db!.transaction(ASSETS_STORE, 'readwrite');
+    for (const asset of assets) {
+      if (asset.id === assetId) {
+        asset.isMain = true;
+      } else {
+        asset.isMain = false;
+      }
+      asset.updatedAt = new Date().toISOString();
+      await tx.store.put(asset);
+    }
+    await tx.done;
+  }
+
+  // Backup/restore methods
+  async exportAll(): Promise<{
+    cards: Card[];
+    images: Array<{ cardId: string; type: string; data: string }>;
+    versions: StoredVersion[];
+    assets: StoredAsset[];
+  }> {
+    if (!this.db) await this.init();
+    return {
+      cards: await this.db!.getAll(CARDS_STORE),
+      images: await this.db!.getAll(IMAGES_STORE),
+      versions: await this.db!.getAll(VERSIONS_STORE),
+      assets: await this.db!.getAll(ASSETS_STORE),
+    };
+  }
+
+  // Clear all stores (for replace mode)
+  async clearAll(): Promise<void> {
+    if (!this.db) await this.init();
+    const tx = this.db!.transaction([CARDS_STORE, IMAGES_STORE, VERSIONS_STORE, ASSETS_STORE, DRAFTS_STORE], 'readwrite');
+    await Promise.all([
+      tx.objectStore(CARDS_STORE).clear(),
+      tx.objectStore(IMAGES_STORE).clear(),
+      tx.objectStore(VERSIONS_STORE).clear(),
+      tx.objectStore(ASSETS_STORE).clear(),
+      tx.objectStore(DRAFTS_STORE).clear(),
+    ]);
+    await tx.done;
+  }
+
+  /**
+   * Restore every IndexedDB-backed entity in one transaction. In replace mode
+   * the clears and all writes commit together, so a rejected write leaves the
+   * previous database untouched.
+   */
+  async restoreAll(
+    data: RestoreData,
+    mode: 'replace' | 'merge',
+    skipConflicts = true,
+  ): Promise<RestoreCounts> {
+    if (!this.db) await this.init();
+    const storeNames = [CARDS_STORE, IMAGES_STORE, VERSIONS_STORE, ASSETS_STORE, DRAFTS_STORE];
+
+    if (mode === 'merge' && !skipConflicts) {
+      const conflictChecks: Array<Promise<unknown>> = [
+        ...data.cards.map((card) => this.db!.get(CARDS_STORE, card.meta.id)),
+        ...data.images.map((image) => this.db!.get(IMAGES_STORE, [image.cardId, image.type])),
+        ...data.versions.map((version) => this.db!.get(VERSIONS_STORE, version.id)),
+        ...data.assets.map((asset) => this.db!.get(ASSETS_STORE, asset.id)),
+      ];
+      const existing = await Promise.all(conflictChecks);
+      if (existing.some(Boolean)) {
+        throw new Error('Merge conflict: the backup overlaps existing browser data');
+      }
+    }
+
+    const tx = this.db!.transaction(storeNames, 'readwrite');
+    const imported = { cards: 0, images: 0, versions: 0, assets: 0 };
+    let skipped = 0;
+
+    if (mode === 'replace') {
+      await Promise.all(storeNames.map((storeName) => tx.objectStore(storeName).clear()));
+    }
+
+    const putIfAllowed = async (
+      storeName: string,
+      key: IDBValidKey,
+      value: Card | StoredImage | StoredVersion | StoredAsset,
+      counter: keyof typeof imported,
+    ) => {
+      if (mode === 'merge' && await tx.objectStore(storeName).get(key)) {
+        skipped++;
+        return;
+      }
+      await tx.objectStore(storeName).put(value);
+      imported[counter]++;
+    };
+
+    for (const card of data.cards) {
+      await putIfAllowed(CARDS_STORE, card.meta.id, card, 'cards');
+    }
+    for (const image of data.images) {
+      await putIfAllowed(IMAGES_STORE, [image.cardId, image.type], image as StoredImage, 'images');
+    }
+    for (const version of data.versions) {
+      await putIfAllowed(VERSIONS_STORE, version.id, version, 'versions');
+    }
+    for (const asset of data.assets) {
+      await putIfAllowed(ASSETS_STORE, asset.id, asset, 'assets');
+    }
+
+    await tx.done;
+    return { imported, skipped };
+  }
+
+  // Import data to IndexedDB stores
+  async importAll(data: RestoreData): Promise<void> {
+    await this.restoreAll(data, 'merge');
+  }
+}
+
+export const localDB = new LocalDB();

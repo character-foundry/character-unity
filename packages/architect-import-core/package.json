@@ -1,0 +1,11 @@
+{
+  "name": "@card-architect/import-core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "dependencies": {
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
+    "nanoid": "6.0.1"
+  }
+}
