@@ -42,7 +42,7 @@ export function TagPicker({ label, tone, value, onChange, options, blocked = [],
   return (
     <div className={cn('relative', className)}>
       <div className="mb-1 text-xs font-medium text-starlight/60">{label}</div>
-      <div className="flex min-h-[42px] flex-wrap items-center gap-1.5 rounded-lg border border-nebula/30 bg-deep-space/60 px-2 py-1.5 focus-within:border-nebula"
+      <div className="flex min-h-[34px] flex-wrap items-center gap-1.5 rounded-md border border-nebula/30 bg-deep-space/60 px-2 py-1 focus-within:border-nebula"
         onClick={() => input.current?.focus()}>
         {value.map((tag) => (
           <span key={tag} className={cn('inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs', tones[tone])}>

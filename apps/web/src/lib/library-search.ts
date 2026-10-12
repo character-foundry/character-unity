@@ -8,6 +8,8 @@ import type { CardListItem } from '@/types/card';
 /** Library search state as it lives in the URL. Defaults are left out so links stay short. */
 export interface LibrarySearch {
   q: string;
+  /** Advanced filter expressions (search page); combined with `q` as `(q) (expr)`. */
+  expr: string;
   tags: string[];
   tagMode: 'all' | 'any';
   exclude: string[];
@@ -15,7 +17,7 @@ export interface LibrarySearch {
   fork: '' | 'only' | 'none';
   sort: string;
 }
-export const emptySearch: LibrarySearch = { q: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', sort: 'edited' };
+export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', sort: 'edited' };
 
 export const sortOptions = [
   { value: 'edited', label: 'Recently edited' },
@@ -41,6 +43,7 @@ export function readSearch(params: URLSearchParams): LibrarySearch {
   return {
     // `search` and `tags` are the Hub names that card links already use.
     q: params.get('search') ?? params.get('q') ?? '',
+    expr: params.get('expr') ?? '',
     tags: list(params.get('tags') ?? params.get('tag')),
     tagMode: params.get('match') === 'any' ? 'any' : 'all',
     exclude: list(params.get('exclude')),
@@ -52,6 +55,7 @@ export function readSearch(params: URLSearchParams): LibrarySearch {
 export function writeSearch(search: LibrarySearch): URLSearchParams {
   const params = new URLSearchParams();
   if (search.q.trim()) params.set('search', search.q.trim());
+  if (search.expr.trim()) params.set('expr', search.expr.trim());
   if (search.tags.length) params.set('tags', search.tags.join(','));
   if (search.tagMode === 'any') params.set('match', 'any');
   if (search.exclude.length) params.set('exclude', search.exclude.join(','));
@@ -77,7 +81,7 @@ export function useSearchState() {
   return { search: readSearch(params), update, replace };
 }
 export function isFiltered(search: LibrarySearch) {
-  return !!(search.q.trim() || search.tags.length || search.exclude.length || search.has.length || search.fork);
+  return !!(search.q.trim() || search.expr.trim() || search.tags.length || search.exclude.length || search.has.length || search.fork);
 }
 export const sameTag = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
@@ -112,7 +116,8 @@ const views = new Map<string, View>();
 
 export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
   const exclude = [...new Set([...search.exclude, ...hidden.tags, ...(hidden.hideNsfw ? ['nsfw'] : [])].map((tag) => tag.toLowerCase()))];
-  const query: LibraryQuery = { q: search.q.trim(), tags: search.tags, tagMode: search.tagMode, exclude, has: search.has,
+  const text = [search.q.trim(), search.expr.trim()].filter(Boolean);
+  const query: LibraryQuery = { q: text.length > 1 ? text.map((part) => `(${part})`).join(' ') : text[0] ?? '', tags: search.tags, tagMode: search.tagMode, exclude, has: search.has,
     ...(search.fork ? { fork: search.fork } : {}), sort: search.sort };
   const key = JSON.stringify(query);
   const version = useLibraryVersion();

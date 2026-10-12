@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { AppShell } from '@/components/layout';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
 import { formatRelative } from '@/lib/utils/format';
@@ -134,26 +133,20 @@ function TargetRow({ target }: { target: ChatTarget }) {
   );
 }
 
-export default function ChatAppsPage() {
+/** Chat app connections, shown as a section of Settings. */
+export function ChatAppsSettings() {
   const { targets, available } = useChatTargets();
   const [adding, setAdding] = useState(false);
+  if (!available) return <p className="text-sm text-starlight/60">Chat apps are only available in the self-hosted app.</p>;
   return (
-    <AppShell>
-      <div className="mx-auto max-w-3xl space-y-4">
-        <div className="flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="mb-1 text-3xl font-bold gradient-text">Chat apps</h1>
-            <p className="text-sm text-starlight/60">Send cards to your chat apps and see which copy lives where. Copies are checked every few minutes.</p>
-          </div>
-          {available && !adding && <Button onClick={() => setAdding(true)}>Connect an app</Button>}
-        </div>
-        {!available && <p className="glass rounded-xl p-4 text-starlight/70">Chat apps are only available in the self-hosted app.</p>}
-        {adding && <AddForm onDone={() => setAdding(false)} />}
-        {targets && targets.length === 0 && !adding && available && (
-          <p className="glass rounded-xl p-6 text-center text-starlight/60">No chat apps connected yet.</p>
-        )}
-        <ul className="space-y-3">{targets?.map((target) => <TargetRow key={target.id} target={target} />)}</ul>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-starlight/60">Send cards to your chat apps and see which copy lives where. Copies are checked every few minutes.</p>
+        {!adding && <Button size="sm" onClick={() => setAdding(true)}>Connect an app</Button>}
       </div>
-    </AppShell>
+      {adding && <AddForm onDone={() => setAdding(false)} />}
+      {targets && targets.length === 0 && !adding && <p className="rounded-lg border border-dashed border-nebula/30 p-4 text-center text-sm text-starlight/50">No chat apps connected yet.</p>}
+      <ul className="space-y-3">{targets?.map((target) => <TargetRow key={target.id} target={target} />)}</ul>
+    </div>
   );
 }

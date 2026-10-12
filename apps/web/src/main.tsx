@@ -1,11 +1,11 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, Route, Routes } from 'react-router';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router';
 import { SettingsProvider } from '@/lib/settings';
 import LibraryPage from '@/app/library';
 import CardDetailPage from '@/app/card/[slug]/page';
 import EditPage from '@/app/edit';
-import ChatAppsPage from '@/app/chat-apps';
+import SettingsPage from '@/app/settings';
 import SearchPage from '@/app/search';
 import '@character-unity/editor/styles.css';
 import './styles.css';
@@ -22,7 +22,8 @@ createRoot(root).render(
           <Route path="/card/:id" element={<CardDetailPage />} />
           <Route path="/card/:id/edit" element={<EditPage />} />
           <Route path="/search" element={<SearchPage />} />
-          <Route path="/chat-apps" element={<ChatAppsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/chat-apps" element={<Navigate to="/settings#chat-apps" replace />} />
           <Route path="*" element={<LibraryPage />} />
         </Routes>
       </BrowserRouter>

@@ -73,7 +73,7 @@ export function SendMenu({ cardId, placements = [], variant = 'button', classNam
       {open && (
         <div className={cn('absolute z-50 mt-1 w-64 rounded-lg border border-nebula/30 py-1 text-sm shadow-xl glass', variant === 'icon' ? 'right-0' : 'left-0')}>
           {targets.length === 0 && (
-            <Link href="/chat-apps" className="block px-3 py-2 text-starlight/70 hover:bg-cosmic-teal/30">Connect SillyTavern or another chat app…</Link>
+            <Link href="/settings#chat-apps" className="block px-3 py-2 text-starlight/70 hover:bg-cosmic-teal/30">Connect SillyTavern or another chat app…</Link>
           )}
           {targets.map((target) => {
             const copy = placements.find((row) => row.targetId === target.id && row.status !== 'missing');
