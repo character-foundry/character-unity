@@ -12,7 +12,10 @@
     "type-check": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
     "@character-unity/archive-client": "workspace:*",
+    "@character-unity/scraper-kit": "workspace:*",
+    "@character-unity/store": "workspace:*",
     "@hono/node-server": "2.1.4",
     "@lancedb/lancedb": "0.37.1",
     "apache-arrow": "18.1.0",

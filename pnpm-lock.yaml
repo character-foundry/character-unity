@@ -146,9 +146,18 @@ importers:
 
   apps/archive:
     dependencies:
+      '@character-foundry/character-foundry':
+        specifier: link:../../../.unity-foundry-sdk/packages/character-foundry
+        version: link:../../../.unity-foundry-sdk/packages/character-foundry
       '@character-unity/archive-client':
         specifier: workspace:*
         version: link:../../packages/archive-client
+      '@character-unity/scraper-kit':
+        specifier: workspace:*
+        version: link:../../packages/scraper-kit
+      '@character-unity/store':
+        specifier: workspace:*
+        version: link:../../packages/store
       '@hono/node-server':
         specifier: 2.1.4
         version: 2.1.4(hono@4.13.13)
@@ -531,6 +540,8 @@ importers:
       react:
         specifier: 19.3.0
         version: 19.3.0
+
+  packages/scraper-kit: {}
 
   packages/store:
     dependencies:
