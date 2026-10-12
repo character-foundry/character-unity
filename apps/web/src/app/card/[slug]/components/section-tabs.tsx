@@ -2,7 +2,7 @@
 
 import { cn } from '@/lib/utils/cn';
 
-export type Section = 'notes' | 'character' | 'greetings' | 'lorebook' | 'assets' | 'comments';
+export type Section = 'notes' | 'character' | 'greetings' | 'lorebook' | 'assets' | 'forks' | 'comments';
 
 interface SectionConfig {
   id: Section;

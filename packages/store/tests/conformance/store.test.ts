@@ -209,8 +209,9 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
       await store.forkCard({ ...input, workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: b.revision.id });
       const all = await store.listCardSummaries(workspaceId);
       expect(all.total).toBe(4);
-      expect(all.items[1]!.card.id).toBe(a.card.id);
-      expect(all.items[1]!.revision.sequence).toBe(2);
+      const touched = all.items.map((item) => item.revision.createdAt);
+      expect(touched).toEqual([...touched].sort().reverse());
+      expect(all.items.find((item) => item.card.id === a.card.id)!.revision.sequence).toBe(2);
       expect(all.items.find((item) => item.card.id === b.card.id)!.forkCount).toBe(1);
       const tagged = await store.listCardSummaries(workspaceId, { tag: 'FANTASY' });
       expect(tagged.total).toBe(2);

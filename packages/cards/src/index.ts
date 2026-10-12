@@ -42,6 +42,31 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       const page = await store.listCardSummaries(workspaceId, query);
       return { cards: page.items.map(summarizeCard), total: page.total };
     },
+    /** Copies a library card's current revision into a new card in the same workspace. */
+    async fork(actor: Actor, workspaceId: string, cardId: string) {
+      actor = { ...actor };
+      const current = await open(actor, workspaceId, cardId);
+      if (!current.card.originalHash) throw new CardError('INVALID_LINEAGE', 'Card has no accepted original root');
+      const options = await revisionIdentityOptions(store, current.revision);
+      const previous = readCardLineage(current.revision.document);
+      if (previous && !await verifyCardLineage(current.revision.document, options)) throw new CardError('INVALID_LINEAGE', 'Stored lineage failed verification');
+      const forked = await createCardRevision(current.revision.document, { ...options, originalHash: current.card.originalHash,
+        parents: previous ? [previous] : [], operation: 'fork', author: actor.uri, createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
+      // Same workspace: the fork references the parent's stored assets; no bytes are copied or changed.
+      return store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: current.revision.id, authorId: actor.id,
+        document: forked.card, identity: forked.lineage.content, assets: current.revision.assets });
+    },
+    /** The card this one was forked from (if any) and the cards forked from it. */
+    async family(actor: Actor, workspaceId: string, cardId: string) {
+      const current = await open(actor, workspaceId, cardId);
+      const parentCardId = current.card.forkedFromRevisionId
+        ? (await store.getRevision(workspaceId, current.card.forkedFromRevisionId).catch(() => null))?.cardId ?? null : null;
+      const [parent, forks] = await Promise.all([
+        parentCardId ? store.listCardSummaries(workspaceId, { ids: [parentCardId] }) : null,
+        store.listCardSummaries(workspaceId, { forkOf: cardId, limit: 100 }),
+      ]);
+      return { parent: parent?.items[0] ? summarizeCard(parent.items[0]) : null, forks: forks.items.map(summarizeCard), forkTotal: forks.total };
+    },
     open,
     async history(actor: Actor, workspaceId: string, cardId: string, options: HistoryOptions = {}): Promise<HistoryPage> {
       actor = { ...actor }; options = { ...options };

@@ -111,6 +111,14 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
     const { cards, actor } = await required(c);
     return c.json(await cards.open(actor, c.req.param('workspaceId'), c.req.param('cardId')));
   });
+  routes.post('/:workspaceId/cards/:cardId/forks', async (c) => {
+    const { cards, actor } = await required(c);
+    return c.json(await cards.fork(actor, c.req.param('workspaceId'), c.req.param('cardId')), 201);
+  });
+  routes.get('/:workspaceId/cards/:cardId/family', async (c) => {
+    const { cards, actor } = await required(c);
+    return c.json(await cards.family(actor, c.req.param('workspaceId'), c.req.param('cardId')));
+  });
   routes.post('/:workspaceId/cards/:cardId/revisions', async (c) => {
     const { cards, actor } = await required(c);
     const input = await json(c, 262_144);

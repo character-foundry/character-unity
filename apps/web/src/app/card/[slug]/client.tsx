@@ -1,11 +1,16 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useEffect, useState, useMemo } from 'react';
+import { useNavigate } from 'react-router';
+import { CardGrid } from '@/components/cards/card-grid';
+import { CardModal } from '@/components/cards/card-modal';
+import { toListItem } from '@/lib/adapt';
+import type { CardListItem } from '@/types/card';
 import { AppShell } from '@/components/layout';
 import type { CardDetail } from '@/types/card';
 import { buildCardExportFilename } from '@/lib/utils';
 import { features } from '@/lib/features';
-import { downloadExport, type ExportFormat } from '@/lib/unity';
+import { cardFamily, downloadExport, forkCard, libraryId, type CardFamily, type ExportFormat } from '@/lib/unity';
 import {
   CardHero,
   SectionTabs,
@@ -29,6 +34,31 @@ const extensions: Record<ExportFormat, string> = { json: 'json', png: 'png', cha
 export function CardDetailClient({ card: displayCard, tokensReady }: CardDetailClientProps) {
   const [activeSection, setActiveSection] = useState<Section>('notes');
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [family, setFamily] = useState<{ workspace: string; value: CardFamily } | null>(null);
+  const [forking, setForking] = useState(false);
+  const [selectedFork, setSelectedFork] = useState<CardListItem | null>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    let active = true;
+    setFamily(null); setSelectedFork(null); setForking(false);
+    Promise.all([libraryId(), cardFamily(displayCard.id)])
+      .then(([workspace, value]) => { if (active) setFamily({ workspace, value }); })
+      .catch(() => { /* The profile still works without fork data. */ });
+    return () => { active = false; };
+  }, [displayCard.id]);
+  const forks = family ? family.value.forks.map((summary) => toListItem(family.workspace, summary)) : [];
+
+  const handleFork = async () => {
+    setForking(true); setDownloadError(null);
+    try {
+      const created = await forkCard(displayCard.id);
+      navigate(`/card/${created.card.id}/edit`);
+    } catch (error) {
+      setDownloadError(error instanceof Error ? error.message : 'Fork failed');
+      setForking(false);
+    }
+  };
 
   // Check if card has NSFW tag (for passing to child components)
   const isNsfw = displayCard.tags.some(tag => tag.slug === 'nsfw');
@@ -51,6 +81,7 @@ export function CardDetailClient({ card: displayCard, tokensReady }: CardDetailC
     { id: 'greetings', label: 'Greetings', available: displayCard.hasAlternateGreetings || !!displayCard.cardData.data.first_mes },
     { id: 'lorebook', label: 'Lorebook', available: displayCard.hasLorebook },
     { id: 'assets', label: 'Assets', available: hasAssets },
+    { id: 'forks', label: `Forks${family ? ` (${family.value.forkTotal})` : ''}`, available: true },
     { id: 'comments', label: 'Comments', available: features.social },
   ];
 
@@ -71,6 +102,9 @@ export function CardDetailClient({ card: displayCard, tokensReady }: CardDetailC
         permanentTokens={permanentTokens}
         tokensReady={tokensReady}
         onDownload={handleDownload}
+        onFork={handleFork}
+        forking={forking}
+        parent={family?.value.parent ? { id: family.value.parent.id, name: family.value.parent.name } : null}
       />
       {downloadError && (
         <div className="mb-4 bg-red-500/20 border border-red-500/40 rounded-lg px-4 py-3 text-red-200/90" role="alert">{downloadError}</div>
@@ -109,6 +143,17 @@ export function CardDetailClient({ card: displayCard, tokensReady }: CardDetailC
             <AssetsSection assets={v3Assets} savedAssets={displayCard.savedAssets} />
           )}
 
+          {activeSection === 'forks' && (
+            forks.length === 0 ? (
+              <div className="text-center py-8 text-starlight/60">
+                <p className="mb-3">No forks of this card yet.</p>
+                <button onClick={handleFork} disabled={forking} className="btn-primary px-4 py-2">{forking ? 'Forking…' : 'Fork it'}</button>
+              </div>
+            ) : (
+              <CardGrid cards={forks} onQuickView={setSelectedFork} />
+            )
+          )}
+
           {features.social && activeSection === 'comments' && (
             <CommentsSection cardId={displayCard.id} commentsCount={displayCard.commentsCount} />
           )}
@@ -119,6 +164,7 @@ export function CardDetailClient({ card: displayCard, tokensReady }: CardDetailC
         )}
       </div>
       </div>
+      <CardModal card={selectedFork} isOpen={!!selectedFork} onClose={() => setSelectedFork(null)} />
     </AppShell>
   );
 }

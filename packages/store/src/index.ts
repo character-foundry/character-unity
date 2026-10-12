@@ -205,6 +205,16 @@ export function createStore(driver: StoreDriver) {
         where.push(`EXISTS (SELECT 1 FROM json_each(r.document_json, '$.data.tags') t WHERE lower(t.value) = ?)`);
         params.push(query.tag.trim().toLowerCase());
       }
+      if (query.forkOf) {
+        where.push(`c.forked_from_revision_id IN (SELECT id FROM unity_revisions WHERE workspace_id = c.workspace_id AND card_id = ?)`);
+        params.push(validate.text(query.forkOf, 'forkOf'));
+      }
+      if (query.ids) {
+        if (query.ids.length === 0) return { items: [], total: 0 };
+        if (query.ids.length > 100) throw new StoreError('INVALID_INPUT', 'At most 100 card IDs');
+        where.push(`c.id IN (${query.ids.map(() => '?').join(', ')})`);
+        params.push(...query.ids.map((id) => validate.text(id, 'cardId')));
+      }
       const from = `FROM unity_cards c JOIN unity_revisions r ON r.id = c.head_revision_id WHERE ${where.join(' AND ')}`;
       const [count] = await driver.query<{ total: number }>({ sql: `SELECT count(*) AS total ${from}`, params });
       const rows = await driver.query<Card & { sourceFormat: string | null; forkCount: number }>({ sql: `SELECT

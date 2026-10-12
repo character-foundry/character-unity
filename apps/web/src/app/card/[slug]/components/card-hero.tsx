@@ -39,6 +39,9 @@ interface CardHeroProps {
   permanentTokens: number;
   tokensReady: boolean;
   onDownload: (format: ExportFormat) => void;
+  onFork: () => void;
+  forking: boolean;
+  parent: { id: string; name: string } | null;
 }
 
 type CardVisibility = 'public' | 'private' | 'unlisted' | 'nsfw_only' | 'blocked';
@@ -65,7 +68,7 @@ function VisibilityBadge({ visibility }: { visibility: CardVisibility }) {
   );
 }
 
-export function CardHero({ card, permanentTokens, tokensReady, onDownload }: CardHeroProps) {
+export function CardHero({ card, permanentTokens, tokensReady, onDownload, onFork, forking, parent }: CardHeroProps) {
   const { user } = useAuth();
   const { settings } = useSettings();
   const [isFavorited, setIsFavorited] = useState(false);
@@ -221,6 +224,17 @@ export function CardHero({ card, permanentTokens, tokensReady, onDownload }: Car
               </div>
             )}
 
+            {/* Fork origin */}
+            {parent && (
+              <Link
+                href={`/card/${parent.id}`}
+                className="flex items-center gap-2 mb-4 px-3 py-2 rounded-lg bg-nebula/10 border border-nebula/30 hover:bg-nebula/20 transition-colors w-fit"
+              >
+                <span className="text-xs text-starlight/60">Forked from</span>
+                <span className="text-sm text-nebula font-medium">{parent.name}</span>
+              </Link>
+            )}
+
             {/* Collection banner */}
             {card.collectionId && card.collectionSlug && (
               <Link
@@ -371,6 +385,12 @@ export function CardHero({ card, permanentTokens, tokensReady, onDownload }: Car
                   Edit
                 </Button>
               </Link>
+              <Button variant="secondary" size="sm" onClick={onFork} disabled={forking} title="Make your own copy to edit; this card stays unchanged">
+                <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 3v12m0 0a3 3 0 103 3m-3-3a3 3 0 013 3m0 0h3a6 6 0 006-6V9m0 0a3 3 0 10-3-3 3 3 0 003 3z" />
+                </svg>
+                {forking ? 'Forking…' : 'Fork'}
+              </Button>
               <Button variant="secondary" size="sm" onClick={() => onDownload('png')}>
                 <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />

@@ -33,7 +33,9 @@ export interface Revision {
   createdAt: string;
   assets: RevisionAsset[];
 }
-export interface CardSummaryQuery { q?: string; tag?: string; offset?: number; limit?: number }
+export interface CardSummaryQuery { q?: string; tag?: string; offset?: number; limit?: number;
+  /** Only cards forked from any revision of this card. */ forkOf?: string;
+  /** Only these cards (at most 100). */ ids?: readonly string[] }
 export interface CardSummaryItem { card: Card; revision: Revision; sourceFormat: string | null; forkCount: number }
 export interface CardSummaryPage { items: CardSummaryItem[]; total: number }
 export interface Asset {

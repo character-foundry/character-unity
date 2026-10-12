@@ -16,12 +16,12 @@ export function CardGrid({ cards = [], isLoading, onQuickView }: CardGridProps) 
 
   // Fewer columns for larger cards
   const gridClasses = settings.cardSize === 'large'
-    ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4'
-    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5';
+    ? 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
+    : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6';
 
   if (isLoading && cards.length === 0) {
     return (
-      <div className={cn('grid gap-6', gridClasses)}>
+      <div className={cn('grid gap-4', gridClasses)}>
         {Array.from({ length: 8 }).map((_, i) => (
           <CardSkeleton key={i} isLarge={settings.cardSize === 'large'} />
         ))}
@@ -42,7 +42,7 @@ export function CardGrid({ cards = [], isLoading, onQuickView }: CardGridProps) 
   }
 
   return (
-    <div className={cn('grid gap-6', gridClasses)}>
+    <div className={cn('grid gap-4', gridClasses)}>
       {cards.map((card) => (
         <CardItem key={card.id} card={card} onQuickView={onQuickView} />
       ))}

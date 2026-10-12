@@ -148,7 +148,10 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         const value = (revision.document as { data?: Record<string, unknown> }).data?.[key];
         return typeof value === 'string' ? value.toLowerCase() : '';
       };
-      const matches = scan.filter(({ revision }) => (!text || field(revision, 'name').includes(text) || field(revision, 'creator').includes(text))
+      const ids = query.ids ? new Set(query.ids) : null;
+      const matches = scan.filter(({ card }) => (!ids || ids.has(card.id))
+        && (!query.forkOf || (card.forkedFromRevisionId !== null && revisionCards.get(card.forkedFromRevisionId) === query.forkOf)))
+        .filter(({ revision }) => (!text || field(revision, 'name').includes(text) || field(revision, 'creator').includes(text))
         && (!tag || ((revision.document as { data?: { tags?: unknown } }).data?.tags as unknown[] | undefined ?? []).some((value) => typeof value === 'string' && value.toLowerCase() === tag)))
         .sort((a, b) => b.revision.createdAt.localeCompare(a.revision.createdAt) || a.card.id.localeCompare(b.card.id));
       return { total: matches.length, items: matches.slice(offset, offset + limit).map(({ card, revision, source }) => ({
