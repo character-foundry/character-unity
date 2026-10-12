@@ -1,3 +1,4 @@
+import { isUnityHost } from '../unity/config';
 /**
  * Deployment Configuration
  *
@@ -175,7 +176,40 @@ function isPrivateNetwork(hostname: string): boolean {
 /**
  * Get deployment configuration based on environment
  */
+/**
+ * Unity host - Architect's server-mode persistence goes through the unity API facade
+ * (lib/api.ts). Architect's own server routes do not exist, so server features are off
+ * and LLM/RAG/image work runs client-side. Blocks mode is dropped.
+ */
+const UNITY_CONFIG: DeploymentConfig = {
+  mode: 'full',
+  serverFeatures: {
+    webImport: false,
+    serverRag: false,
+    serverLlm: false,
+    comfyui: false,
+    serverImageOptimization: false,
+  },
+  clientFeatures: {
+    sillyTavernPush: true,
+    clientRag: true,
+    clientLlm: true,
+    clientImageOptimization: true,
+  },
+  moduleDefaults: {
+    blockEditor: false,
+    wwwyzzerdd: true,
+    comfyui: false,
+    sillytavern: false,
+    webimport: false,
+    charxOptimizer: false,
+    federation: false,
+  },
+};
+
 export function getDeploymentConfig(): DeploymentConfig {
+  if (isUnityHost()) return UNITY_CONFIG;
+
   // Check for explicit mode setting
   const explicitMode = import.meta.env.VITE_DEPLOYMENT_MODE as DeploymentMode;
 

@@ -1,3 +1,4 @@
+import { isUnityHost } from '../unity/config';
 /**
  * Module Loader
  *
@@ -29,16 +30,19 @@ import { registerCoreSettingsPanels } from '../features/settings/index';
  * Auto-discover all modules using Vite's glob import
  * Returns a record of module path -> lazy loader
  */
-const moduleLoaders = import.meta.glob('../modules/*/index.ts');
+// Unity port: blocks mode is dropped; Architect-server modules are unavailable (no Architect API).
+const UNITY_EXCLUDED = /\/modules\/(block-editor)\//;
+const moduleLoaders = Object.fromEntries(Object.entries(import.meta.glob('../modules/*/index.ts'))
+  .filter(([path]) => !(isUnityHost() && UNITY_EXCLUDED.test(path))));
 
 /**
  * Eagerly import module metadata from all modules
  * This allows us to show module toggles before modules are loaded
  */
-const moduleMetadata = import.meta.glob<{ MODULE_METADATA?: ModuleDefinition }>(
+const moduleMetadata = Object.fromEntries(Object.entries(import.meta.glob<{ MODULE_METADATA?: ModuleDefinition }>(
   '../modules/*/metadata.ts',
   { eager: true }
-);
+)).filter(([path]) => !(isUnityHost() && UNITY_EXCLUDED.test(path))));
 
 /**
  * Convert kebab-case to camelCase
@@ -95,7 +99,7 @@ export function getDiscoveredModules(): Array<{
  * Modules that require a server in light/static mode will be marked as unavailable
  */
 function registerAllModuleMetadata(): void {
-  const isLightMode = deploymentConfig.mode === 'light' || deploymentConfig.mode === 'static';
+  const isLightMode = deploymentConfig.mode === 'light' || deploymentConfig.mode === 'static' || isUnityHost();
 
   for (const [path, exports] of Object.entries(moduleMetadata)) {
     const metadata = exports.MODULE_METADATA;
@@ -132,7 +136,7 @@ async function loadCoreFeatures(): Promise<void> {
 async function loadOptionalModules(): Promise<void> {
   const { features } = useSettingsStore.getState();
   const modules = getDiscoveredModules();
-  const isLightMode = deploymentConfig.mode === 'light' || deploymentConfig.mode === 'static';
+  const isLightMode = deploymentConfig.mode === 'light' || deploymentConfig.mode === 'static' || isUnityHost();
 
   const enabledModules = modules.filter((module) => {
     if (loadedModules.has(module.id)) return false;

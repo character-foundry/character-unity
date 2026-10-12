@@ -1,3 +1,4 @@
+import { cardImageUrl } from '../../../unity/config';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { useCardStore, extractCardData } from '../../../store/card-store';
@@ -143,7 +144,7 @@ export function PreviewPanel() {
               <div className="w-64 bg-dark-bg border border-dark-border rounded-lg overflow-hidden shadow-lg">
                 {(isLightMode ? cachedImageUrl : true) ? (
                   <img
-                    src={isLightMode ? (cachedImageUrl || '') : `/api/cards/${cardId}/image?v=${currentCard.meta.updatedAt}`}
+                    src={isLightMode ? (cachedImageUrl || '') : cardImageUrl(cardId)}
                     alt="Character Avatar"
                     className="w-full h-auto object-contain"
                     style={{ minHeight: '256px', maxHeight: '384px', display: (isLightMode && !cachedImageUrl) ? 'none' : 'block' }}

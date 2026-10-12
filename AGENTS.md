@@ -9,7 +9,10 @@
 - Architect and hub share `packages/api` and `packages/store`.
   `apps/api` hosts that API on Node or Workers; it is not a second implementation.
 - Browser and portable code must not import Node adapters or native modules.
-- Editor state will be per instance. Host apps own auth, routing and persistence.
+- `packages/architect` is Architect's editor ported verbatim with its global zustand stores
+  (one editor per page). It persists through the unity API facade in `src/lib/api.ts`.
+  Per-instance isolation is deferred (beads cu-1o2.5); do not "fix" the global stores ad hoc.
+  `packages/editor` (scaffold form editor) is being retired. Host apps own auth and routing.
 - Do not kill processes you did not start, discard legacy working-tree changes,
   or modify archived original bytes.
 

@@ -1,10 +1,4 @@
 {
-  "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "outDir": "./dist",
-    "rootDir": ".",
-    "resolveJsonModule": true,
-    "esModuleInterop": true
-  },
-  "include": ["src/**/*", "assets/**/*.json"]
+  "extends": "../architect/tsconfig.json",
+  "include": ["src"]
 }

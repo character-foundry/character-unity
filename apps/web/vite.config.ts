@@ -14,8 +14,14 @@ export default defineConfig({
       { find: 'next/image', replacement: src('shims/next-image.tsx') },
       { find: 'next/navigation', replacement: src('shims/next-navigation.ts') },
       { find: /^@\//, replacement: `${src('')}/` },
+      // Architect's import-core lazy-loads sharp under Node only.
+      { find: /^sharp$/, replacement: src('shims/sharp.ts') },
     ],
+    dedupe: ['react', 'react-dom', 'zustand'],
   },
+  // Scan Architect's lazily loaded editor up front so dependencies are bundled once,
+  // not re-optimized mid-session (which serves mismatched chunks).
+  optimizeDeps: { entries: ['index.html', '../../packages/architect/src/**/*.{ts,tsx}', '!../../packages/architect/src/**/*.test.*'] },
   server: {
     host: process.env.UNITY_WEB_HOST ?? '127.0.0.1',
     port: Number(process.env.UNITY_WEB_PORT ?? 9430),

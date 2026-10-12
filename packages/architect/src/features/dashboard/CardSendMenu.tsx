@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { portalRoot } from '../../unity/config';
 import { ChatExportMenu } from '../../components/shared/ChatExportMenu';
 import { useSettingsStore } from '../../store/settings-store';
 import { getDeploymentConfig } from '../../config/deployment';
@@ -37,7 +38,7 @@ export function CardSendMenu({ card }: { card: Card }) {
       {status && createPortal(
         <div role={status.error ? 'alert' : 'status'} onClick={event => event.stopPropagation()} className={`fixed bottom-4 right-4 max-w-[calc(100vw-2rem)] px-4 py-3 rounded-lg shadow-lg z-[200] text-sm text-white ${status.error ? 'bg-red-600' : 'bg-green-600'}`}>
           {status.message}
-        </div>, document.body
+        </div>, portalRoot()
       )}
     </>
   );

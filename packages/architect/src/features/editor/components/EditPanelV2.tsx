@@ -12,6 +12,7 @@
  * - Tab content generated from configuration
  */
 
+import { cardImageUrl } from '../../../unity/config';
 import { useState, useEffect } from 'react';
 import { useCardStore, extractCardData } from '../../../store/card-store';
 import { useSettingsStore } from '../../../store/settings-store';
@@ -130,7 +131,7 @@ function AvatarUpload({ cardId, isLightMode, cachedImageUrl, onImageUploaded }: 
 
   const imageUrl = isLightMode
     ? cachedImageUrl || ''
-    : cachedImageUrl || `/api/cards/${cardId}/image`;
+    : cachedImageUrl || cardImageUrl(cardId); // Unity port: unity portrait asset URL
 
   return (
     <div className="flex flex-col items-center">

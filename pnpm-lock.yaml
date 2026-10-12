@@ -217,6 +217,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@character-unity/architect':
+        specifier: workspace:*
+        version: link:../../packages/architect
       '@character-unity/cards':
         specifier: workspace:*
         version: link:../../packages/cards

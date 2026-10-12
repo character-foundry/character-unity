@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
+import { portalRoot } from '../../unity/config';
 
 interface DialogProps {
   label: string;
@@ -26,6 +27,6 @@ export function Dialog({ label, onClose, children, className = '' }: DialogProps
     <dialog ref={ref} aria-label={label} onCancel={event => { event.preventDefault(); onClose(); }}
       className={`app-dialog ${className}`}>
       {children}
-    </dialog>, document.body
+    </dialog>, portalRoot()
   );
 }

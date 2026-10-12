@@ -7,6 +7,7 @@ import { localDB } from '../lib/db';
 import { extractCardData } from '../lib/card-utils';
 import { useTokenStore } from './token-store';
 import { getDeploymentConfig } from '../config/deployment';
+import { isUnityHost, unityAutoSaveDelayMs } from '../unity/config';
 import { importCardClientSide, importVoxtaPackageClientSide, importCardFromURLClientSide } from '../lib/client-import';
 import { exportCard as exportCardClientSide } from '../lib/client-export';
 import { isV3Card, isV2Card, isWrappedV2, getInnerData, type CardFields } from '../lib/card-type-guards';
@@ -154,7 +155,7 @@ export const useCardStore = create<CardStore>((set, get) => ({
 
     const timeout = setTimeout(() => {
       get().saveCard();
-    }, 2000); // 2 second debounce
+    }, isUnityHost() ? unityAutoSaveDelayMs : 2000); // Unity: each save is an immutable revision
 
     set({ autoSaveTimeout: timeout });
   },
