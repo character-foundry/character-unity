@@ -1,3 +1,4 @@
+import { usesLocalServices } from '../config/deployment';
 /**
  * LLM Settings Store
  * Manages provider configurations and RAG settings
@@ -98,7 +99,7 @@ export const useLLMStore = create<LLMStore>((set, get) => ({
     const config = getDeploymentConfig();
 
     // Light/static mode: load from localStorage
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       const clientProviders = loadClientLLMProviders();
       const activeId = loadActiveProvider();
 
@@ -153,7 +154,7 @@ export const useLLMStore = create<LLMStore>((set, get) => ({
     };
 
     // Light/static mode: save to localStorage
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       // Convert ProviderConfig back to ClientLLMProvider format
       const clientProviders: ClientLLMProvider[] = newSettings.providers.map(p => ({
         id: p.id,
@@ -233,7 +234,7 @@ export const useLLMStore = create<LLMStore>((set, get) => ({
     }
 
     // Light/static mode: test directly from browser
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       const clientProvider: ClientLLMProvider = {
         id: provider.id,
         name: provider.label || provider.name,
@@ -266,7 +267,7 @@ export const useLLMStore = create<LLMStore>((set, get) => ({
   // RAG operations
   loadRagDatabases: async () => {
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       set({ ragIsLoading: false, ragError: null });
       return;
     }
@@ -437,7 +438,7 @@ export const useLLMStore = create<LLMStore>((set, get) => ({
     }
 
     // Light/static mode: fetch directly from browser
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       const clientProvider: ClientLLMProvider = {
         id: provider.id,
         name: provider.label || provider.name,

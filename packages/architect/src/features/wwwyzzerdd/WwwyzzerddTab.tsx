@@ -1,3 +1,4 @@
+import { usesLocalServices } from '../../config/deployment';
 /**
  * wwwyzzerdd Tab - AI-assisted character creation wizard
  * Two-column layout: Left = Character form fields, Right = AI chat
@@ -115,7 +116,7 @@ export function WwwyzzerddTab() {
   // Load active prompt set
   useEffect(() => {
     const config = getDeploymentConfig();
-    const isLightMode = config.mode === 'light' || config.mode === 'static';
+    const isLightMode = usesLocalServices(config);
 
     if (isLightMode) {
       // In light mode, load from localStorage or initialize with all defaults
@@ -248,7 +249,7 @@ Only include fields you want to update. The user can then apply these to the cha
       ];
 
       const config = getDeploymentConfig();
-      const isLightMode = config.mode === 'light' || config.mode === 'static';
+      const isLightMode = usesLocalServices(config);
 
       let content: string;
 

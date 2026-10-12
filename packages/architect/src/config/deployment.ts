@@ -263,3 +263,12 @@ export function getModuleDefault(moduleId: string): boolean {
  * Export the current config for debugging
  */
 export const deploymentConfig = getDeploymentConfig();
+
+/**
+ * Unity port: services that run in the browser in light/static mode (LLM settings,
+ * assistants, presets, templates) also run in the browser under a unity host,
+ * while card persistence keeps using the unity API facade.
+ */
+export function usesLocalServices(config: DeploymentConfig = getDeploymentConfig()): boolean {
+  return config.mode === 'light' || config.mode === 'static' || isUnityHost();
+}

@@ -1,3 +1,4 @@
+import { usesLocalServices } from '../../../config/deployment';
 /**
  * wwwyzzerdd Settings Panel
  *
@@ -37,7 +38,7 @@ export function WwwyzzerddSettings() {
 
   const loadPromptSets = async () => {
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       // Load from localStorage in light mode
       try {
         const stored = localStorage.getItem(WWWYZZERDD_STORAGE_KEY);
@@ -74,7 +75,7 @@ export function WwwyzzerddSettings() {
     }
 
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       // Save to localStorage in light mode
       try {
         const newPromptSet: WwwyzzerddPromptSet = {
@@ -137,7 +138,7 @@ export function WwwyzzerddSettings() {
     if (!confirmed) return;
 
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       const updated = promptSets.filter(p => p.id !== id);
       localStorage.setItem(WWWYZZERDD_STORAGE_KEY, JSON.stringify(updated));
       setPromptSets(updated);
@@ -161,7 +162,7 @@ export function WwwyzzerddSettings() {
 
   const handleCopyPromptSet = async (id: string) => {
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       const original = promptSets.find(p => p.id === id);
       if (!original) return;
       const copy: WwwyzzerddPromptSet = {
@@ -197,7 +198,7 @@ export function WwwyzzerddSettings() {
 
   const handleExportPrompts = async () => {
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       // Export from localStorage
       const json = JSON.stringify({ promptSets }, null, 2);
       const blob = new Blob([json], { type: 'application/json' });
@@ -237,7 +238,7 @@ export function WwwyzzerddSettings() {
       const json = JSON.parse(text);
       const imported = json.promptSets || [];
 
-      if (config.mode === 'light' || config.mode === 'static') {
+      if (usesLocalServices(config)) {
         // Import to localStorage
         const existing = promptSets.filter(p => p.isDefault);
         const newSets = imported.map((p: WwwyzzerddPromptSet) => ({

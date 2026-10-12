@@ -1,3 +1,4 @@
+import { usesLocalServices } from '../../config/deployment';
 /**
  * Persistence Adapter
  *
@@ -41,7 +42,7 @@ export { LocalPersistenceAdapter } from './local-adapter';
 export function createPersistenceAdapter(): PersistenceAdapter {
   const config = getDeploymentConfig();
 
-  if (config.mode === 'light' || config.mode === 'static') {
+  if (usesLocalServices(config)) {
     return new LocalPersistenceAdapter();
   }
 

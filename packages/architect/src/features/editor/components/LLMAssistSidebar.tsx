@@ -1,3 +1,4 @@
+import { usesLocalServices } from '../../../config/deployment';
 /**
  * LLM Assist Sidebar
  * Provides AI-powered editing capabilities for any field
@@ -76,7 +77,7 @@ export function LLMAssistSidebar({
 
   const loadPresets = async () => {
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       // Load from localStorage or use defaults
       try {
         const stored = localStorage.getItem('ca-llm-presets');
@@ -169,7 +170,7 @@ export function LLMAssistSidebar({
     }
 
     const config = getDeploymentConfig();
-    const isLightMode = config.mode === 'light' || config.mode === 'static';
+    const isLightMode = usesLocalServices(config);
 
     // Light mode: use client-side LLM (no RAG support)
     if (isLightMode) {
@@ -358,7 +359,7 @@ Respond with ONLY the revised text. Do not include explanations or markdown form
     if (!name) return;
 
     const config = getDeploymentConfig();
-    if (config.mode === 'light' || config.mode === 'static') {
+    if (usesLocalServices(config)) {
       // Save to localStorage in light mode
       const saveNow = new Date().toISOString();
       const newPreset: UserPreset = {

@@ -1,3 +1,4 @@
+import { usesLocalServices } from '../../../config/deployment';
 import { useState, useEffect } from 'react';
 import { AutoForm } from '@character-foundry/character-foundry/app-framework';
 import { generateId } from '@card-architect/import-core';
@@ -32,7 +33,7 @@ export function PresetsSettingsPanel() {
 
   const loadPresets = async () => {
     const config = getDeploymentConfig();
-    const isLightMode = config.mode === 'light' || config.mode === 'static';
+    const isLightMode = usesLocalServices(config);
 
     setPresetsLoading(true);
     setPresetError(null);
@@ -76,7 +77,7 @@ export function PresetsSettingsPanel() {
     }
 
     const config = getDeploymentConfig();
-    const isLightMode = config.mode === 'light' || config.mode === 'static';
+    const isLightMode = usesLocalServices(config);
 
     if (isLightMode) {
       try {
@@ -145,7 +146,7 @@ export function PresetsSettingsPanel() {
     if (!confirmed) return;
 
     const config = getDeploymentConfig();
-    const isLightMode = config.mode === 'light' || config.mode === 'static';
+    const isLightMode = usesLocalServices(config);
 
     if (isLightMode) {
       try {
@@ -173,7 +174,7 @@ export function PresetsSettingsPanel() {
 
   const handleExportPresets = async () => {
     const config = getDeploymentConfig();
-    const isLightMode = config.mode === 'light' || config.mode === 'static';
+    const isLightMode = usesLocalServices(config);
 
     if (isLightMode) {
       try {
@@ -216,7 +217,7 @@ export function PresetsSettingsPanel() {
     if (!file) return;
 
     const config = getDeploymentConfig();
-    const isLightMode = config.mode === 'light' || config.mode === 'static';
+    const isLightMode = usesLocalServices(config);
 
     try {
       const text = await file.text();
@@ -357,7 +358,7 @@ export function PresetsSettingsPanel() {
                             checked={!preset.isHidden}
                             onChange={async () => {
                               const cfg = getDeploymentConfig();
-                              const isLight = cfg.mode === 'light' || cfg.mode === 'static';
+                              const isLight = usesLocalServices(cfg);
 
                               if (isLight) {
                                 try {
@@ -414,7 +415,7 @@ export function PresetsSettingsPanel() {
                         <button
                           onClick={async () => {
                             const cfg = getDeploymentConfig();
-                            const isLight = cfg.mode === 'light' || cfg.mode === 'static';
+                            const isLight = usesLocalServices(cfg);
 
                             if (isLight) {
                               try {

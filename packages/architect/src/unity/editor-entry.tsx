@@ -6,6 +6,8 @@ import { registerCustomWidgets } from '../lib/schemas/widgets';
 import { useCardStore } from '../store/card-store';
 import { useSettingsStore, THEMES } from '../store/settings-store';
 import { localDB } from '../lib/db';
+import { SettingsModal } from '../components/shared/SettingsModal';
+import { SettingsButton } from '../components/shared/SettingsButton';
 
 let prepared: Promise<void> | null = null;
 /** Architect's bootstrap (main.tsx) without its App shell. */
@@ -43,6 +45,7 @@ export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: (
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<{ savedAt: string } | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   useScopedTheme(root);
 
   useEffect(() => {
@@ -109,6 +112,7 @@ export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: (
     <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 11rem)' }}>
       <div className="flex items-center gap-3 px-4 py-2 border-b" style={{ background: 'var(--color-surface)' }}>
         <span className="text-sm opacity-80 flex-1">{status}</span>
+        <SettingsButton onClick={() => setShowSettings(true)} />
         {onExit && <button className="btn-secondary text-sm" onClick={onExit}>Done</button>}
         <button className="btn-primary text-sm" disabled={isSaving || !isDirty} onClick={() => { void save(); }} title="Save a new revision (Ctrl+S)">Save</button>
       </div>
@@ -120,6 +124,7 @@ export function ArchitectEditor({ cardId, onExit }: { cardId: string; onExit?: (
         </div>
       )}
       {error && <div className="px-4 py-2 text-sm bg-red-900/50 border-b" role="alert">{error}</div>}
+      <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
       <div className="flex-1 min-h-0">
         {loading ? <div className="p-12 text-center opacity-60">Loading card…</div> : currentCard && <CardEditor />}
       </div>
