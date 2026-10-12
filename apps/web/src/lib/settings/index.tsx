@@ -6,18 +6,21 @@ export interface UserSettings {
   // Display settings
   showImagesInGreetings: boolean;
   blurNsfwContent: boolean;
+  /** Leave cards tagged NSFW out of library lists entirely. */
+  hideNsfw: boolean;
   sidebarExpanded: boolean;
 
   // Card display
   cardSize: 'normal' | 'large';
 
   // Content filtering
-  bannedTags: string[];  // Tag slugs to exclude from explore results
+  bannedTags: string[];  // Tags always left out of library lists ("hidden tags")
 }
 
 const defaultSettings: UserSettings = {
   showImagesInGreetings: true,
   blurNsfwContent: true,
+  hideNsfw: false,
   sidebarExpanded: false,
   cardSize: 'large',
   bannedTags: [],
@@ -34,33 +37,25 @@ const SettingsContext = createContext<SettingsContextType | null>(null);
 const STORAGE_KEY = 'cardshub-settings';
 
 export function SettingsProvider({ children }: { children: ReactNode }) {
-  const [settings, setSettings] = useState<UserSettings>(defaultSettings);
-  const [isLoaded, setIsLoaded] = useState(false);
-
-  // Load settings from localStorage on mount
-  useEffect(() => {
+  // Read synchronously so the first library query already respects hidden tags (no SSR here).
+  const [settings, setSettings] = useState<UserSettings>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setSettings({ ...defaultSettings, ...parsed });
-      }
+      if (stored) return { ...defaultSettings, ...JSON.parse(stored) };
     } catch (e) {
       console.error('Failed to load settings:', e);
     }
-    setIsLoaded(true);
-  }, []);
+    return defaultSettings;
+  });
 
   // Save settings to localStorage when they change
   useEffect(() => {
-    if (isLoaded) {
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
-      } catch (e) {
-        console.error('Failed to save settings:', e);
-      }
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+    } catch (e) {
+      console.error('Failed to save settings:', e);
     }
-  }, [settings, isLoaded]);
+  }, [settings]);
 
   const updateSettings = (updates: Partial<UserSettings>) => {
     setSettings(prev => ({ ...prev, ...updates }));

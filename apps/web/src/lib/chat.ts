@@ -88,7 +88,9 @@ export function usePlacements(cardIds: readonly string[]) {
   useEffect(() => {
     if (!key) { setValue(new Map()); return; }
     let active = true;
-    chatApi.placements(key.split(',')).then((rows) => {
+    // The API takes at most 100 card IDs per request.
+    const ids = key.split(','), chunks = Array.from({ length: Math.ceil(ids.length / 100) }, (_, index) => ids.slice(index * 100, index * 100 + 100));
+    Promise.all(chunks.map((chunk) => chatApi.placements(chunk))).then((pages) => pages.flat()).then((rows) => {
       if (!active) return;
       const grouped = new Map<string, ChatPlacement[]>();
       for (const row of rows) grouped.set(row.cardId, [...(grouped.get(row.cardId) ?? []), row]);

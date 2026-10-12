@@ -198,7 +198,7 @@ export function CardHero({ card, permanentTokens, tokensReady, onDownload, onFor
 
             {card.creator && (
               <Link
-                href={`/explore?search=${encodeURIComponent(card.creator)}`}
+                href={`/explore?search=${encodeURIComponent(`creator:"${card.creator}"`)}`}
                 className="text-sm text-starlight/60 hover:text-nebula mb-2 block"
                 data-card-creator
               >

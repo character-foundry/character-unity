@@ -134,7 +134,7 @@ export function CardModal({ card, isOpen, onClose, placements }: CardModalProps)
                 <h2 className="text-2xl font-bold gradient-text">{card.name}</h2>
                 {card.creator && (
                   <Link
-                    href={`/explore?search=${encodeURIComponent(card.creator)}`}
+                    href={`/explore?search=${encodeURIComponent(`creator:"${card.creator}"`)}`}
                     className="text-sm text-starlight/60 hover:text-nebula mt-1 block"
                     onClick={onClose}
                   >

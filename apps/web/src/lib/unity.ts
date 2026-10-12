@@ -55,14 +55,27 @@ export function libraryId(): Promise<string> {
   return library;
 }
 
-export async function listCards(query: { q?: string; tag?: string; offset?: number; limit?: number }): Promise<CardSummaryList> {
+export interface LibraryQuery {
+  q?: string; tags?: readonly string[]; tagMode?: 'all' | 'any'; exclude?: readonly string[];
+  has?: readonly string[]; fork?: 'only' | 'none'; sort?: string; offset?: number; limit?: number;
+}
+export async function listCards(query: LibraryQuery): Promise<CardSummaryList> {
   const workspace = await libraryId();
   const params = new URLSearchParams();
   if (query.q) params.set('q', query.q);
-  if (query.tag) params.set('tag', query.tag);
+  if (query.tags?.length) params.set('tags', query.tags.join(','));
+  if (query.tagMode && query.tagMode !== 'all') params.set('tagMode', query.tagMode);
+  if (query.exclude?.length) params.set('exclude', query.exclude.join(','));
+  if (query.has?.length) params.set('has', query.has.join(','));
+  if (query.fork) params.set('fork', query.fork);
+  if (query.sort && query.sort !== 'edited') params.set('sort', query.sort);
   if (query.offset) params.set('offset', String(query.offset));
   if (query.limit) params.set('limit', String(query.limit));
   return call(`/api/workspaces/${workspace}/card-summaries?${params}`);
+}
+
+export async function listCardTags(): Promise<{ tag: string; count: number }[]> {
+  return (await call<{ tags: { tag: string; count: number }[] }>(`/api/workspaces/${await libraryId()}/card-tags`)).tags;
 }
 
 export async function openCard(id: string): Promise<OpenedCard> {
