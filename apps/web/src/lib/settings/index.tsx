@@ -8,10 +8,9 @@ export interface UserSettings {
   blurNsfwContent: boolean;
   /** Leave cards tagged NSFW out of library lists entirely. */
   hideNsfw: boolean;
-  sidebarExpanded: boolean;
 
-  // Card display
-  cardSize: 'normal' | 'large';
+  // Card display: tile size in the library grid, picked from the filter bar.
+  cardSize: 'small' | 'medium' | 'large';
 
   // Content filtering
   bannedTags: string[];  // Tags always left out of library lists ("hidden tags")
@@ -21,8 +20,7 @@ const defaultSettings: UserSettings = {
   showImagesInGreetings: true,
   blurNsfwContent: true,
   hideNsfw: false,
-  sidebarExpanded: false,
-  cardSize: 'large',
+  cardSize: 'medium',
   bannedTags: [],
 };
 
@@ -41,7 +39,12 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const [settings, setSettings] = useState<UserSettings>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) return { ...defaultSettings, ...JSON.parse(stored) };
+      if (stored) {
+        const saved = JSON.parse(stored) as Partial<UserSettings>;
+        // Earlier builds stored 'normal' for the medium size.
+        const cardSize = saved.cardSize === 'small' || saved.cardSize === 'large' ? saved.cardSize : 'medium';
+        return { ...defaultSettings, ...saved, cardSize };
+      }
     } catch (e) {
       console.error('Failed to load settings:', e);
     }

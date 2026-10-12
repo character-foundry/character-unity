@@ -1,23 +1,28 @@
 import { AppShell } from '@/components/layout';
 import { useSettings } from '@/lib/settings';
-import { isFiltered, useLibraryFeed, useSearchState } from '@/lib/library-search';
+import { emptySearch, isFiltered, useLibraryFeed, useLibraryTotal, useSearchState } from '@/lib/library-search';
 import { FilterBar } from '@/components/search/filter-bar';
-import { LibraryResults, ResultCount } from '@/components/search/library-results';
+import { LibraryResults } from '@/components/search/library-results';
 
-/** The library: the header box searches it, the bar filters it. Hidden tags and NSFW live in Settings. */
+/** The library: the top bar's box searches it, the sticky bar filters it. Hidden tags and NSFW live in Settings. */
 export default function LibraryPage() {
   const { search, update, replace } = useSearchState();
   const { settings } = useSettings();
-  const feed = useLibraryFeed(search, { tags: settings.bannedTags, hideNsfw: settings.hideNsfw });
+  const hidden = { tags: settings.bannedTags, hideNsfw: settings.hideNsfw };
+  const feed = useLibraryFeed(search, hidden);
+  const total = useLibraryTotal(hidden);
   return (
-    <AppShell>
-      <div className="mx-auto max-w-7xl space-y-3">
-        <FilterBar search={search} update={update} replace={replace} />
-        <ResultCount feed={feed} filtered={isFiltered(search)} />
+    <AppShell flush>
+      <FilterBar search={search} update={update} replace={replace} total={total}
+        count={feed.loading && feed.cards.length === 0 ? null : feed.total} />
+      <div className="px-3 py-3 sm:px-4">
         <LibraryResults feed={feed} empty={
-          <div className="py-16 text-center">
-            <h3 className="mb-2 text-xl font-semibold">{isFiltered(search) ? 'No matching cards' : 'No cards yet'}</h3>
-            <p className="text-starlight/60">{isFiltered(search) ? 'Try fewer filters.' : 'Import a card from the top bar to get started.'}</p>
+          <div className="py-24 text-center">
+            <p className="text-sm font-medium">{isFiltered(search) ? 'No cards match these filters' : 'No cards yet'}</p>
+            {isFiltered(search)
+              ? <button type="button" onClick={() => replace({ ...emptySearch, sort: search.sort })}
+                  className="mt-2 text-[13px] font-medium text-nebula hover:underline">Clear all filters</button>
+              : <p className="mt-1 text-[13px] text-starlight/50">Import a card from the top bar to get started.</p>}
           </div>
         } />
       </div>

@@ -1,33 +1,14 @@
-'use client';
-
-import { useState, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
 import { Header } from './header';
-import { Sidebar } from './sidebar';
 import { cn } from '@/lib/utils/cn';
-import { useSettings } from '@/lib/settings';
 
-interface AppShellProps {
-  children: ReactNode;
-}
-
-export function AppShell({ children }: AppShellProps) {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const { settings } = useSettings();
-
+/** Top bar plus page body. `flush` pages (the library) lay out their own edges under the bar. */
+export function AppShell({ children, flush = false }: { children: ReactNode; flush?: boolean }) {
   return (
     <div className="min-h-screen">
-      <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
-      <Sidebar
-        isOpen={sidebarOpen}
-        onClose={() => setSidebarOpen(false)}
-      />
-
-      {/* Main content */}
-      <main className={cn(
-        'pt-16 transition-all duration-300 ease-in-out',
-        settings.sidebarExpanded ? 'lg:pl-64' : 'lg:pl-16'
-      )}>
-        <div className="p-4 sm:p-6 lg:p-8" data-main-content>
+      <Header />
+      <main className="pt-12">
+        <div className={cn(!flush && 'p-3 sm:p-4')} data-main-content>
           {children}
         </div>
       </main>

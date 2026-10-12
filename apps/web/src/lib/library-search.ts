@@ -8,7 +8,7 @@ import type { CardListItem } from '@/types/card';
 /** Library search state as it lives in the URL. Defaults are left out so links stay short. */
 export interface LibrarySearch {
   q: string;
-  /** Advanced filter expressions (search page); combined with `q` as `(q) (expr)`. */
+  /** A second expression from older links and saved searches; combined with `q` as `(q) (expr)`. */
   expr: string;
   tags: string[];
   tagMode: 'all' | 'any';
@@ -146,6 +146,24 @@ export function useFollowedCreators() {
   return creators;
 }
 
+/** Tags left out by Settings (hidden tags, and NSFW when hidden), lower-cased. */
+function hiddenTags(hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  return [...hidden.tags, ...(hidden.hideNsfw ? ['nsfw'] : [])].map((tag) => tag.toLowerCase());
+}
+
+/** Cards in the library, less those Settings hides; the bar shows matches against it. */
+export function useLibraryTotal(hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  const version = useLibraryVersion();
+  const exclude = [...new Set(hiddenTags(hidden))].sort().join(',');
+  const [total, setTotal] = useState<number | null>(null);
+  useEffect(() => {
+    let active = true;
+    listCards({ exclude: exclude ? exclude.split(',') : [], limit: 1 }).then((page) => { if (active) setTotal(page.total); }).catch(() => undefined);
+    return () => { active = false; };
+  }, [exclude, version]);
+  return total;
+}
+
 // ---- Infinite list with place-keeping ------------------------------------------------------------
 
 export const PAGE_SIZE = 48;
@@ -154,7 +172,7 @@ interface View { cards: CardListItem[]; total: number; scrollY: number }
 const views = new Map<string, View>();
 
 export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
-  const exclude = [...new Set([...search.exclude, ...hidden.tags, ...(hidden.hideNsfw ? ['nsfw'] : [])].map((tag) => tag.toLowerCase()))];
+  const exclude = [...new Set([...search.exclude.map((tag) => tag.toLowerCase()), ...hiddenTags(hidden)])];
   const text = [search.q.trim(), search.expr.trim()].filter(Boolean);
   const query: LibraryQuery = { q: text.length > 1 ? text.map((part) => `(${part})`).join(' ') : text[0] ?? '', tags: search.tags, tagMode: search.tagMode, exclude, has: search.has,
     ...(search.fork ? { fork: search.fork } : {}), ...(search.favorite ? { favorite: search.favorite } : {}),
@@ -243,7 +261,7 @@ export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly s
   return { cards: current.cards, total: current.total, loading, error, hasMore, loadMore, retry, sentinel };
 }
 
-// ---- Saved searches (advanced page) ---------------------------------------------------------------
+// ---- Saved searches -------------------------------------------------------------------------------
 
 export interface SavedSearch { name: string; params: string }
 const savedKey = 'unity-saved-searches';

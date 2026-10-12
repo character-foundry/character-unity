@@ -146,7 +146,7 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
   const status = isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? 'Unsaved changes (autosaves after 30s idle)' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
 
   return (
-    <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 11rem)' }}>
+    <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 7rem)' }}>
       <div className="flex items-center gap-3 px-4 py-2 border-b" style={{ background: 'var(--color-surface)' }}>
         <span className="text-sm opacity-80 flex-1">{status}</span>
         <SettingsButton onClick={() => setShowSettings(true)} />

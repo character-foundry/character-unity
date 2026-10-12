@@ -5,7 +5,7 @@ import { deleteCard, followCreator, setFavorite } from '@/lib/unity';
 import { libraryChanged, useFollowedCreators } from '@/lib/library-search';
 
 /** Local favorite toggle (stored in this library, no account needed). */
-export function FavoriteButton({ cardId, initial, className }: { cardId: string; initial: boolean; className?: string }) {
+export function FavoriteButton({ cardId, initial, className, iconClassName = 'h-3.5 w-3.5' }: { cardId: string; initial: boolean; className?: string; iconClassName?: string }) {
   const [favorite, setValue] = useState(initial);
   const [busy, setBusy] = useState(false);
   return (
@@ -16,7 +16,7 @@ export function FavoriteButton({ cardId, initial, className }: { cardId: string;
         try { await setFavorite(cardId, !favorite); } catch { setValue(favorite); } finally { setBusy(false); }
       }}
       className={cn('flex items-center transition-colors hover:text-pink-400', favorite ? 'text-pink-400' : 'text-white/70', className)}>
-      <HeartIcon className="h-3.5 w-3.5" filled={favorite} />
+      <HeartIcon className={iconClassName} filled={favorite} />
     </button>
   );
 }

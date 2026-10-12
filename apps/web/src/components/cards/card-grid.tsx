@@ -3,6 +3,7 @@
 import { CardItem } from './card-item';
 import type { CardListItem } from '@/types/card';
 import { useSettings } from '@/lib/settings';
+import type { UserSettings } from '@/lib/settings';
 import { cn } from '@/lib/utils/cn';
 import type { ChatPlacement } from '@/lib/chat';
 
@@ -14,56 +15,35 @@ interface CardGridProps {
   placements?: Map<string, ChatPlacement[]>;
 }
 
+/** Columns fill the width; the card size from the filter bar sets the narrowest tile. */
+const columns: Record<UserSettings['cardSize'], string> = {
+  large: 'grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-3',
+  medium: 'grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2.5',
+  small: 'grid-cols-[repeat(auto-fill,minmax(112px,1fr))] gap-2',
+};
+
 export function CardGrid({ cards = [], isLoading, onQuickView, placements }: CardGridProps) {
   const { settings } = useSettings();
 
-  // Fewer columns for larger cards
-  const gridClasses = settings.cardSize === 'large'
-    ? 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
-    : 'grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6';
-
   if (isLoading && cards.length === 0) {
     return (
-      <div className={cn('grid gap-4', gridClasses)}>
-        {Array.from({ length: 8 }).map((_, i) => (
-          <CardSkeleton key={i} isLarge={settings.cardSize === 'large'} />
+      <div className={cn('grid', columns[settings.cardSize])}>
+        {Array.from({ length: 12 }).map((_, i) => (
+          <div key={i} className="aspect-[3/4] animate-pulse rounded-lg bg-cosmic-teal ring-1 ring-nebula/15" />
         ))}
       </div>
     );
   }
 
   if (cards.length === 0) {
-    return (
-      <div className="text-center py-16">
-        <div className="text-6xl mb-4">🔍</div>
-        <h3 className="text-xl font-semibold mb-2">No cards found</h3>
-        <p className="text-starlight/60">
-          Try adjusting your filters or search terms
-        </p>
-      </div>
-    );
+    return <div className="py-16 text-center text-sm text-starlight/50">No cards found</div>;
   }
 
   return (
-    <div className={cn('grid gap-4', gridClasses)}>
+    <div className={cn('grid', columns[settings.cardSize])}>
       {cards.map((card) => (
-        <CardItem key={card.id} card={card} onQuickView={onQuickView} placements={placements?.get(card.id)} />
+        <CardItem key={card.id} card={card} size={settings.cardSize} onQuickView={onQuickView} placements={placements?.get(card.id)} />
       ))}
-    </div>
-  );
-}
-
-function CardSkeleton({ isLarge = false }: { isLarge?: boolean }) {
-  return (
-    <div className="glass-card rounded-xl overflow-hidden animate-pulse">
-      <div className={cn(
-        'bg-cosmic-teal/50',
-        isLarge ? 'aspect-[3/4.5]' : 'aspect-[3/4]'
-      )} />
-      <div className="p-3 space-y-2">
-        <div className="h-4 bg-cosmic-teal/50 rounded w-3/4" />
-        <div className="h-3 bg-cosmic-teal/50 rounded w-1/2" />
-      </div>
     </div>
   );
 }

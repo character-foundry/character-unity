@@ -62,8 +62,8 @@ export function SendMenu({ cardId, placements = [], variant = 'button', classNam
     <div ref={ref} className={cn('relative', className)} onClick={(event) => event.stopPropagation()}>
       {variant === 'icon' ? (
         <button onClick={onTrigger} disabled={!!busy} title={targets.length ? label : 'Connect a chat app to send cards'}
-          className="flex h-8 w-8 items-center justify-center rounded-lg bg-black/70 text-white hover:bg-nebula disabled:opacity-60">
-          <SendIcon className={cn('h-4 w-4', busy && 'animate-pulse')} />
+          className="flex h-7 w-7 items-center justify-center rounded-md bg-black/70 text-white hover:bg-nebula disabled:opacity-60">
+          <SendIcon className={cn('h-3.5 w-3.5', busy && 'animate-pulse')} />
         </button>
       ) : (
         <Button variant="secondary" size="sm" onClick={onTrigger} disabled={!!busy} className={cn(variant === 'wide' && 'w-full')}>
@@ -93,7 +93,7 @@ export function SendMenu({ cardId, placements = [], variant = 'button', classNam
 }
 
 /** Compact presence chips for a tile: one per chat app holding a live copy. */
-export function PlacementChips({ placements }: { placements: ChatPlacement[] | undefined }) {
+export function PlacementChips({ placements, className }: { placements: ChatPlacement[] | undefined; className?: string }) {
   const live = (placements ?? []).filter((row) => row.status !== 'missing');
   if (!live.length) return null;
   const byTarget = new Map<string, ChatPlacement>();
@@ -102,7 +102,7 @@ export function PlacementChips({ placements }: { placements: ChatPlacement[] | u
     <>
       {[...byTarget.values()].map((row) => (
         <div key={row.targetId} title={`${row.targetName}: ${statusInfo[row.status].label} — ${statusInfo[row.status].hint}`}
-          className={cn('rounded border px-1.5 py-0.5 text-xs font-medium backdrop-blur', statusInfo[row.status].tone, 'bg-black/60')}>
+          className={cn('rounded border px-1.5 py-0.5 text-xs font-medium backdrop-blur', statusInfo[row.status].tone, 'bg-black/60', className)}>
           {kindInfo(row.kind).short}{row.status === 'current' ? ' ✓' : row.status === 'behind' ? ' ↻' : ' ✎'}
         </div>
       ))}

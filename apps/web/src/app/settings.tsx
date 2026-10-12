@@ -47,11 +47,6 @@ export default function SettingsPage() {
               <Segmented label="NSFW cards" value={nsfw} onChange={(value) => updateSettings({ hideNsfw: value === 'hide', blurNsfwContent: value !== 'show' })}
                 options={[{ value: 'show', label: 'Show' }, { value: 'blur', label: 'Blur' }, { value: 'hide', label: 'Hide' }]} />
             </div>
-            <div className={row}>
-              <span>Card size</span>
-              <Segmented label="Card size" value={settings.cardSize} onChange={(cardSize) => updateSettings({ cardSize })}
-                options={[{ value: 'normal', label: 'Normal' }, { value: 'large', label: 'Large' }]} />
-            </div>
             <label className={cn(row, 'cursor-pointer')}>
               <span>Show images in greetings</span>
               <input type="checkbox" checked={settings.showImagesInGreetings} onChange={(event) => updateSettings({ showImagesInGreetings: event.target.checked })} />
