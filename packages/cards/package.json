@@ -1,0 +1,29 @@
+{
+  "name": "@character-unity/cards",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/types.ts",
+    "./archive": "./src/archive.ts",
+    "./hub": "./src/hub.ts",
+    "./remote": "./src/remote.ts",
+    "./remote-outbox": "./src/remote-outbox.ts",
+    "./connections": "./src/connections.ts"
+  },
+  "scripts": {
+    "type-check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
+    "@character-unity/assets": "workspace:*",
+    "@character-unity/store": "workspace:*",
+    "@character-unity/archive-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@character-unity/blob-store": "workspace:*",
+    "@character-unity/browser-storage": "workspace:*",
+    "fake-indexeddb": "6.2.5"
+  }
+}

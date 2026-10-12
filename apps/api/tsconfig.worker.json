@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": [
+      "ES2022"
+    ],
+    "types": []
+  },
+  "include": [
+    "src/worker.ts",
+    "worker-configuration.d.ts"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "R01": "Publish the exact subset once under concurrent retries and preserve receipts across restart",
+  "R02": "Recover committed writes after response loss and reject changed bytes or operation kind for an existing ID",
+  "R03": "Recheck grants in the mutation transaction and reject workspace substitution",
+  "R04": "Roll back receipt, guards and domain rows after failure at every publish/fork batch boundary",
+  "R05": "Fork once under concurrency, retaining source, assets and revision IDs across retries and restart",
+  "R06": "Enforce source policies at commit and before returning fork or descendant publication results",
+  "R07": "Require fresh admitted claims for receipt access, retain receipts after nonce cleanup and prohibit receipt mutation",
+  "R08": "Upgrade populated v6 grants/nonces atomically while retaining prior checksummed history",
+  "R09": "Preserve actor operation identity through key rotation and isolate IDs across different actors"
+}

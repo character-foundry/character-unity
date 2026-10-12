@@ -1,0 +1,33 @@
+{
+  "name": "@character-unity/architect",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "type-check": "tsc -p tsconfig.json",
+    "build:browser": "vite build --mode browser --outDir dist/browser",
+    "dev:browser": "vite --mode browser",
+    "build:browser:test": "VITE_UNITY_ARCHIVE_ORIGIN=http://127.0.0.1:19313 vite build --mode browser --outDir dist/browser-test"
+  },
+  "dependencies": {
+    "@character-unity/ui": "workspace:*",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "@character-unity/editor": "workspace:*",
+    "@character-unity/store": "workspace:*",
+    "@character-unity/cards": "workspace:*",
+    "@character-unity/assets": "workspace:*",
+    "@character-unity/browser-storage": "workspace:*",
+    "@character-unity/archive-client": "workspace:*",
+    "@character-unity/archive-browser": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "vite": "8.3.4"
+  }
+}

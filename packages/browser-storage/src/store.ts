@@ -1,0 +1,161 @@
+import { StoreError } from '@character-unity/store';
+import type { Asset, Card, CardSource, CardSourceInput, Revision, RevisionInput, UnityStore, Workspace } from '@character-unity/store';
+import * as validate from '@character-unity/store/validation';
+import { inspectDatabase } from './database.js';
+import { request, transaction } from './transaction.js';
+
+function* get<T>(tx: IDBTransaction, store: string, id: string): Generator<IDBRequest, T | undefined, unknown> {
+  return yield* request<T | undefined>(tx.objectStore(store).get(id));
+}
+function* workspace(tx: IDBTransaction, id: string) {
+  validate.text(id, 'workspaceId');
+  const value = yield* get<Workspace>(tx, 'workspaces', id);
+  if (!value) throw new StoreError('NOT_FOUND', 'Workspace not found');
+  return value;
+}
+function* scoped<T extends { workspaceId: string }>(tx: IDBTransaction, table: string, workspaceId: string, id: string) {
+  const row = yield* get<T>(tx, table, id);
+  if (!row || row.workspaceId !== workspaceId) throw new StoreError('NOT_FOUND', 'Record not found in this workspace');
+  return row;
+}
+function* ready(tx: IDBTransaction, workspaceId: string, assetId: string) {
+  const asset = yield* get<Asset>(tx, 'assets', assetId);
+  if (!asset || asset.workspaceId !== workspaceId || asset.state !== 'ready') {
+    throw new StoreError('ASSET_NOT_READY', 'An asset is missing, staged, or belongs to another workspace');
+  }
+}
+function snapshot(input: RevisionInput): RevisionInput {
+  const document = JSON.parse(validate.revision(input));
+  return { authorId: input.authorId, identity: { ...input.identity }, document, assets: structuredClone(input.assets ?? []) };
+}
+function sourceSnapshot(input?: CardSourceInput): CardSourceInput | undefined {
+  if (!input) return undefined;
+  return { assetId: validate.text(input.assetId, 'source assetId'), provenance: JSON.parse(validate.document(input.provenance, 8192)) };
+}
+function revision(card: Card, input: RevisionInput, sequence: number, parent: string | null): Revision {
+  return { id: card.headRevisionId, cardId: card.id, workspaceId: card.workspaceId, sequence,
+    parentRevisionId: parent, authorId: input.authorId, identity: input.identity, document: input.document,
+    assets: [...(input.assets ?? [])].sort((a, b) => a.path < b.path ? -1 : a.path > b.path ? 1 : 0), createdAt: new Date().toISOString() };
+}
+function* insertRevision(tx: IDBTransaction, value: Revision) {
+  for (const asset of value.assets) yield* ready(tx, value.workspaceId, asset.assetId);
+  yield* request(tx.objectStore('revisions').add(value));
+}
+function* insertSource(tx: IDBTransaction, card: Card, source?: CardSourceInput) {
+  if (!source) return;
+  yield* ready(tx, card.workspaceId, source.assetId);
+  yield* request(tx.objectStore('sources').add({ ...source, cardId: card.id, workspaceId: card.workspaceId }));
+}
+const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources'];
+
+/** Same trusted domain contract as SQL; each write is one native IDB transaction. */
+export function createBrowserStore(db: IDBDatabase): UnityStore {
+  return {
+    readiness: () => inspectDatabase(db),
+    async findSyncFork() { throw new StoreError('INVALID_INPUT', 'Signed sync writes require a SQL host'); },
+    async createWorkspace(input) {
+      const value: Workspace = { id: crypto.randomUUID(), ownerId: validate.text(input.ownerId, 'ownerId'),
+        name: validate.text(input.name, 'name'), createdAt: new Date().toISOString() };
+      return transaction(db, ['workspaces'], 'readwrite', function* (tx) { yield* request(tx.objectStore('workspaces').add(value)); return value; });
+    },
+    getWorkspace: (id) => transaction(db, ['workspaces'], 'readonly', (tx) => workspace(tx, id)),
+    async listWorkspaces(ownerId) {
+      validate.text(ownerId, 'ownerId');
+      return transaction(db, ['workspaces'], 'readonly', function* (tx) {
+        return yield* request<Workspace[]>(tx.objectStore('workspaces').index('owner').getAll(IDBKeyRange.bound([ownerId], [ownerId, []]), 100));
+      });
+    },
+    getCard: (workspaceId, id) => transaction(db, ['cards'], 'readonly', (tx) => scoped<Card>(tx, 'cards', workspaceId, id)),
+    getRevision: (workspaceId, id) => transaction(db, ['revisions'], 'readonly', (tx) => scoped<Revision>(tx, 'revisions', workspaceId, id)),
+    getAsset: (workspaceId, id) => transaction(db, ['assets'], 'readonly', (tx) => scoped<Asset>(tx, 'assets', workspaceId, id)),
+    getSource: (workspaceId, cardId) => transaction(db, ['cards', 'sources'], 'readonly', function* (tx) {
+      yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
+      return (yield* get<CardSource>(tx, 'sources', cardId)) ?? null;
+    }),
+    async createCard(input) {
+      const data = snapshot(input), source = sourceSnapshot(input.source);
+      const card: Card = { id: crypto.randomUUID(), workspaceId: input.workspaceId, headRevisionId: crypto.randomUUID(),
+        originalHash: input.originalHash === undefined ? null : validate.hash(input.originalHash), forkedFromRevisionId: null, createdAt: new Date().toISOString() };
+      const value = revision(card, data, 1, null);
+      return transaction(db, writeStores, 'readwrite', function* (tx) {
+        yield* workspace(tx, card.workspaceId);
+        yield* request(tx.objectStore('cards').add(card));
+        yield* insertSource(tx, card, source);
+        yield* insertRevision(tx, value);
+        return { card, revision: value };
+      });
+    },
+    async saveRevision(input) {
+      const data = snapshot(input);
+      const { workspaceId, cardId } = input;
+      const expectedHead = validate.text(input.expectedHead, 'expectedHead');
+      return transaction(db, writeStores, 'readwrite', function* (tx) {
+        const card = yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
+        if (card.headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has a newer revision; reload before saving');
+        const parent = yield* scoped<Revision>(tx, 'revisions', workspaceId, expectedHead);
+        card.headRevisionId = crypto.randomUUID();
+        const value = revision(card, data, parent.sequence + 1, expectedHead);
+        yield* insertRevision(tx, value);
+        yield* request(tx.objectStore('cards').put(card));
+        return value;
+      });
+    },
+    async forkCard(input, syncContext) {
+      if (syncContext) throw new StoreError('INVALID_INPUT', 'Signed sync writes require a SQL host');
+      if (input.publication) throw new StoreError('INVALID_INPUT', 'Hub publication guards require the shared SQL store');
+      const data = snapshot(input), source = sourceSnapshot(input.source);
+      const { workspaceId, sourceWorkspaceId, sourceRevisionId } = input;
+      return transaction(db, writeStores, 'readwrite', function* (tx) {
+        yield* workspace(tx, workspaceId);
+        const parent = yield* scoped<Revision>(tx, 'revisions', sourceWorkspaceId, sourceRevisionId);
+        const original = yield* scoped<Card>(tx, 'cards', sourceWorkspaceId, parent.cardId);
+        const card: Card = { id: crypto.randomUUID(), workspaceId, headRevisionId: crypto.randomUUID(),
+          originalHash: original.originalHash, forkedFromRevisionId: parent.id, createdAt: new Date().toISOString() };
+        const value = revision(card, data, 1, parent.id);
+        yield* request(tx.objectStore('cards').add(card));
+        yield* insertSource(tx, card, source);
+        yield* insertRevision(tx, value);
+        return { card, revision: value };
+      });
+    },
+    async listCards(workspaceId, options = {}) {
+      const range = IDBKeyRange.bound([workspaceId, options.afterId ?? ''], [workspaceId, []], true);
+      const limit = validate.limit(options.limit);
+      return transaction(db, ['cards'], 'readonly', function* (tx) {
+        return yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(range, limit));
+      });
+    },
+    async listRevisions(workspaceId, cardId, options = {}) {
+      const range = IDBKeyRange.bound([workspaceId, cardId, validate.count(options.afterSequence ?? 0, 'afterSequence')], [workspaceId, cardId, []], true);
+      const limit = validate.limit(options.limit);
+      return transaction(db, ['revisions'], 'readonly', function* (tx) {
+        return yield* request<Revision[]>(tx.objectStore('revisions').index('history').getAll(range, limit));
+      });
+    },
+    async listForks(workspaceId, sourceRevisionId, options = {}) {
+      const range = IDBKeyRange.bound([workspaceId, sourceRevisionId, options.afterId ?? ''], [workspaceId, sourceRevisionId, []], true);
+      const limit = validate.limit(options.limit);
+      return transaction(db, ['cards'], 'readonly', function* (tx) {
+        return yield* request<Card[]>(tx.objectStore('cards').index('forks').getAll(range, limit));
+      });
+    },
+    async stageAsset(input) {
+      const id = crypto.randomUUID();
+      const asset: Asset = { id, workspaceId: validate.text(input.workspaceId, 'workspaceId'), hash: validate.hash(input.hash),
+        byteLength: validate.count(input.byteLength, 'byteLength'), mediaType: validate.text(input.mediaType, 'mediaType'), storageKey: `assets/${id}`, state: 'staged' };
+      return transaction(db, ['workspaces', 'assets'], 'readwrite', function* (tx) {
+        yield* workspace(tx, asset.workspaceId);
+        yield* request(tx.objectStore('assets').add(asset)); return asset;
+      });
+    },
+    async completeAsset(input) {
+      const { workspaceId, assetId } = input;
+      const hash = validate.hash(input.measuredHash), byteLength = validate.count(input.measuredByteLength, 'measuredByteLength');
+      return transaction(db, ['assets'], 'readwrite', function* (tx) {
+        const asset = yield* scoped<Asset>(tx, 'assets', workspaceId, assetId);
+        if (asset.hash !== hash || asset.byteLength !== byteLength) throw new StoreError('INTEGRITY', 'Uploaded bytes do not match the staged asset');
+        asset.state = 'ready'; yield* request(tx.objectStore('assets').put(asset)); return asset;
+      });
+    },
+  };
+}

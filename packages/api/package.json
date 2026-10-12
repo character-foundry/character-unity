@@ -1,0 +1,21 @@
+{
+  "name": "@character-unity/api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sessions": "./src/sessions.ts",
+    "./sync": "./src/sync.ts"
+  },
+  "scripts": {
+    "type-check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@character-unity/cards": "workspace:*",
+    "hono": "4.13.13",
+    "@character-unity/store": "workspace:*",
+    "@character-unity/archive-client": "workspace:*",
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry"
+  }
+}

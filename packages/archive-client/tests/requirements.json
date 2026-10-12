@@ -1,0 +1,12 @@
+{
+  "A01": "Original bytes and available assets round-trip exactly and the client performs only GET requests.",
+  "A02": "Bounded filtered pages have deterministic order and cursors are bound to a snapshot and query.",
+  "A03": "A manifest contains exactly the selected unique IDs or fails as a whole.",
+  "A04": "Missing assets are explicit; reads expose no repair, refresh, inbox or mutation route.",
+  "A05": "Snapshots own their metadata/bytes and changed corpora reject previous snapshot requests.",
+  "A06": "Invalid or unbounded requests fail; an unconfigured source reports unavailable.",
+  "A07": "Corrupt, truncated or excessive bytes are rejected before the client returns an original.",
+  "A08": "Clients validate wire versions, bounded response shapes and selection membership.",
+  "A09": "A response from another Archive or snapshot cannot satisfy an existing manifest.",
+  "A10": "HTTP reads honor abort/deadline signals and refuse redirects."
+}

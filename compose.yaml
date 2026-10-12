@@ -1,0 +1,23 @@
+services:
+  hub:
+    build: .
+    image: character-unity:local
+    init: true
+    restart: unless-stopped
+    environment:
+      UNITY_PUBLIC_ORIGIN: ${UNITY_PUBLIC_ORIGIN:?Set the exact public HTTPS origin, or http://127.0.0.1:9312 for local rehearsal}
+      UNITY_SYNC_ENABLED: ${UNITY_SYNC_ENABLED:-false}
+      UNITY_SYNC_WRITES_ENABLED: ${UNITY_SYNC_WRITES_ENABLED:-false}
+    ports:
+      - '127.0.0.1:9312:9312'
+    volumes:
+      - hub-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 15s
+
+volumes:
+  hub-data:

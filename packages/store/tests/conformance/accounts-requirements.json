@@ -1,0 +1,9 @@
+{
+  "A01": "Keys and sessions are independent random credentials; only digests persist, account identity is immutable and invalid credentials fail.",
+  "A02": "Idle and absolute session expiry are enforced by the server; activity never extends the absolute lifetime.",
+  "A03": "Login replacement, logout, key rotation and account disablement revoke the affected sessions; enabling does not resurrect them.",
+  "A04": "Accounts retain at most eight sessions and a new login stays usable without evicting another account's sessions.",
+  "A05": "Domain writes recheck session/account validity in their SQL batch and roll back after revocation, leaving no transient guards.",
+  "A06": "A key rotated before login commits cannot issue a usable session.",
+  "A07": "Provision unique immutable HTTPS actors only on explicit account creation, preserving default URNs and capturing inputs before async work."
+}

@@ -1,0 +1,7 @@
+{
+  "H01": "Exact selected revisions publish atomically, snapshot inputs and remain pinned after later edits.",
+  "H02": "Visibility filters reads; publication snapshots are immutable and policy updates compare versions and owners.",
+  "H03": "Fork commit atomically rechecks source revision, current policy and target ownership, rolling back on rejection.",
+  "H04": "Published descendants inherit current ancestor visibility and fork restrictions; private workspace copies remain owned.",
+  "H05": "Original-root pagination includes visible revisions and branches, excludes unrelated/hidden rows before limiting, and never returns hidden-row cursors."
+}

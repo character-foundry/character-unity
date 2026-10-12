@@ -1,0 +1,19 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Explicit approval for the build tools used by this scaffold.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  workerd: true
+  sharp: false
+
+# Archive supplies vectors explicitly. Do not install LanceDB's optional hosted
+# embedding clients or local model runtimes in the base profile.
+overrides:
+  '@lancedb/lancedb@0.37.1>@huggingface/transformers': '-'
+  '@lancedb/lancedb@0.37.1>openai': '-'
+
+minimumReleaseAgeExclude:
+  - '@cloudflare/workers-types@5.20261011.1'

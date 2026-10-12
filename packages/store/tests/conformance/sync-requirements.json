@@ -1,0 +1,12 @@
+{
+  "S01": "Pin exact actor/public keys to a local account/workspace and explicit operation scopes",
+  "S02": "Admit a nonce once under concurrency and preserve actor-wide replay state across rotation and restart",
+  "S03": "Recheck key, peer, account and scope revocation atomically during admission",
+  "S04": "Retain inclusive expiry boundaries, prune strictly expired entries and refuse stale claims",
+  "S05": "Propagate storage failures and roll back incomplete admission without memory fallback",
+  "S06": "Integrate the public Foundry verifier with durable callbacks and distinguish retries from receipts",
+  "S07": "Upgrade populated v5 stores preserving accounts, workspaces and migration checksums",
+  "S08": "Page peer/key inspection deterministically and report peer versus account suspension separately",
+  "S09": "Rotate keys atomically, roll back failures and permit only one concurrent replacement",
+  "S10": "Authorize protected reads only for exact admitted claims with current grants and inclusive expiry"
+}

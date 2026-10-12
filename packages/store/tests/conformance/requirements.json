@@ -1,0 +1,18 @@
+{
+  "S01": "Migrations are repeatable and reject modified, unknown or non-contiguous history.",
+  "S02": "Initialization refuses an existing database owned by another application without creating Unity tables.",
+  "S03": "Revision JSON and identity snapshot preserve opaque content and do not alias caller-owned objects.",
+  "S04": "Card creation, first revision, head, asset references and sealing commit atomically.",
+  "S05": "Revision save, head advancement, asset references and sealing commit atomically.",
+  "S06": "Only one writer may advance an expected head; conflicts leave no partial revision.",
+  "S07": "Forks retain parent and root provenance; equal content may have distinct revision identities.",
+  "S08": "Ordinary reads, saves and asset attachments are scoped to a workspace.",
+  "S09": "Committed revisions, asset manifests and provenance cannot be changed through SQL updates/deletes or late attachments.",
+  "S10": "Only completed assets can attach; completion requires matching measured digest and size.",
+  "S11": "Store input is bounded and rejects values that JSON serialization would silently transform.",
+  "S12": "Card and revision pagination uses deterministic unique ordering.",
+  "S13": "Fork failure rolls back the fork and leaves its source unchanged.",
+  "S14": "Migration DDL and its history row commit or roll back together.",
+  "S15": "Accepted-source provenance is immutable, workspace-scoped, ready-only and atomic with card creation.",
+  "S16": "A populated v1 schema upgrades without changing existing revisions or inventing source bytes."
+}

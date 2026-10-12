@@ -1,0 +1,8 @@
+{
+  "M01": "Preview is read-only, paginated and limited to unused assets older than an explicit cutoff of at least 24 hours",
+  "M02": "Every historical revision, original source and durable outbox frame prevents retirement",
+  "M03": "Retired assets cannot be completed, read or newly referenced; failed references roll back",
+  "M04": "SQL serializes retirement against attachment; stale previews never authorize deletion",
+  "M05": "Exact selections retire atomically; immutable retirement survives lost responses and restart",
+  "M06": "Version 8 upgrades retain history and conservatively date old assets; failed migration rolls back"
+}

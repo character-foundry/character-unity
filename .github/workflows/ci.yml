@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Install pinned pnpm
+        run: npm install --global pnpm@11.20.0
+      - run: pnpm bootstrap
+      - run: pnpm exec playwright install --with-deps chromium --only-shell
+      - run: pnpm check
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          package-manager-cache: false
+      - name: Build from the dependency lockfile and pinned external SDK
+        run: docker build --tag character-unity:ci .
+      - name: Prepare the pinned SDK for the independent HTTPS client
+        run: |
+          npm install --global pnpm@11.20.0
+          pnpm bootstrap
+      - name: Rehearse HTTPS hub, signed commands, persistence and local Architect
+        run: node scripts/verify-container.mjs character-unity:ci
+      - name: Build the separate Archive native runtime
+        run: docker build --target archive --tag character-unity-archive:ci .
+      - name: Rehearse Archive native search and read-only copied data
+        run: node scripts/verify-archive-container.mjs character-unity-archive:ci

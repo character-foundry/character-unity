@@ -1,0 +1,25 @@
+{
+  "name": "@character-unity/blob-store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./r2": "./src/r2.ts",
+    "./verify": "./src/verify.ts",
+    "./maintenance": "./src/maintenance.ts",
+    "./node-maintenance": "./src/node-maintenance.ts"
+  },
+  "scripts": {
+    "type-check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@noble/hashes": "2.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261011.1",
+    "miniflare": "5.20261006.1-alpha",
+    "esbuild": "0.28.2"
+  }
+}

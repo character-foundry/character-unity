@@ -1,0 +1,25 @@
+# Docker Engine on Linux: share the host network so the single-owner API can
+# stay bound to actual loopback. Bridge publishing is for the account hub only.
+services:
+  architect:
+    build: .
+    image: character-unity:local
+    init: true
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      UNITY_PROFILE: local
+      HOST: 127.0.0.1
+      PORT: ${ARCHITECT_PORT:-9314}
+      UNITY_WEB_DIR: /app/web/architect
+    volumes:
+      - architect-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 15s
+
+volumes:
+  architect-data:

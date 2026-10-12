@@ -1,0 +1,10 @@
+{
+  "B01": "Accepted bytes round-trip exactly and successful writes leave no temporary objects.",
+  "B02": "Digest mismatch, truncation and excess bytes do not publish an object.",
+  "B03": "Declared object lengths above the configured maximum are rejected.",
+  "B04": "Equal retries succeed and a different original cannot replace an existing key.",
+  "B05": "Concurrent writes of the same bytes are idempotent.",
+  "B06": "Empty objects remain distinguishable from missing objects.",
+  "B07": "Stalled upload cancellation publishes no object and cleans temporary storage.",
+  "B08": "Object keys are restricted to the immutable assets/originals namespaces."
+}

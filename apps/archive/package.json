@@ -1,0 +1,27 @@
+{
+  "name": "@character-unity/archive",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/node.ts",
+    "build": "esbuild src/node.ts src/native-rehearsal.ts src/generation-cli.ts --bundle --external:better-sqlite3 --external:@lancedb/lancedb --external:apache-arrow --platform=node --target=node24 --format=esm --outdir=dist",
+    "index": "tsx src/generation-cli.ts",
+    "start": "node dist/node.js",
+    "build:e2e": "esbuild tests/browser-fixture-cli.ts --bundle --external:better-sqlite3 --external:@lancedb/lancedb --external:apache-arrow --platform=node --target=node24 --format=esm --outdir=dist",
+    "type-check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@character-unity/archive-client": "workspace:*",
+    "@hono/node-server": "2.1.4",
+    "@lancedb/lancedb": "0.37.1",
+    "apache-arrow": "18.1.0",
+    "better-sqlite3": "13.0.3",
+    "hono": "4.13.13"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15"
+  }
+}

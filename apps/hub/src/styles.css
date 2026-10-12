@@ -1,0 +1,41 @@
+.hub-shell { max-width: 1280px; margin: auto; padding: 0 24px; }
+.hub-shell main { max-width: none; padding: 40px 0 80px; }
+.hub-shell h1 { font-size: clamp(32px, 5vw, 48px); }
+.hub-shell h2 { font-size: 22px; margin: 0 0 18px; }
+.hub-shell h3 { margin: 0; }
+.hub-shell button, .hub-shell input, .hub-shell select { font: inherit; }
+.hub-shell button { border: 1px solid #606c5d; border-radius: 7px; padding: 9px 14px; color: #edf4e8; background: #35452f; cursor: pointer; }
+.hub-shell button:disabled { opacity: .5; cursor: default; }
+.hub-shell button:hover:not(:disabled) { background: #465c3d; }
+.hub-shell button:focus-visible, .hub-shell input:focus-visible, .hub-shell select:focus-visible, .hub-shell a:focus-visible { outline: 2px solid #c6dda9; outline-offset: 3px; }
+.hub-shell label { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+.hub-shell input:not([type=checkbox]):not([type=file]), .hub-shell select { border: 1px solid #566155; padding: 9px; border-radius: 6px; background: #151d16; color: #edf4e8; min-width: 0; max-width: 100%; }
+.hub-shell input[type=password] { width: min(520px, 100%); }
+.hub-shell input[type=file] { max-width: 100%; }
+.hub-shell input[type=checkbox] { width: 19px; height: 19px; }
+.hub-shell a { color: #c6dda9; }
+.hub-panel { background: #1d2520; border: 1px solid #414b43; padding: 24px; border-radius: 12px; margin: 24px 0; }
+.hub-row, .hub-shell form { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.hub-row h2 { margin: 0 12px 0 0; }
+.hub-list, .hub-publications { list-style: none; padding: 0; }
+.hub-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 0; border-bottom: 1px solid #414b43; }
+.hub-publications li { padding: 20px 0; border-bottom: 1px solid #414b43; }
+.hub-muted { color: #b4c1b5; line-height: 1.5; }
+.hub-remotes { overflow-wrap: anywhere; }
+.hub-remotes dd { margin: 8px 0 18px; white-space: pre-wrap; }
+.hub-remotes h4 { margin-bottom: 8px; }
+.hub-lineage-root { display: flex; gap: 16px; flex-wrap: wrap; padding: 16px; border: 1px solid #76856b; border-radius: 8px; }
+.hub-lineage-nodes { list-style: none; padding: 0 0 0 20px; border-left: 2px solid #76856b; margin-left: 20px; }
+.hub-lineage-nodes > li { position: relative; padding: 16px; margin: 18px 0; border: 1px solid #54634e; border-radius: 8px; overflow-wrap: anywhere; }
+.hub-lineage-nodes > li::before { content: ''; position: absolute; left: -22px; top: 24px; width: 20px; border-top: 2px solid #76856b; }
+.hub-lineage-nodes > .hub-lineage-selected { border-color: #c6dda9; }
+.hub-lineage-nodes dl { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.hub-lineage-nodes dt { color: #b4c1b5; font-size: 13px; }
+.hub-lineage-nodes dd { margin: 4px 0; }
+.hub-lineage-edges { padding-left: 20px; line-height: 1.8; }
+.hub-error { color: #ffd1c8; padding: 15px; border: 1px solid #9e6861; border-radius: 8px; }
+.hub-editor { padding: 0; border: 0; margin: 0; min-width: 0; }
+.hub-shell [role=alertdialog] { color: #e9e7e1; margin: auto; width: min(540px, calc(100% - 32px)); }
+.hub-shell dialog::backdrop { background: #000b; }
+.hub-shell [role=alertdialog] button { margin: 8px 8px 0 0; }
+@media (max-width: 600px) { .hub-shell { padding: 0 16px; } .hub-panel { padding: 16px; } .hub-list li { align-items: start; flex-direction: column; } .hub-shell header { flex-wrap: wrap; padding: 14px 0; } }

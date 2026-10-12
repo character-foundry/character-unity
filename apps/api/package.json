@@ -1,0 +1,35 @@
+{
+  "name": "@character-unity/api-host",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/node.ts",
+    "build": "esbuild src/node.ts src/accounts-cli.ts src/peers-cli.ts src/assets-cli.ts --bundle --platform=node --target=node24 --format=esm --outdir=dist --external:better-sqlite3 --external:wrangler",
+    "accounts": "tsx src/accounts-cli.ts",
+    "assets": "tsx src/assets-cli.ts",
+    "start": "node dist/node.js",
+    "type-check": "tsc -p tsconfig.json && tsc -p tsconfig.worker.json",
+    "worker:types": "wrangler types",
+    "dev:worker": "wrangler dev --local --ip 127.0.0.1 --port 9312",
+    "build:worker": "wrangler deploy --dry-run --outdir dist/worker",
+    "peers": "tsx src/peers-cli.ts"
+  },
+  "dependencies": {
+    "@character-unity/api": "workspace:*",
+    "@character-unity/archive-client": "workspace:*",
+    "@character-unity/assets": "workspace:*",
+    "@character-unity/blob-store": "workspace:*",
+    "@character-unity/cards": "workspace:*",
+    "@character-unity/store": "workspace:*",
+    "@hono/node-server": "2.1.4",
+    "better-sqlite3": "13.0.3"
+  },
+  "devDependencies": {
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
+    "@types/better-sqlite3": "9.6.0",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.15",
+    "wrangler": "4.149.0"
+  }
+}

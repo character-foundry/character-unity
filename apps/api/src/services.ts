@@ -1,0 +1,26 @@
+import type { ConfiguredRemote } from '@character-unity/cards/connections';
+import { mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
+import { openNodeStore } from '@character-unity/store/node';
+import { createNodeBlobStore } from '@character-unity/blob-store/node';
+import { createArchiveClient } from '@character-unity/archive-client';
+import type { SessionProof } from '@character-unity/store/accounts';
+import { composeServices } from './compose.js';
+
+/** Local composition root. No Archive paths or remote bindings are inferred here. */
+export async function openLocalServices(options: { databasePath: string; blobDirectory: string; archiveOrigin?: string; remoteConnections?: readonly ConfiguredRemote[] }) {
+  if (options.databasePath !== ':memory:') await mkdir(dirname(options.databasePath), { recursive: true });
+  const database = await openNodeStore(options.databasePath);
+  try {
+    const blobs = await createNodeBlobStore(options.blobDirectory);
+    const archiveClient = options.archiveOrigin ? createArchiveClient(options.archiveOrigin) : undefined;
+    function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'>) {
+      return composeServices(storage, blobs, archiveClient, options.remoteConnections);
+    }
+    return { ...compose(database), accounts: database.accounts, sync: database.sync,
+      forSession: (proof: SessionProof) => compose(database.forSession(proof)), close: database.close };
+  } catch (error) {
+    database.close();
+    throw error;
+  }
+}

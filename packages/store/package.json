@@ -1,0 +1,31 @@
+{
+  "name": "@character-unity/store",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./node": "./src/node.ts",
+    "./d1": "./src/d1.ts",
+    "./driver": "./src/driver.ts",
+    "./migrations": "./src/migrations.ts",
+    "./validation": "./src/validation.ts",
+    "./hub": "./src/hub.ts",
+    "./accounts": "./src/accounts.ts",
+    "./sync": "./src/sync.ts",
+    "./sync-outbox": "./src/sync-outbox.ts",
+    "./asset-maintenance": "./src/asset-maintenance.ts"
+  },
+  "scripts": {
+    "type-check": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.3",
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "9.6.0",
+    "@cloudflare/workers-types": "5.20261011.1",
+    "miniflare": "5.20261006.1-alpha"
+  }
+}

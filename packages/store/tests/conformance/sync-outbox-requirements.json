@@ -1,0 +1,8 @@
+{
+  "O01": "A job pins one ready immutable frame, account, destination and saved revision; invalid bindings cannot enqueue.",
+  "O02": "Enqueue owns its input and is durable and idempotent for the same operation; conflicting intent and cross-workspace access fail.",
+  "O03": "An attempt persists before sending; only a matching immutable acknowledgment ends uncertainty, including concurrent retries and restart.",
+  "O04": "Current account/workspace and session authorization apply to reads and commit-time writes, including revocation during work.",
+  "O05": "Failed local batches leave no partial intent/attempt/receipt; lost local acknowledgment responses recover the committed receipt.",
+  "O06": "A populated v7 upgrades atomically without modifying prior migration checksums or stored data."
+}
