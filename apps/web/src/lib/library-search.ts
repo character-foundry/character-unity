@@ -8,7 +8,7 @@ import type { CardListItem } from '@/types/card';
 /** Library search state as it lives in the URL. Defaults are left out so links stay short. */
 export interface LibrarySearch {
   q: string;
-  /** A second expression from older links and saved searches; combined with `q` as `(q) (expr)`. */
+  /** The Filters drawer's advanced search; combined with the top box's `q` as `(q) (expr)`. */
   expr: string;
   tags: string[];
   tagMode: 'all' | 'any';

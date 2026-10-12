@@ -85,7 +85,8 @@ export function FilterBar({ search, update, replace, count, total }: {
   const followed = useFollowedCreators();
   const { settings, updateSettings } = useSettings();
   const [minTokens, setMinTokens] = useDebouncedText(search.minTokens, useCallback((value: string) => update({ minTokens: value }), [update]), 500);
-  const [open, setOpen] = useState(false);
+  const [expr, setExpr, flushExpr] = useDebouncedText(search.expr, useCallback((value: string) => update({ expr: value }), [update]), 600);
+  const [open, setOpen] = useState(() => !!search.expr.trim());
   const [help, setHelp] = useState(false);
   const [saved, setSaved] = useState<SavedSearch[]>(loadSavedSearches);
   const keep = (next: SavedSearch[]) => { setSaved(next); storeSavedSearches(next); };
@@ -133,7 +134,7 @@ export function FilterBar({ search, update, replace, count, total }: {
             {hidden.length > 0 && <span className="text-starlight/30"> · {hidden.join(', ')} hidden</span>}
           </span>
           {isFiltered(search) && (
-            <button type="button" onClick={() => { setMinTokens(''); replace({ ...emptySearch, sort: search.sort }); }}
+            <button type="button" onClick={() => { setMinTokens(''); setExpr(''); replace({ ...emptySearch, sort: search.sort }); }}
               className="text-[12px] font-medium text-nebula hover:underline">Clear</button>
           )}
           <Segmented label="Card size" value={settings.cardSize} options={sizes} onChange={(cardSize) => updateSettings({ cardSize })} />
@@ -142,6 +143,26 @@ export function FilterBar({ search, update, replace, count, total }: {
 
       {open && (
         <div id="library-filters" className="border-t border-nebula/20 px-3 py-2 sm:px-4">
+          <form onSubmit={(event) => { event.preventDefault(); flushExpr(); }} className="mb-2 flex items-center gap-2">
+            <label className={cn(box, 'min-w-0 flex-1 gap-2 px-2.5')}>
+              <span className="shrink-0 text-starlight/50">Advanced search</span>
+              <input aria-label="Advanced search" value={expr} spellCheck={false} onChange={(event) => setExpr(event.target.value)} style={bare}
+                placeholder='(vampire OR werewolf) "modern city" -tag:nsfw creator:ash'
+                className="h-full min-w-0 flex-1 p-0 font-mono text-[12px] text-starlight placeholder:text-starlight/30" />
+              {expr && <button type="button" aria-label="Clear advanced search" onClick={() => { setExpr(''); update({ expr: '' }); }} className="text-starlight/40 hover:text-starlight">✕</button>}
+            </label>
+            <button type="button" aria-expanded={help} onClick={() => setHelp(!help)} className="shrink-0 text-[12px] font-medium text-starlight/40 hover:text-starlight">
+              Syntax {help ? '▴' : '▾'}
+            </button>
+          </form>
+          {help && (
+            <ul className="mb-2 grid gap-x-4 gap-y-1 text-[12px] text-starlight/60 sm:grid-cols-2 lg:grid-cols-3">
+              {syntax.map(([example, note]) => (
+                <li key={example}><code className="rounded bg-cosmic-teal px-1.5 py-0.5 font-mono text-[11px] text-nebula">{example}</code> {note}</li>
+              ))}
+              <li className="text-starlight/40 sm:col-span-2 lg:col-span-3">Works here and in the top search box; both apply together. Plain words search name, creator, description, creator notes, personality, scenario, first message and tags. Write OR and NOT in capitals.</li>
+            </ul>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <TagPicker compact className="min-w-[200px] flex-1" label="Exclude tags" tone="exclude" value={search.exclude} options={tags} blocked={search.tags}
               onChange={(next) => update({ exclude: next })} placeholder="Exclude tags…" />
@@ -181,24 +202,7 @@ export function FilterBar({ search, update, replace, count, total }: {
             })}
             <button type="button" aria-pressed={search.favorite === 'not_fav'} onClick={() => update({ favorite: search.favorite === 'not_fav' ? '' : 'not_fav' })}
               className={pill(search.favorite === 'not_fav')}>Not favorited</button>
-            {search.expr.trim() && (
-              <span className={cn(pill(true), 'inline-flex items-center gap-1 font-mono')}>
-                {search.expr}
-                <button type="button" aria-label="Remove expression" onClick={() => update({ expr: '' })} className="opacity-70 hover:opacity-100">✕</button>
-              </span>
-            )}
-            <button type="button" aria-expanded={help} onClick={() => setHelp(!help)} className="ml-auto text-[12px] font-medium text-starlight/40 hover:text-starlight">
-              Search syntax {help ? '▴' : '▾'}
-            </button>
           </div>
-          {help && (
-            <ul className="mt-2 grid gap-x-4 gap-y-1 text-[12px] text-starlight/60 sm:grid-cols-2 lg:grid-cols-3">
-              {syntax.map(([example, note]) => (
-                <li key={example}><code className="rounded bg-cosmic-teal px-1.5 py-0.5 font-mono text-[11px] text-nebula">{example}</code> {note}</li>
-              ))}
-              <li className="text-starlight/40 sm:col-span-2 lg:col-span-3">Type these in the top search box. Plain words search name, creator, description, creator notes, personality, scenario, first message and tags. Write OR and NOT in capitals.</li>
-            </ul>
-          )}
         </div>
       )}
     </div>
