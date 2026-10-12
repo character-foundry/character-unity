@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" fill="none">
+  <!-- Background circle with gradient -->
+  <defs>
+    <linearGradient id="cosmicGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#5014a0;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#7814a0;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#6428a0;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Circle background -->
+  <circle cx="100" cy="100" r="90" fill="url(#cosmicGradient)" opacity="0.2"/>
+
+  <!-- CA text -->
+  <text x="100" y="130" font-family="Arial, sans-serif" font-size="80" font-weight="bold"
+        fill="url(#cosmicGradient)" text-anchor="middle">CA</text>
+</svg>

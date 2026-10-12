@@ -1,0 +1,256 @@
+@import "tailwindcss";
+
+:root {
+  /* Bisexual Lighting Color System - Pink/Blue Neon */
+  --deep-space: #0d0d1a;       /* Primary background - deep blue-black */
+  --cosmic-teal: #151528;      /* Secondary background - slightly lighter */
+  --starlight: #f0f0ff;        /* Primary text - soft white with blue tint */
+  --text-muted: #a0a0c0;       /* Muted text - readable on dark */
+
+  /* Bisexual flag inspired accents */
+  --bi-pink: #d946ef;          /* Hot pink/magenta - primary accent */
+  --bi-purple: #8b5cf6;        /* Purple - bridge color */
+  --bi-blue: #3b82f6;          /* Blue - secondary accent */
+
+  /* Semantic aliases */
+  --nebula: var(--bi-pink);    /* Primary accent */
+  --aurora: var(--bi-blue);    /* Secondary accent */
+  --solar: #f59e0b;            /* Warning - amber */
+  --void: #08080f;             /* Deepest black */
+
+  /* Lighter shades for better readability */
+  --pink-light: #f0abfc;       /* Light pink for hover states */
+  --blue-light: #93c5fd;       /* Light blue for hover states */
+  --purple-light: #c4b5fd;     /* Light purple */
+
+  /* Surface colors - lifted for contrast */
+  --surface-1: #1a1a2e;        /* Card backgrounds */
+  --surface-2: #252542;        /* Elevated surfaces */
+  --surface-3: #2f2f52;        /* Highest elevation */
+
+  /* Semantic mappings */
+  --background: var(--deep-space);
+  --background-secondary: var(--cosmic-teal);
+  --foreground: var(--starlight);
+  --accent: var(--nebula);
+  --success: #22c55e;          /* Green for success */
+  --error: #ef4444;            /* Red for errors */
+  --warning: var(--solar);
+
+  /* Card specific */
+  --card-bg: var(--surface-1);
+  --card-border: rgba(139, 92, 246, 0.3);
+  --card-border-hover: var(--bi-pink);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-background-secondary: var(--background-secondary);
+  --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-success: var(--success);
+  --color-error: var(--error);
+  --color-warning: var(--warning);
+
+  /* Bisexual lighting colors as Tailwind classes */
+  --color-deep-space: #0d0d1a;
+  --color-cosmic-teal: #151528;
+  --color-starlight: #f0f0ff;
+  --color-text-muted: #a0a0c0;
+
+  /* Accent colors */
+  --color-nebula: #d946ef;
+  --color-aurora: #3b82f6;
+  --color-solar: #f59e0b;
+  --color-void: #08080f;
+
+  /* Bi-flag colors */
+  --color-bi-pink: #d946ef;
+  --color-bi-purple: #8b5cf6;
+  --color-bi-blue: #3b82f6;
+  --color-pink-light: #f0abfc;
+  --color-blue-light: #93c5fd;
+  --color-purple-light: #c4b5fd;
+
+  /* Surface colors */
+  --color-surface-1: #1a1a2e;
+  --color-surface-2: #252542;
+  --color-surface-3: #2f2f52;
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Base styles */
+body {
+  background: linear-gradient(135deg, var(--deep-space) 0%, #12102a 40%, #0f1a2e 60%, var(--cosmic-teal) 100%);
+  min-height: 100vh;
+  color: var(--foreground);
+  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+}
+
+/* Utility classes */
+.cosmic-gradient {
+  background: linear-gradient(135deg, var(--bi-pink) 0%, var(--bi-purple) 50%, var(--bi-blue) 100%);
+}
+
+.gradient-text {
+  background: linear-gradient(135deg, var(--bi-pink) 0%, var(--bi-purple) 50%, var(--bi-blue) 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Bisexual lighting glow effects */
+.nebula-glow {
+  box-shadow: 0 0 20px rgba(217, 70, 239, 0.4), 0 0 40px rgba(217, 70, 239, 0.2);
+}
+
+.aurora-glow {
+  box-shadow: 0 0 20px rgba(59, 130, 246, 0.4), 0 0 40px rgba(59, 130, 246, 0.2);
+}
+
+.bi-glow {
+  box-shadow:
+    -10px 0 30px rgba(217, 70, 239, 0.3),
+    10px 0 30px rgba(59, 130, 246, 0.3);
+}
+
+.glass {
+  background: rgba(26, 26, 46, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+}
+
+.glass-card {
+  background: var(--surface-1);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-card:hover {
+  transform: translateY(-4px);
+  background: var(--surface-2);
+  box-shadow:
+    0 20px 40px rgba(217, 70, 239, 0.2),
+    0 10px 20px rgba(59, 130, 246, 0.15);
+  border-color: var(--bi-pink);
+}
+
+.nav-blur {
+  backdrop-filter: blur(20px);
+  background: rgba(13, 13, 26, 0.95);
+  border-bottom: 1px solid rgba(139, 92, 246, 0.2);
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--surface-1);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--bi-purple);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--bi-pink);
+}
+
+/* Tag/Filter chip styles */
+.filter-tag {
+  background: var(--surface-2);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  color: var(--purple-light);
+  transition: all 0.2s ease;
+}
+
+.filter-tag:hover {
+  background: var(--surface-3);
+  border-color: var(--bi-purple);
+  transform: scale(1.05);
+}
+
+.filter-tag.active {
+  background: linear-gradient(135deg, var(--bi-pink), var(--bi-purple));
+  border-color: transparent;
+  color: white;
+}
+
+/* Button styles */
+.btn-primary {
+  background: linear-gradient(135deg, var(--bi-pink), var(--bi-purple));
+  color: white;
+  transition: all 0.2s ease;
+}
+
+.btn-primary:hover {
+  box-shadow: 0 0 20px rgba(217, 70, 239, 0.4);
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  background: var(--surface-2);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  color: var(--starlight);
+  transition: all 0.2s ease;
+}
+
+.btn-secondary:hover {
+  background: var(--surface-3);
+  border-color: var(--bi-blue);
+}
+
+/* Text utilities */
+.text-gradient-bi {
+  background: linear-gradient(90deg, var(--bi-pink), var(--bi-purple), var(--bi-blue));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Link styles */
+a {
+  color: var(--bi-blue);
+  transition: color 0.2s ease;
+}
+
+a:hover {
+  color: var(--blue-light);
+}
+
+/* Selection highlight */
+::selection {
+  background: rgba(139, 92, 246, 0.4);
+  color: white;
+}
+
+/* Focus states for accessibility */
+:focus-visible {
+  outline: 2px solid var(--bi-purple);
+  outline-offset: 2px;
+}
+
+/* Input styles */
+input, textarea, select {
+  background: var(--surface-1);
+  border: 1px solid rgba(139, 92, 246, 0.3);
+  color: var(--starlight);
+  transition: all 0.2s ease;
+}
+
+input:focus, textarea:focus, select:focus {
+  border-color: var(--bi-purple);
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2);
+}
+
+input::placeholder, textarea::placeholder {
+  color: var(--text-muted);
+}
+

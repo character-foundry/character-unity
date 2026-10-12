@@ -1,6 +1,6 @@
 # Store conformance discrepancies
 
-No intentional SQLite/local-D1 contract divergences are accepted for S01–S16,
+No intentional SQLite/local-D1 contract divergences are accepted for S01–S17,
 H01–H05 or A01–A06. D1 includes trigger side effects in mutation change counts;
 account operations interpret any positive count as the successful single-account
 update and separately verify revoked sessions in the shared tests.

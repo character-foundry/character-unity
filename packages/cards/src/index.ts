@@ -1,6 +1,9 @@
 import { canonicalJson, createCardRevision, readCardLineage, verifyCardLineage } from '@character-foundry/character-foundry/identity';
 import { StoreError } from '@character-unity/store';
-import type { CardDocument, UnityStore } from '@character-unity/store';
+import type { CardDocument, CardSummaryQuery, UnityStore } from '@character-unity/store';
+import { summarizeCard } from './summary.js';
+import type { CardSummaryList } from './summary.js';
+export type { CardSummary, CardSummaryList } from './summary.js';
 import type { AssetService } from '@character-unity/assets';
 import { prepareImport } from './import.js';
 import { revisionIdentityOptions } from './revision-assets.js';
@@ -33,6 +36,11 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     async list(actor: Actor, workspaceId: string, options: { limit?: number; afterId?: string } = {}) {
       await authorize(actor, workspaceId);
       return store.listCards(workspaceId, options);
+    },
+    async summaries(actor: Actor, workspaceId: string, query: CardSummaryQuery = {}): Promise<CardSummaryList> {
+      await authorize(actor, workspaceId);
+      const page = await store.listCardSummaries(workspaceId, query);
+      return { cards: page.items.map(summarizeCard), total: page.total };
     },
     open,
     async history(actor: Actor, workspaceId: string, cardId: string, options: HistoryOptions = {}): Promise<HistoryPage> {

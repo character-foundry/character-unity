@@ -42,6 +42,18 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
       ...(limit ? { limit: Number(limit) } : {}), ...(c.req.query('afterId') ? { afterId: c.req.query('afterId')! } : {}),
     }) });
   });
+  routes.get('/:workspaceId/card-summaries', async (c) => {
+    const { cards, actor } = await required(c);
+    const params = new URL(c.req.url).searchParams;
+    if ([...params.keys()].some((key) => !['q', 'tag', 'offset', 'limit'].includes(key) || params.getAll(key).length !== 1)
+      || (params.has('offset') && !/^(0|[1-9][0-9]{0,6})$/.test(params.get('offset')!))
+      || (params.has('limit') && !/^[1-9][0-9]{0,2}$/.test(params.get('limit')!))
+      || (params.get('q')?.length ?? 0) > 200 || (params.get('tag')?.length ?? 0) > 200) throw new CardError('INVALID_INPUT', 'Invalid library query');
+    return c.json(await cards.summaries(actor, c.req.param('workspaceId'), {
+      ...(params.get('q') ? { q: params.get('q')! } : {}), ...(params.get('tag') ? { tag: params.get('tag')! } : {}),
+      ...(params.has('offset') ? { offset: Number(params.get('offset')) } : {}), ...(params.has('limit') ? { limit: Number(params.get('limit')) } : {}),
+    }));
+  });
   routes.post('/:workspaceId/imports', async (c) => {
     const { cards, actor } = await required(c);
     const filename = c.req.header('x-file-name') ?? 'original';

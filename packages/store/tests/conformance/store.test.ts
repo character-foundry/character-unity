@@ -200,6 +200,28 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
       expect(grandchild.revision.parentRevisionId).toBe(fork.revision.id);
     });
 
+    it('[S17] lists library summaries newest-touched first with filters, totals and fork counts', async () => {
+      const doc = (name: string, creator: string, tags: string[]): CardDocument => ({ spec: 'chara_card_v2', data: { name, creator, tags } });
+      const a = await store.createCard({ ...input, workspaceId, document: doc('Aster 50%', 'Mapmaker', ['Fantasy', 'Guide']) });
+      const b = await store.createCard({ ...input, workspaceId, document: doc('Briar', 'Gardener', ['fantasy']) });
+      await store.createCard({ ...input, workspaceId, document: doc('Cinder', 'Smith', ['SciFi']) });
+      await store.saveRevision({ ...input, workspaceId, cardId: a.card.id, expectedHead: a.revision.id, document: doc('Aster 50%', 'Mapmaker', ['Fantasy', 'Guide']) });
+      await store.forkCard({ ...input, workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: b.revision.id });
+      const all = await store.listCardSummaries(workspaceId);
+      expect(all.total).toBe(4);
+      expect(all.items[1]!.card.id).toBe(a.card.id);
+      expect(all.items[1]!.revision.sequence).toBe(2);
+      expect(all.items.find((item) => item.card.id === b.card.id)!.forkCount).toBe(1);
+      const tagged = await store.listCardSummaries(workspaceId, { tag: 'FANTASY' });
+      expect(tagged.total).toBe(2);
+      expect((await store.listCardSummaries(workspaceId, { q: 'gard' })).items.map((item) => item.card.id)).toEqual([b.card.id]);
+      expect((await store.listCardSummaries(workspaceId, { q: '50%' })).total).toBe(1);
+      expect((await store.listCardSummaries(workspaceId, { q: '_' })).total).toBe(0);
+      const page = await store.listCardSummaries(workspaceId, { limit: 2, offset: 2 });
+      expect(page).toMatchObject({ total: 4 });
+      expect(page.items.map((item) => item.card.id)).toEqual(all.items.slice(2).map((item) => item.card.id));
+    });
+
     it('[S08] scopes reads, saves and asset references to their workspace', async () => {
       const base = await store.createCard({ ...input, workspaceId });
       const asset = await readyAsset();

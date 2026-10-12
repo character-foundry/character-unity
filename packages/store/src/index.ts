@@ -4,7 +4,7 @@ import { createHubStore } from './hub.js';
 import type { Statement, StoreDriver } from './driver.js';
 import { inspectSchema, schemaVersion } from './migrations.js';
 import { StoreError } from './types.js';
-import type { Asset, Card, CardSource, CardSourceInput, ContentIdentity, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
+import type { Asset, Card, CardSource, CardSourceInput, CardSummaryPage, CardSummaryQuery, ContentIdentity, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
 import * as validate from './validation.js';
 export * from './types.js';
 
@@ -189,6 +189,34 @@ export function createStore(driver: StoreDriver) {
     async listCards(workspaceId: string, options: { limit?: number; afterId?: string } = {}) {
       return driver.query<Card>({ sql: `SELECT ${cardColumns} FROM unity_cards WHERE workspace_id = ? AND id > ? ORDER BY id LIMIT ?`,
         params: [workspaceId, options.afterId ?? '', validate.limit(options.limit)] });
+    },
+    /** Library browsing: newest-touched first, optional name/creator text and exact tag filters. */
+    async listCardSummaries(workspaceId: string, query: CardSummaryQuery = {}): Promise<CardSummaryPage> {
+      const limit = validate.limit(query.limit ?? 48), offset = validate.count(query.offset ?? 0, 'offset');
+      const where = ['c.workspace_id = ?', 'c.head_revision_id IS NOT NULL'];
+      const params: (string | number)[] = [validate.text(workspaceId, 'workspaceId')];
+      if (query.q?.trim()) {
+        const like = `%${query.q.trim().toLowerCase().replace(/[\\%_]/g, (char) => `\\${char}`)}%`;
+        where.push(`(lower(json_extract(r.document_json, '$.data.name')) LIKE ? ESCAPE '\\'
+          OR lower(json_extract(r.document_json, '$.data.creator')) LIKE ? ESCAPE '\\')`);
+        params.push(like, like);
+      }
+      if (query.tag?.trim()) {
+        where.push(`EXISTS (SELECT 1 FROM json_each(r.document_json, '$.data.tags') t WHERE lower(t.value) = ?)`);
+        params.push(query.tag.trim().toLowerCase());
+      }
+      const from = `FROM unity_cards c JOIN unity_revisions r ON r.id = c.head_revision_id WHERE ${where.join(' AND ')}`;
+      const [count] = await driver.query<{ total: number }>({ sql: `SELECT count(*) AS total ${from}`, params });
+      const rows = await driver.query<Card & { sourceFormat: string | null; forkCount: number }>({ sql: `SELECT
+          c.id, c.workspace_id AS workspaceId, c.head_revision_id AS headRevisionId, c.original_hash AS originalHash,
+          c.forked_from_revision_id AS forkedFromRevisionId, c.created_at AS createdAt,
+          (SELECT json_extract(s.provenance_json, '$.format') FROM unity_card_sources s WHERE s.card_id = c.id) AS sourceFormat,
+          (SELECT count(*) FROM unity_cards f JOIN unity_revisions fr ON fr.id = f.forked_from_revision_id
+            WHERE fr.card_id = c.id AND f.workspace_id = c.workspace_id) AS forkCount
+        ${from} ORDER BY r.created_at DESC, c.id LIMIT ? OFFSET ?`, params: [...params, limit, offset] });
+      const items = await Promise.all(rows.map(async ({ sourceFormat, forkCount, ...card }) =>
+        ({ card, revision: await getRevision(workspaceId, card.headRevisionId), sourceFormat, forkCount: Number(forkCount) })));
+      return { items, total: Number(count?.total ?? 0) };
     },
     async listRevisions(workspaceId: string, cardId: string, options: { limit?: number; afterSequence?: number } = {}) {
       const rows = await driver.query<{ id: string }>({ sql: `SELECT id FROM unity_revisions

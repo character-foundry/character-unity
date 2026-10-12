@@ -6,7 +6,9 @@ import type { openLocalServices } from './services.js';
 export function createLocalApi(services: Awaited<ReturnType<typeof openLocalServices>>, options: { origin: () => string }) {
   const actor = Object.freeze({ id: 'local', uri: 'urn:unity:user:local' });
   const secret = randomBytes(32).toString('base64url');
-  const webOrigins = ['http://127.0.0.1:9310', 'http://127.0.0.1:9311', 'http://localhost:9310', 'http://localhost:9311'];
+  const webOrigins = ['http://127.0.0.1:9310', 'http://127.0.0.1:9311', 'http://localhost:9310', 'http://localhost:9311',
+    // Extra loopback dev origins, e.g. the unified web app: UNITY_WEB_ORIGINS=http://127.0.0.1:9430
+    ...(process.env.UNITY_WEB_ORIGINS ?? '').split(',').map((value) => value.trim()).filter((value) => /^http:\/\/(127\.0\.0\.1|localhost):[0-9]{2,5}$/.test(value))];
   function trusted(request: Request, mutation: boolean) {
     const allowed = new Set([options.origin(), ...webOrigins]);
     if (!allowed.has(new URL(request.url).origin) || request.headers.get('sec-fetch-site') === 'cross-site') return false;

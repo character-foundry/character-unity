@@ -1,6 +1,6 @@
 # Store contract coverage
 
-Specification: internal store contract v0.1 in `requirements.json` (S01–S16).
+Specification: internal store contract v0.1 in `requirements.json` (S01–S17).
 Every listed clause is a MUST, tested against both native SQLite and local D1.
 The shared suite is `store.test.ts`. These are specification-derived tests, not
 outputs captured from the unsafe predecessor implementation.

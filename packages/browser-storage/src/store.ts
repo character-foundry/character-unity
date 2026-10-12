@@ -125,6 +125,37 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         return yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(range, limit));
       });
     },
+    /** Same ordering and filters as the SQL store; a browser library is small enough to scan. */
+    async listCardSummaries(workspaceId, query = {}) {
+      const limit = validate.limit(query.limit ?? 48), offset = validate.count(query.offset ?? 0, 'offset');
+      const text = query.q?.trim().toLowerCase(), tag = query.tag?.trim().toLowerCase();
+      const scan = await transaction(db, ['cards', 'revisions', 'sources'], 'readonly', function* (tx) {
+        const cards = yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
+        const rows: { card: Card; revision: Revision; source: CardSource | undefined }[] = [];
+        for (const card of cards) {
+          if (!card.headRevisionId) continue;
+          rows.push({ card, revision: yield* scoped<Revision>(tx, 'revisions', workspaceId, card.headRevisionId), source: yield* get<CardSource>(tx, 'sources', card.id) });
+        }
+        return rows;
+      });
+      const revisionCards = new Map(scan.map(({ revision }) => [revision.id, revision.cardId]));
+      const forks = new Map<string, number>();
+      for (const { card } of scan) {
+        const parentCard = card.forkedFromRevisionId ? revisionCards.get(card.forkedFromRevisionId) : undefined;
+        if (parentCard) forks.set(parentCard, (forks.get(parentCard) ?? 0) + 1);
+      }
+      const field = (revision: Revision, key: string) => {
+        const value = (revision.document as { data?: Record<string, unknown> }).data?.[key];
+        return typeof value === 'string' ? value.toLowerCase() : '';
+      };
+      const matches = scan.filter(({ revision }) => (!text || field(revision, 'name').includes(text) || field(revision, 'creator').includes(text))
+        && (!tag || ((revision.document as { data?: { tags?: unknown } }).data?.tags as unknown[] | undefined ?? []).some((value) => typeof value === 'string' && value.toLowerCase() === tag)))
+        .sort((a, b) => b.revision.createdAt.localeCompare(a.revision.createdAt) || a.card.id.localeCompare(b.card.id));
+      return { total: matches.length, items: matches.slice(offset, offset + limit).map(({ card, revision, source }) => ({
+        card, revision, forkCount: forks.get(card.id) ?? 0,
+        sourceFormat: typeof (source?.provenance as { format?: unknown } | undefined)?.format === 'string' ? (source!.provenance as { format: string }).format : null,
+      })) };
+    },
     async listRevisions(workspaceId, cardId, options = {}) {
       const range = IDBKeyRange.bound([workspaceId, cardId, validate.count(options.afterSequence ?? 0, 'afterSequence')], [workspaceId, cardId, []], true);
       const limit = validate.limit(options.limit);
