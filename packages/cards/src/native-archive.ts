@@ -108,7 +108,7 @@ export function createNativeArchiveService(cards: CardService, options: NativeAr
           throw new CardError('UNSUPPORTED_FORMAT', `The library can't keep everything in this ${container.name} yet (for example a RisuAI module), so it stays in the Archive only.`);
         }
         if (error instanceof Error && error.name === 'IdentityError' && /asset bindings/i.test(error.message)) {
-          throw new CardError('TOO_LARGE', `This ${container.name} has more assets than Foundry's card identity allows (256), so it stays in the Archive only.`);
+          throw new CardError('TOO_LARGE', `This ${container.name} has more assets than Foundry's card identity allows (8192), so it stays in the Archive only.`);
         }
         if (error instanceof CardError && error.code === 'ASSET_UNAVAILABLE') {
           throw new CardError('ASSET_UNAVAILABLE', `This ${container.name} lists files it does not contain, so the library can't take it; it stays in the Archive.`);

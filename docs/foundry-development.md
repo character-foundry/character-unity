@@ -7,7 +7,7 @@ the same SDK as a development dependency. All resolve to sibling `.unity-foundry
 by `pnpm bootstrap`. The first identity
 implementation is an unreleased additive change on `feat/unity-identity`, pinned
 for this verification to commit
-[`0e464d69f5722073845954f06c46affb68539eb4`](https://github.com/character-foundry/character-foundry/commit/0e464d69f5722073845954f06c46affb68539eb4).
+[`76990644da2b8d79bd57a2a7f3c6e46a5b6aee92`](https://github.com/character-foundry/character-foundry/commit/76990644da2b8d79bd57a2a7f3c6e46a5b6aee92).
 Review: [Foundry draft PR #52](https://github.com/character-foundry/character-foundry/pull/52).
 
 It adds `@character-foundry/character-foundry/identity`: canonical content identity,
@@ -27,7 +27,7 @@ To check another isolated build explicitly:
 
 ```sh
 git clone https://github.com/character-foundry/character-foundry.git ../character-foundry-sdk
-git -C ../character-foundry-sdk checkout --detach 0e464d69f5722073845954f06c46affb68539eb4
+git -C ../character-foundry-sdk checkout --detach 76990644da2b8d79bd57a2a7f3c6e46a5b6aee92
 cd ../character-foundry-sdk
 pnpm install --frozen-lockfile
 pnpm --filter @character-foundry/character-foundry... build
