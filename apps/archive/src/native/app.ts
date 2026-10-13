@@ -4,6 +4,7 @@ import { resolveSettings } from '@character-unity/scraper-kit';
 import type { ScraperPlugin } from '@character-unity/scraper-kit';
 import { NativeArchiveError } from './store.js';
 import type { NativeArchive } from './store.js';
+import { ArchiveError } from '@character-unity/archive-client/contract';
 import { RunConflictError } from './scheduler.js';
 import type { Scheduler } from './scheduler.js';
 import { isArchiveFlag, isArchiveSort } from './query.js';
@@ -18,10 +19,18 @@ class RequestError extends Error {
 function invalid(message: string): never { throw new RequestError(400, 'INVALID_INPUT', message); }
 const list = (value: string | null) => (value ?? '').split(',').map((item) => item.trim()).filter(Boolean);
 
+/** Both storage layouts expose the same read and administration interface. */
+export type ArchiveBackend = Pick<NativeArchive, 'card' | 'object' | 'source' | 'saveSource' | 'lastFinishedRun' | 'runs' | 'block'> & {
+  list(query?: ArchiveQuery): ReturnType<NativeArchive['list']> | Promise<ReturnType<NativeArchive['list']>>;
+  files(id: string): ReturnType<NativeArchive['files']> | Promise<ReturnType<NativeArchive['files']>>;
+  tags(): ReturnType<NativeArchive['tags']>;
+  status(): ReturnType<NativeArchive['status']>;
+};
+
 /** Parses the card query the read API accepts (the same names the web app uses). */
 export function readQuery(url: string): ArchiveQuery {
   const params = new URL(url).searchParams;
-  const allowed = ['q', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'creators', 'sort', 'offset', 'limit'];
+  const allowed = ['q', 'mode', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'creators', 'sort', 'offset', 'limit'];
   if (url.length > 20_000 || [...params.keys()].some((key) => !allowed.includes(key) || params.getAll(key).length !== 1)) invalid('Invalid Archive query');
   const has = list(params.get('has'));
   if (has.some((flag) => !isArchiveFlag(flag))) invalid('Unknown Archive flag');
@@ -34,10 +43,15 @@ export function readQuery(url: string): ArchiveQuery {
     return Number(value);
   };
   const provider = params.get('provider') ?? '';
+  const mode = params.get('mode');
+  if (mode !== null && !['lexical', 'semantic', 'hybrid'].includes(mode)) invalid('Unknown Archive search mode');
+  if (mode && !params.get('q')?.trim()) invalid('A search mode requires a query');
   if (provider && !/^[a-z0-9-]{1,32}$/.test(provider)) invalid('Invalid provider');
   const query: ArchiveQuery = { q: (params.get('q') ?? '').slice(0, 2000), tags: list(params.get('tags')), tagMode: params.get('match') === 'any' ? 'any' : 'all',
-    exclude: list(params.get('exclude')), has: has as ArchiveFlag[], creators: list(params.get('creators')).slice(0, 500), sort };
+    exclude: list(params.get('exclude')), has: has as ArchiveFlag[], creators: list(params.get('creators')).slice(0, 500) };
+  if (params.has('sort')) query.sort = sort;
   if (provider) query.provider = provider;
+  if (mode) query.mode = mode as NonNullable<ArchiveQuery['mode']>;
   const minTokens = number('minTokens', 10_000_000), offset = number('offset', 10_000_000), limit = number('limit', 100);
   if (minTokens) query.minTokens = minTokens;
   if (offset !== undefined) query.offset = offset;
@@ -54,12 +68,14 @@ function sameToken(given: string, expected: string) {
  * The native Archive's HTTP surface. Reads are open to the local app; the admin routes (source settings,
  * credentials, runs, blocking) need the admin token and exist so the app's Settings page can drive scraping.
  */
-export function createNativeArchiveApp(archive: NativeArchive, scheduler: Scheduler, plugins: readonly ScraperPlugin[], options: { adminToken?: string } = {}) {
+export function createNativeArchiveApp(archive: ArchiveBackend, scheduler: Scheduler, plugins: readonly ScraperPlugin[], options: { adminToken?: string } = {}) {
   const app = new Hono();
   app.get('/api/health', (c) => c.json({ service: 'unity-archive', status: 'ok', stage: 'native' }));
   app.onError((error, c) => {
     if (error instanceof RequestError) return c.json({ error: { code: error.code, message: error.message } }, error.status);
     if (error instanceof NativeArchiveError) return c.json({ error: { code: error.code, message: error.message } }, error.code === 'NOT_FOUND' ? 404 : 400);
+    if (error instanceof ArchiveError) return c.json({ error: { code: error.code, message: error.message } },
+      error.code === 'NOT_FOUND' ? 404 : error.code === 'INVALID_INPUT' ? 400 : error.code === 'TOO_LARGE' ? 413 : 503);
     if (error instanceof RunConflictError) return c.json({ error: { code: 'RUNNING', message: error.message, runId: error.runId } }, 409);
     console.log(JSON.stringify({ event: 'archive-request-failed', message: error instanceof Error ? error.message : String(error) }));
     return c.json({ error: { code: 'UNAVAILABLE', message: 'The Archive could not answer' } }, 503);
@@ -72,9 +88,9 @@ export function createNativeArchiveApp(archive: NativeArchive, scheduler: Schedu
     return { provider: source.provider, label: source.label, enabled: record.enabled, running: scheduler.running(source.provider), lastRun: archive.lastFinishedRun(source.provider) };
   };
   app.get(`${nativeReadPrefix}/status`, (c) => c.json({ ...archive.status(), sources: plugins.map(sourceStatus) }));
-  app.get(`${nativeReadPrefix}/cards`, (c) => c.json(archive.list(readQuery(c.req.url))));
+  app.get(`${nativeReadPrefix}/cards`, async (c) => c.json(await archive.list(readQuery(c.req.url))));
   app.get(`${nativeReadPrefix}/cards/:id`, async (c) => c.json(await archive.card(c.req.param('id'))));
-  app.get(`${nativeReadPrefix}/cards/:id/files`, (c) => c.json({ files: archive.files(c.req.param('id')) }));
+  app.get(`${nativeReadPrefix}/cards/:id/files`, async (c) => c.json({ files: await archive.files(c.req.param('id')) }));
   app.get(`${nativeReadPrefix}/tags`, (c) => c.json({ tags: archive.tags() }));
   app.get(`${nativeReadPrefix}/objects/:hash`, async (c) => {
     const hash = c.req.param('hash');
@@ -122,6 +138,7 @@ export function createNativeArchiveApp(archive: NativeArchive, scheduler: Schedu
     }
     archive.saveSource({ provider: source.provider, enabled: body.enabled === undefined ? current.enabled : body.enabled as boolean,
       intervalMinutes: interval, settings: resolveSettings(source, settings as Record<string, unknown>), secrets });
+    scheduler.reschedule();
     return c.json(describe(source));
   });
   app.post(`${nativeAdminPrefix}/sources/:provider/runs`, (c) => {

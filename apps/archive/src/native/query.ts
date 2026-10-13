@@ -10,6 +10,8 @@ export const isArchiveSort = (value: string): value is ArchiveSort => (archiveSo
 export const isArchiveFlag = (value: string): value is ArchiveFlag => (archiveFlags as readonly string[]).includes(value);
 
 export interface ArchiveQuery {
+  /** Existing LanceDB search; semantic modes require a compatible configured query embedder. */
+  mode?: 'lexical' | 'semantic' | 'hybrid';
   /** The library's search syntax: words, "phrases", OR, NOT/-, parentheses, name:, creator:, description:, tag:. */
   q?: string;
   tags?: readonly string[];

@@ -1,5 +1,41 @@
 # Implementation status and acceptance gates
 
+## Archive-first correction, 2026-10-13
+
+The [owner direction](../../1013_archive_foundation.md) and
+[accepted storage decision](adr/0001-existing-archive-and-library-references.md)
+supersede the separate native-store rollout. Existing Archive schema/file storage
+and LanceDB stay authoritative; new scrapes must write into that same database.
+Complete and verify that foundation before further editor/viewer work.
+
+At the start of this correction, existing-storage reads/writes and LanceDB reuse
+were not implemented. The native prototype uses a different schema and database.
+General file imports do not deduplicate cards; Archive imports only perform a
+sequential source-ID lookup before copying. Favorites require owned Unity cards;
+reference-only membership, cross-store import deduplication and a first saved
+fork directly from an Archive reference remain later Unity work. Fork drafts
+already wait for Save for owned library parents.
+
+Implemented now: an explicit existing-storage backend, additive bookkeeping in
+the same `cards.db`, accepted-file reuse, retained versions, source/alias
+deduplication and blacklist carryover. Existing lexical/vector tables and active
+generations are reused. Bounded queue drains preserve failed/newer work and reuse
+unchanged embeddings. Scheduling wakes for due work and has no disabled-source
+polling. Response downloads enforce byte limits during streaming; Chub keys stay
+on gateway requests. Type checks, lint and all 507 tests pass, including native
+SQLite/D1 conformance; the Archive build passes. A preexisting chat conformance
+suite-name mismatch was corrected so its six passing cases are recognized.
+
+Read-only verification against the real 147,265-card corpus passed all four
+providers, exact original digests, lexical and anchored Boolean search. No new
+database tables or corpus copy were created. Ten idle seconds used zero CPU
+ticks after the reads. See [runtime/configuration and evidence limits](archive-existing-storage.md).
+
+Operational acceptance must demonstrate source/alias deduplication, same-database
+scrapes, original/version retention, queue/index compatibility, recovery, bounded
+work and measured quiet idle behavior. Synthetic tests do not close real-corpus
+or live-writer takeover gates. No live database cutover has occurred.
+
 ## Foundation scope
 
 The local repository foundation is implemented: external Foundry primitives,

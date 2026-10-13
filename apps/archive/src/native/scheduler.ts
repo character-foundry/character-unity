@@ -10,14 +10,56 @@ export class RunConflictError extends Error {
  * Runs sources one run per source at a time, on demand or when an enabled source's interval has passed
  * since its last run. Single process: the Archive service is the only writer.
  */
-export function createScheduler(archive: NativeArchive, plugins: readonly ScraperPlugin[], options: {
-  fetch?: Fetch; log?: (event: Record<string, unknown>) => void; tickMs?: number; now?: () => number;
+export function createScheduler(archive: Pick<NativeArchive, 'sink' | 'source' | 'startRun' | 'progressRun' | 'finishRun' | 'lastFinishedRun'>, plugins: readonly ScraperPlugin[], options: {
+  fetch?: Fetch; log?: (event: Record<string, unknown>) => void;
+  /** Retry delay after a scheduling failure; successful scheduling never polls. */
+  tickMs?: number; now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Drains derived work after the scrape outcome is recorded; shutdown aborts and waits for it. */
+  onFinished?: (signal: AbortSignal) => Promise<void>;
 } = {}) {
   const log = options.log ?? (() => undefined);
   const now = options.now ?? Date.now;
   const running = new Map<string, { runId: number; controller: AbortController; done: Promise<void> }>();
-  let timer: ReturnType<typeof setInterval> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let begun = false, stopped = false;
+
+  function wakeAfter(delay: number) {
+    timer = setTimeout(() => {
+      timer = undefined;
+      try { due(); } catch (error) { retrySchedule(error); }
+    }, Math.min(delay, 2_147_483_647));
+    timer.unref?.();
+  }
+
+  function retrySchedule(error: unknown) {
+    log({ event: 'scrape-schedule-failed', message: error instanceof Error ? error.message : String(error) });
+    if (!begun || stopped) return;
+    clearTimeout(timer);
+    wakeAfter(options.tickMs ?? 60_000);
+  }
+
+  function nextAt(provider: string, intervalMinutes: number) {
+    const last = archive.lastFinishedRun(provider);
+    const lastAt = last ? Date.parse(last.finishedAt ?? last.startedAt) : NaN;
+    return Number.isFinite(lastAt) ? lastAt + intervalMinutes * 60_000 : now();
+  }
+
+  function schedule(minimumDelay = 0) {
+    clearTimeout(timer); timer = undefined;
+    if (!begun || stopped) return;
+    let next = Infinity;
+    for (const source of plugins) {
+      if (running.has(source.provider)) continue;
+      const record = archive.source(source.provider);
+      if (record.enabled) next = Math.min(next, nextAt(source.provider, record.intervalMinutes));
+    }
+    if (Number.isFinite(next)) wakeAfter(Math.max(minimumDelay, next - now(), 0));
+  }
+
+  function reschedule(minimumDelay = 0) {
+    try { schedule(minimumDelay); } catch (error) { retrySchedule(error); }
+  }
 
   function plugin(provider: string) {
     const found = plugins.find((item) => item.provider === provider);
@@ -25,7 +67,8 @@ export function createScheduler(archive: NativeArchive, plugins: readonly Scrape
     return found;
   }
 
-  function start(provider: string, trigger: 'manual' | 'schedule') {
+  function launch(provider: string, trigger: 'manual' | 'schedule') {
+    if (stopped) throw new Error('The Archive scheduler has stopped');
     const source = plugin(provider);
     const current = running.get(provider);
     if (current) throw new RunConflictError(current.runId);
@@ -42,44 +85,62 @@ export function createScheduler(archive: NativeArchive, plugins: readonly Scrape
       onProgress: progress, ...(options.fetch ? { fetch: options.fetch } : {}), ...(options.sleep ? { sleep: options.sleep } : {}) })
       .catch((error: unknown) => ({ status: 'failed' as const, listed: 0, added: 0, updated: 0, unchanged: 0, skipped: 0, blocked: 0, errors: 1,
         error: error instanceof Error ? error.message : String(error) }))
-      .then((result) => {
+      .then(async (result) => {
         archive.finishRun(runId, result);
         log({ event: 'scrape-finished', provider, runId, ...result });
+        if (options.onFinished && !controller.signal.aborted) {
+          try { await options.onFinished(controller.signal); }
+          catch {
+            // Hook errors can contain request credentials. Keep the durable scrape outcome and report
+            // indexing separately without exposing the error or clearing its queued work.
+            if (!controller.signal.aborted) log({ event: 'archive-index-failed', provider, runId,
+              message: 'Search indexing did not finish; queued work is retained' });
+          }
+        }
       })
-      .finally(() => running.delete(provider));
+      .finally(() => { running.delete(provider); reschedule(); });
     running.set(provider, { runId, controller, done });
     return runId;
   }
 
   function due() {
-    for (const source of plugins) {
-      const record = archive.source(source.provider);
-      if (!record.enabled || running.has(source.provider)) continue;
-      const last = archive.lastFinishedRun(source.provider);
-      const lastAt = last ? Date.parse(last.finishedAt ?? last.startedAt) : -Infinity;
-      if (now() - lastAt >= record.intervalMinutes * 60_000) start(source.provider, 'schedule');
-    }
+    if (stopped) return;
+    try {
+      for (const source of plugins) {
+        if (running.has(source.provider)) continue;
+        const record = archive.source(source.provider);
+        if (record.enabled && now() >= nextAt(source.provider, record.intervalMinutes)) launch(source.provider, 'schedule');
+      }
+    } finally { reschedule(); }
   }
 
   return {
-    start,
+    start(provider: string, trigger: 'manual' | 'schedule') {
+      const runId = launch(provider, trigger);
+      reschedule();
+      return runId;
+    },
     /** Starts every enabled source whose interval has passed. */
     due,
+    /** Recomputes the next wake-up after source settings change; disabled sources need no timer. */
+    reschedule: () => reschedule(),
     running: (provider: string) => running.get(provider)?.runId ?? null,
     cancel(runId: number) {
       for (const run of running.values()) if (run.runId === runId) { run.controller.abort(); return true; }
       return false;
     },
     begin() {
-      timer = setInterval(() => { try { due(); } catch (error) { log({ event: 'scrape-schedule-failed', message: error instanceof Error ? error.message : String(error) }); } }, options.tickMs ?? 60_000);
-      timer.unref?.();
-      setTimeout(() => { try { due(); } catch { /* reported on the next tick */ } }, 5_000).unref?.();
+      if (begun || stopped) return;
+      begun = true;
+      reschedule(5_000);
     },
-    /** Stops scheduling and cancels running scrapes; resolves when they have recorded their outcome. */
+    /** Stops scheduling and cancels running scrapes and hooks; waits for them to settle. */
     async stop() {
-      clearInterval(timer);
-      for (const run of running.values()) run.controller.abort();
-      await Promise.all([...running.values()].map((run) => run.done));
+      stopped = true; begun = false;
+      clearTimeout(timer); timer = undefined;
+      const runs = [...running.values()];
+      for (const run of runs) run.controller.abort();
+      await Promise.all(runs.map((run) => run.done));
     },
     /** For tests: resolves when the source's current run has finished. */
     settled: (provider: string) => running.get(provider)?.done ?? Promise.resolve(),

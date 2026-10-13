@@ -60,7 +60,7 @@ export function createNativeArchiveService(cards: CardService, options: NativeAr
       if ((query.get('has') ?? '').split(',').includes('followed')) query.set('creators', (await cards.followed(actor, workspaceId)).join(','));
       const page = await json<{ cards: { id: string }[]; total: number }>(`${readPrefix}/cards?${query}`);
       const links = await cards.archiveLinks(actor, workspaceId, page.cards.map((card) => card.id));
-      return { total: page.total, cards: page.cards.map((card) => ({ ...card, libraryCardId: links[card.id] ?? null })) };
+      return { ...page, cards: page.cards.map((card) => ({ ...card, libraryCardId: links[card.id] ?? null })) };
     },
     async card(actor: Actor, workspaceId: string, id: string) {
       await authorize(actor, workspaceId);

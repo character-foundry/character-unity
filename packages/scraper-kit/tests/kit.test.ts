@@ -1,3 +1,5 @@
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { createHttp, isPlaceholderImage, resolveSettings, runScrape, ScrapeHttpError } from '../src/index.js';
 import type { Listing, ScrapedCard, ScraperPlugin, ScrapeSink } from '../src/index.js';
@@ -29,6 +31,108 @@ describe('polite HTTP', () => {
   it('refuses oversized bodies', async () => {
     const http = createHttp({ minIntervalMs: 0, maxBytes: 4, fetch: async () => reply(200, '0123456789') });
     await expect(http.text('https://source.test/big')).rejects.toThrow(/larger than 4 bytes/);
+  });
+
+  it('stops an oversized stream at the limit and never retries it, even for a transient status', async () => {
+    let reads = 0, calls = 0;
+    const cancelled: unknown[] = [];
+    const http = createHttp({ minIntervalMs: 0, maxBytes: 4, fetch: async () => {
+      calls++;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull(controller) { reads++; controller.enqueue(new Uint8Array(3)); },
+        cancel(reason) { cancelled.push(reason); },
+      }, { highWaterMark: 0 }), { status: 503 });
+    } });
+    await expect(http.request('https://source.test/big')).rejects.toThrow(/larger than 4 bytes/);
+    expect(reads).toBe(2);
+    expect(calls).toBe(1);
+    expect(cancelled).toHaveLength(1);
+    expect(cancelled[0]).toBeInstanceOf(ScrapeHttpError);
+  });
+
+  it('rejects an oversized content length before consuming the stream', async () => {
+    let reads = 0, cancelled = false;
+    const http = createHttp({ minIntervalMs: 0, maxBytes: 4, fetch: async () => new Response(new ReadableStream({
+      pull() { reads++; }, cancel() { cancelled = true; },
+    }, { highWaterMark: 0 }), { headers: { 'content-length': '5' } }) });
+    await expect(http.request('https://source.test/big')).rejects.toThrow(/larger than 4 bytes/);
+    expect(reads).toBe(0);
+    expect(cancelled).toBe(true);
+  });
+
+  it('assembles streamed chunks and honours per-request size and header overrides', async () => {
+    let received: Headers | undefined;
+    const http = createHttp({ minIntervalMs: 0, maxBytes: 1, headers: { 'x-default': 'default', 'x-override': 'old' }, fetch: async (_url, init) => {
+      received = new Headers(init?.headers);
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) {
+        controller.enqueue(new Uint8Array([65, 66])); controller.enqueue(new Uint8Array([67])); controller.close();
+      } }));
+    } });
+    expect(await http.text('https://source.test/chunks', { maxBytes: 3, headers: new Headers({ 'x-override': 'new' }) })).toBe('ABC');
+    expect(received?.get('x-default')).toBe('default');
+    expect(received?.get('x-override')).toBe('new');
+  });
+
+  it.each(['client', 'request'] as const)('cancels a stalled body on %s abort without retrying', async (scope) => {
+    const controller = new AbortController();
+    const reason = new Error('Stopped');
+    let started!: () => void;
+    const reading = new Promise<void>((resolve) => { started = resolve; });
+    const cancelled: unknown[] = [];
+    let calls = 0;
+    const http = createHttp({ minIntervalMs: 0, ...(scope === 'client' ? { signal: controller.signal } : {}), fetch: async () => {
+      calls++;
+      return new Response(new ReadableStream<Uint8Array>({
+        pull() { started(); }, cancel(reason) { cancelled.push(reason); },
+      }, { highWaterMark: 0 }));
+    } });
+    const pending = http.request('https://source.test/stalled', scope === 'request' ? { signal: controller.signal } : {});
+    const rejection = expect(pending).rejects.toBe(reason);
+    await reading;
+    controller.abort(reason);
+    await rejection;
+    expect(calls).toBe(1);
+    expect(cancelled).toEqual([reason]);
+  });
+
+  it('keeps the deadline active while a response body stalls', async () => {
+    let cancelled: unknown;
+    const http = createHttp({ minIntervalMs: 0, timeoutMs: 20, retryDelaysMs: [], fetch: async () =>
+      new Response(new ReadableStream<Uint8Array>({ cancel(reason) { cancelled = reason; } })) });
+    await expect(http.request('https://source.test/stalled')).rejects.toMatchObject({
+      status: 0, cause: { name: 'TimeoutError' },
+    });
+    expect(cancelled).toMatchObject({ name: 'TimeoutError' });
+  });
+
+  it('prevents credential headers from reaching a redirect destination', async () => {
+    const listen = (server: Server) => new Promise<number>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', () => {
+        const address = server.address();
+        if (typeof address === 'object' && address) resolve(address.port);
+        else reject(new Error('Missing test server address'));
+      });
+    });
+    const close = (server: Server) => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    let destinationCalls = 0, originCalls = 0, originKey: string | string[] | undefined;
+    const destination = createServer((_request, response) => { destinationCalls++; response.end('secret leaked'); });
+    const destinationPort = await listen(destination);
+    const origin = createServer((request, response) => {
+      originCalls++;
+      originKey = request.headers.samwise;
+      response.writeHead(302, { location: `http://127.0.0.1:${destinationPort}/target` }); response.end();
+    });
+    try {
+      const originPort = await listen(origin);
+      const http = createHttp({ minIntervalMs: 0, retryDelaysMs: [] });
+      await expect(http.request(`http://127.0.0.1:${originPort}/start`, {
+        headers: { samwise: 'secret', 'CH-API-KEY': 'secret' }, redirect: 'error',
+      })).rejects.toBeInstanceOf(ScrapeHttpError);
+      expect(originCalls).toBe(1);
+      expect(originKey).toBe('secret');
+      expect(destinationCalls).toBe(0);
+    } finally { await Promise.all([close(origin), close(destination)]); }
   });
 });
 

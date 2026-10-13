@@ -1,5 +1,25 @@
 # Architecture decisions
 
+## Owner correction, 2026-10-13
+
+One application: Archive is the local ingestion/history/search foundation; Unity
+provides presentation, editing, forks and sharing. Keep the existing Archive
+`cards.db`, files and LanceDB. New scrapers write to that same database using the
+existing schema and source deduplication; necessary versioned additions stay
+there. Unity keeps its own workspace database. Favorites link archived originals
+into the library, and saved edits create forks. Viewing and favoriting do not copy
+originals or unchanged assets. File import must check Archive and Unity before
+creating another entry.
+
+Complete the Archive foundation before further viewer/editor work. The current
+native store is a separate-schema prototype, not an approved additional corpus.
+There is no measured evidence that rebuilding the existing database improves
+efficiency. Implementation and operational acceptance are tracked separately in
+[`implementation.md`](implementation.md). See the
+[accepted decision](adr/0001-existing-archive-and-library-references.md) and
+[owner direction](../../1013_archive_foundation.md); they supersede conflicting
+scaffold-era descriptions below.
+
 Accepted direction, 2026-10-11: scaffold a new `character-unity` repository using
 Vite/React + Hono. Foundry remains primitives; Archive owns its separate database
 and search stack. The scaffold now has store, asset, Archive-read and initial card

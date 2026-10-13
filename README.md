@@ -104,6 +104,11 @@ not automatically move between the browser profile and local API profile.
 Editing/import/save work offline after the page loads; offline page reload and
 installation are not implemented. See [browser storage](docs/browser-storage.md).
 
+For the in-house application, follow
+[existing Archive storage](docs/archive-existing-storage.md) to use the existing
+database, originals and LanceDB in place. Archive is the ingestion/search
+foundation; Unity supplies presentation, editing, forks and sharing.
+
 Run `UNITY_ARCHIVE_MODE=fixture pnpm dev:archive` to enable synthetic Archive
 list/search, stable selection manifests and exact original reads. To connect
 Architect or hub, follow [Archive selection import](docs/archive-import.md). Default mode

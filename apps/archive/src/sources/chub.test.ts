@@ -28,11 +28,12 @@ function fakeChub() {
   const state = {
     search: [node(1), node(2), node(88), node(3, { fullPath: 'spammer/card-3' })] as Record<string, unknown>[],
     timeline: [node(5, { projectSpace: 'characters' }), node(6, { projectSpace: 'lorebooks' }), node(7, { labels: [{ title: 'Forked' }] })] as Record<string, unknown>[],
-    noJson: new Set<number>([2]), oldJson: new Set<number>(), headers: [] as Headers[],
+    noJson: new Set<number>([2]), oldJson: new Set<number>(), headers: [] as Headers[], redirects: [] as (RequestRedirect | undefined)[],
   };
   const fetch = async (url: string, init?: RequestInit) => {
     requests.push(url);
     state.headers.push(new Headers(init?.headers));
+    state.redirects.push(init?.redirect);
     const parsed = new URL(url);
     if (parsed.pathname === '/search') {
       const username = parsed.searchParams.get('username');
@@ -133,5 +134,34 @@ describe('Chub source', () => {
     await run(fake, { topics: ['Fantasy', 'Elf'], excludeTopics: ['Gore'], minTokens: 300, nsfw: false, perPage: 20, sort: 'created_at' });
     const search = new URL(fake.requests[0]!).searchParams;
     expect(Object.fromEntries(search)).toMatchObject({ topics: 'Fantasy,Elf', excludetopics: 'Gore', min_tokens: '300', nsfw: 'false', nsfl: 'false', first: '20', sort: 'created_at', namespace: 'characters' });
+  });
+
+  it('sends account keys only to gateway requests and refuses redirects for those requests', async () => {
+    const fake = fakeChub();
+    fake.state.search = [node(1, { related_lorebooks: [42] })];
+    expect(await run(fake, {}, { apiKey: ' secret ' })).toMatchObject({ status: 'done', added: 1, errors: 0 });
+    expect(chub.headers?.({ apiKey: 'secret' })).not.toHaveProperty('samwise');
+    expect(chub.headers?.({ apiKey: 'secret' })).not.toHaveProperty('CH-API-KEY');
+    const gatewayPaths: string[] = [];
+    let avatarCalls = 0;
+    for (const [index, url] of fake.requests.entries()) {
+      const headers = fake.state.headers[index]!;
+      const parsed = new URL(url);
+      if (parsed.origin === 'https://gateway.chub.ai') {
+        gatewayPaths.push(parsed.pathname);
+        expect(headers.get('samwise')).toBe('secret');
+        expect(headers.get('ch-api-key')).toBe('secret');
+        expect(fake.state.redirects[index]).toBe('error');
+      } else {
+        avatarCalls++;
+        expect(headers.has('samwise')).toBe(false);
+        expect(headers.has('ch-api-key')).toBe(false);
+      }
+    }
+    expect(avatarCalls).toBe(1);
+    expect(gatewayPaths).toEqual(expect.arrayContaining([
+      '/search', '/api/v4/projects/1/repository/files/card_v2.json/raw',
+      '/api/v4/projects/42/repository/files/raw%252Fsillytavern_raw.json/raw', '/api/gallery/project/1',
+    ]));
   });
 });

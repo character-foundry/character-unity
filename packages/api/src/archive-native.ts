@@ -6,7 +6,7 @@ import type { Authenticate } from './cards.js';
 import { json } from './body.js';
 
 type Env = { Variables: { actor: Actor } };
-const queryKeys = ['q', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'sort', 'offset', 'limit'];
+const queryKeys = ['q', 'mode', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'sort', 'offset', 'limit'];
 
 /**
  * The native Archive, read through this host: browsing, files for the library, and Settings' scraper

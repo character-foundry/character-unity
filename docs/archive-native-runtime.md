@@ -1,5 +1,11 @@
 # Archive native runtime
 
+For the current in-house deployment, use
+[existing Archive storage](archive-existing-storage.md). The separate native and
+copied-store/container rehearsals below describe development foundations; the
+owner's corpus remains in its existing database/files/LanceDB, with new scrapes
+writing there after a coordinated writer handoff.
+
 Archive has a separate Node 24 container target. It includes `better-sqlite3`
 13.0.3, `@lancedb/lancedb` 0.37.1 and `apache-arrow` 18.1.0 from the workspace
 lockfile. The LanceDB/Arrow pair matches the inspected legacy Archive baseline

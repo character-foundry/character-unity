@@ -67,7 +67,7 @@ const iso = (value: string | undefined) => {
 const count = (value: number | undefined) => typeof value === 'number' && Number.isFinite(value) ? value : null;
 
 /** Fields read from the card file itself, so every source is summarised the same way. */
-function describe(card: ScrapedCard, container: ScrapedObject) {
+export function describe(card: ScrapedCard, container: ScrapedObject) {
   let parsed: ReturnType<typeof parseCard>;
   try {
     // CharX packages can be large; the Archive keeps them whole (the library's own import limit is separate).
@@ -271,6 +271,7 @@ export async function openNativeArchive(directory: string, options: { now?: () =
     sink,
     put,
     list(query: ArchiveQuery = {}) {
+      if (query.mode && query.mode !== 'lexical') throw new NativeArchiveError('INVALID_INPUT', 'Semantic search requires the existing Archive LanceDB backend');
       const { where, params } = archiveFilterSql(query);
       const limit = Math.min(Math.max(query.limit ?? 48, 1), 100), offset = Math.max(query.offset ?? 0, 0);
       const clause = where.join(' AND ');

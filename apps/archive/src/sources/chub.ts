@@ -1,5 +1,5 @@
 import { ScrapeHttpError } from '@character-unity/scraper-kit';
-import type { Listing, ScrapeContext, ScrapedCard, ScrapedObject, ScraperPlugin, SourceStats } from '@character-unity/scraper-kit';
+import type { Listing, RequestOptions, ScrapeContext, ScrapedCard, ScrapedObject, ScraperPlugin, SourceStats } from '@character-unity/scraper-kit';
 
 const gateway = 'https://gateway.chub.ai';
 type Node = Record<string, unknown>;
@@ -7,6 +7,11 @@ const record = (value: unknown): Node => value && typeof value === 'object' && !
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+const gatewayOptions = (context: ScrapeContext): RequestOptions => {
+  const key = context.secrets.apiKey?.trim();
+  // Custom API-key headers can otherwise follow redirects to a different host.
+  return key ? { headers: { samwise: key, 'CH-API-KEY': key }, redirect: 'error' } : {};
+};
 
 /** Creator = the first segment of `fullPath` (`creator/card-slug`). */
 const creatorOf = (node: Node) => text(node.fullPath).split('/')[0] ?? '';
@@ -41,12 +46,10 @@ export const chub: ScraperPlugin = {
   provider: 'chub',
   label: 'Chub',
   minIntervalMs: 1_000,
-  headers(secrets) {
-    const key = secrets.apiKey?.trim();
+  headers() {
     return {
       'user-agent': 'Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0',
       origin: 'https://chub.ai', referer: 'https://chub.ai/',
-      ...(key ? { samwise: key, 'CH-API-KEY': key } : {}),
     };
   },
   secrets: [{ key: 'apiKey', label: 'API key', help: 'Needed for timeline mode; also lets search include cards only your account can see.' }],
@@ -69,6 +72,7 @@ export const chub: ScraperPlugin = {
 
   async *discover(context) {
     const settings = context.settings;
+    const api = gatewayOptions(context);
     const blocked = new Set((settings.blockedCreators as string[]).map((name) => name.toLowerCase()));
     const minTokens = settings.minTokens as number;
     const keep = (node: Node) => {
@@ -91,7 +95,7 @@ export const chub: ScraperPlugin = {
           include_forks: 'true', chub: 'true', inclusive_or: 'true', ...extra });
         if ((settings.topics as string[]).length && !extra.username) params.set('topics', (settings.topics as string[]).join(','));
         if ((settings.excludeTopics as string[]).length) params.set('excludetopics', (settings.excludeTopics as string[]).join(','));
-        const nodes = nodesOf(await context.http.json(`${gateway}/search?${params}`));
+        const nodes = nodesOf(await context.http.json(`${gateway}/search?${params}`, api));
         for (const node of nodes) if (keep(node)) yield listing(node);
         if (nodes.length < perPage) return;
       }
@@ -102,7 +106,7 @@ export const chub: ScraperPlugin = {
         const first = settings.startPage as number;
         for (let page = first; page < first + (settings.pages as number); page++) {
           context.signal.throwIfAborted();
-          const nodes = nodesOf(await context.http.json(`${gateway}/api/timeline/v1?page=${page}&count=true`));
+          const nodes = nodesOf(await context.http.json(`${gateway}/api/timeline/v1?page=${page}&count=true`, api));
           if (!nodes.length) break;
           for (const node of nodes) {
             if (node.projectSpace !== undefined && node.projectSpace !== 'characters') continue;
@@ -119,7 +123,8 @@ export const chub: ScraperPlugin = {
     const node = record(listing.hint);
     const id = listing.recordId;
     const http = context.http;
-    const raw = (path: string) => optional(async () => (await http.request(`${gateway}/api/v4/projects/${id}/repository/files/${path}/raw?ref=main&response_type=blob`)).bytes);
+    const api = gatewayOptions(context);
+    const raw = (path: string) => optional(async () => (await http.request(`${gateway}/api/v4/projects/${id}/repository/files/${path}/raw?ref=main&response_type=blob`, api)).bytes);
     const definition = await raw('card_v2.json') ?? await raw('card.json');
     const imageBase = text(node.max_res_url) || text(node.avatar_url);
     const slash = imageBase.lastIndexOf('/');
@@ -138,14 +143,14 @@ export const chub: ScraperPlugin = {
       for (const lorebook of (Array.isArray(node.related_lorebooks) ? node.related_lorebooks : []).slice(0, 20)) {
         const lorebookId = number(lorebook) ?? number(record(lorebook).id);
         if (lorebookId === undefined) continue;
-        const bytes = await optional(async () => (await http.request(`${gateway}/api/v4/projects/${lorebookId}/repository/files/raw%252Fsillytavern_raw.json/raw?ref=main&response_type=blob`)).bytes);
+        const bytes = await optional(async () => (await http.request(`${gateway}/api/v4/projects/${lorebookId}/repository/files/raw%252Fsillytavern_raw.json/raw?ref=main&response_type=blob`, api)).bytes);
         if (bytes) objects.push({ role: 'asset', bytes, mediaType: 'application/json', name: `lorebook/${lorebookId}.json` });
       }
     }
     let gallery: boolean | undefined;
     if (context.settings.checkGallery) {
       try {
-        const body = record(await http.json(`${gateway}/api/gallery/project/${id}?limit=1&count=false`));
+        const body = record(await http.json(`${gateway}/api/gallery/project/${id}?limit=1&count=false`, api));
         const items = [body.items, body.data, body.gallery, body.nodes].find(Array.isArray) as unknown[] | undefined;
         gallery = !!items?.length;
       } catch (error) { if (!(error instanceof ScrapeHttpError)) throw error; }

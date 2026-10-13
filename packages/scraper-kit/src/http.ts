@@ -48,26 +48,57 @@ export function createHttp(options: HttpOptions) {
   let queue: Promise<unknown> = Promise.resolve();
   let lastStart = -Infinity;
 
-  async function once(url: string, { timeoutMs, maxBytes: requestMax, ...init }: RequestOptions): Promise<{ response: HttpResponse; retryAfter: string | null }> {
+  async function once(url: string, { timeoutMs, maxBytes: requestMax, ...init }: RequestOptions, requestSignal: AbortSignal): Promise<{ response: HttpResponse; retryAfter: string | null }> {
     const limit = requestMax ?? maxBytes;
     const gap = lastStart + options.minIntervalMs - Date.now();
-    if (gap > 0) await wait(gap, options.signal);
-    options.signal?.throwIfAborted();
+    if (gap > 0) await wait(gap, requestSignal);
+    requestSignal.throwIfAborted();
     lastStart = Date.now();
-    const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs ?? options.timeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
-    const response = await fetcher(url, { redirect: 'follow', ...init, headers: { ...options.headers, ...init.headers as Record<string, string> }, signal });
+    const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs ?? options.timeoutMs ?? 30_000), requestSignal]);
+    const headers = new Headers(options.headers);
+    new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+    const response = await fetcher(url, { redirect: 'follow', ...init, headers, signal });
+    const tooLarge = () => new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${limit} bytes`);
     const length = Number(response.headers.get('content-length') ?? 0);
-    if (length > limit) { await response.body?.cancel(); throw new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${limit} bytes`); }
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > limit) throw new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${limit} bytes`);
+    if (length > limit) { void response.body?.cancel().catch(() => undefined); throw tooLarge(); }
+    const reader = response.body?.getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    if (reader) {
+      // Cancelling also settles an outstanding read when a source stalls between chunks.
+      const cancel = () => { void reader.cancel(signal.reason).catch(() => undefined); };
+      signal.addEventListener('abort', cancel, { once: true });
+      try {
+        signal.throwIfAborted();
+        while (true) {
+          const { done, value } = await reader.read();
+          signal.throwIfAborted();
+          if (done) break;
+          size += value.byteLength;
+          if (size > limit) throw tooLarge();
+          if (value.byteLength) chunks.push(value);
+        }
+      } catch (error) {
+        // Do not wait for a misbehaving producer's cancellation to finish before rejecting.
+        void reader.cancel(error).catch(() => undefined);
+        throw error;
+      } finally {
+        signal.removeEventListener('abort', cancel);
+        reader.releaseLock();
+      }
+    } else signal.throwIfAborted();
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
     return { response: { status: response.status, bytes, type: response.headers.get('content-type') ?? '', url: response.url || url }, retryAfter: response.headers.get('retry-after') };
   }
 
   async function request(url: string, init: RequestOptions = {}): Promise<HttpResponse> {
+    const signal = AbortSignal.any([...(options.signal ? [options.signal] : []), ...(init.signal ? [init.signal] : [])]);
     for (let attempt = 0; ; attempt++) {
       let result: Awaited<ReturnType<typeof once>> | undefined, failure: unknown;
-      try { result = await once(url, init); } catch (error) {
-        if (options.signal?.aborted || error instanceof ScrapeHttpError) throw error;
+      try { result = await once(url, init, signal); } catch (error) {
+        if (signal.aborted || error instanceof ScrapeHttpError) throw error;
         failure = error;
       }
       const status = result?.response.status;
@@ -77,7 +108,7 @@ export function createHttp(options: HttpOptions) {
         throw new ScrapeHttpError(0, url, `${new URL(url).host} did not answer`, { cause: failure });
       }
       const after = Number(result?.retryAfter);
-      await wait(Number.isFinite(after) && after > 0 && after <= 60 ? after * 1000 : delays[attempt]!, options.signal);
+      await wait(Number.isFinite(after) && after > 0 && after <= 60 ? after * 1000 : delays[attempt]!, signal);
     }
   }
 

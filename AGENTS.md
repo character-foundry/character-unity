@@ -5,7 +5,13 @@
 - Foundry stays in its own repository and supplies public format/protocol primitives.
   Do not copy its implementations here or change existing hash APIs' meaning.
 - Archive owns its database, original files and LanceDB. Other apps access it only
-  through a read contract. Do not connect this scaffold to live Archive paths.
+  through a read contract. The owner correction of 2026-10-13 keeps the existing
+  Archive schema/database/files/LanceDB; new scrapes write into that same database.
+  Do not point the separate native prototype at live Archive paths. Live writer
+  takeover requires coordinating the old scheduler/index workers/optimizer first.
+  See `docs/adr/0001-existing-archive-and-library-references.md`. Finish the Archive
+  foundation before further viewer/editor work; Unity favorites will be references
+  and changed saves will create forks, without duplicating original files.
 - Architect and hub share `packages/api` and `packages/store`.
   `apps/api` hosts that API on Node or Workers; it is not a second implementation.
 - Browser and portable code must not import Node adapters or native modules.

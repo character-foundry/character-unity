@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { createQueryEmbedder } from './embeddings.js';
+import { createDocumentEmbedder, createQueryEmbedder } from './embeddings.js';
 import { serve } from '@hono/node-server';
 import { createArchiveApp } from './app.js';
 import { openCopiedArchive } from './copied.js';
@@ -8,6 +8,8 @@ import { openNativeArchive } from './native/store.js';
 import { createScheduler } from './native/scheduler.js';
 import { createNativeArchiveApp } from './native/app.js';
 import { sources } from './sources/index.js';
+import { openExistingArchive } from './existing/store.js';
+import { openExistingSearch } from './existing/search.js';
 
 const port = Number(process.env.PORT ?? 9313);
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -15,8 +17,8 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
 }
 const hostname = process.env.HOST ?? '127.0.0.1';
 const mode = process.env.UNITY_ARCHIVE_MODE ?? 'off';
-if (!['off', 'fixture', 'copy', 'native'].includes(mode)) throw new Error('UNITY_ARCHIVE_MODE must be off, fixture, copy or native');
-if ((mode === 'copy' || mode === 'native') && !['127.0.0.1', '::1', 'localhost'].includes(hostname)) throw new Error(`${mode === 'copy' ? 'Copied' : 'Native'} Archive mode requires a loopback listener`);
+if (!['off', 'fixture', 'copy', 'native', 'existing'].includes(mode)) throw new Error('UNITY_ARCHIVE_MODE must be off, fixture, copy, native or existing');
+if (['copy', 'native', 'existing'].includes(mode) && !['127.0.0.1', '::1', 'localhost'].includes(hostname)) throw new Error('Archive storage modes require a loopback listener');
 // Native mode: the Archive's own store (scraped cards), its scheduler and admin routes.
 const dataDirectory = process.env.UNITY_ARCHIVE_DATA_DIR;
 if (mode === 'native' && !dataDirectory) throw new Error('Native mode requires UNITY_ARCHIVE_DATA_DIR');
@@ -25,22 +27,59 @@ if (adminToken !== undefined && adminToken.length < 24) throw new Error('UNITY_A
 const copyRoot = process.env.UNITY_ARCHIVE_COPY_ROOT;
 if (mode === 'copy' && !copyRoot) throw new Error('Copy mode requires an explicit UNITY_ARCHIVE_COPY_ROOT');
 const embeddingConfig = process.env.UNITY_ARCHIVE_EMBEDDING_CONFIG;
-if (embeddingConfig && mode !== 'copy') throw new Error('Embedding configuration requires copied Archive mode');
-const embedder = embeddingConfig ? createQueryEmbedder(JSON.parse(await readFile(embeddingConfig, 'utf8')), process.env.UNITY_ARCHIVE_EMBEDDING_KEY ?? '') : undefined;
+if (embeddingConfig && !['copy', 'existing'].includes(mode)) throw new Error('Embedding configuration requires copied or existing Archive mode');
+const embeddingOptions: unknown = embeddingConfig ? JSON.parse(await readFile(embeddingConfig, 'utf8')) : undefined;
+const embedder = embeddingConfig ? createQueryEmbedder(embeddingOptions, process.env.UNITY_ARCHIVE_EMBEDDING_KEY ?? '') : undefined;
 const source = mode === 'copy' ? await openCopiedArchive(copyRoot!, embedder) : mode === 'fixture' ? createDemoArchive() : undefined;
-const native = mode === 'native' ? await openNativeArchive(dataDirectory!) : undefined;
-const scheduler = native ? createScheduler(native, sources, { log: (event) => console.log(JSON.stringify(event)) }) : undefined;
+const databasePath = process.env.UNITY_ARCHIVE_DATABASE_PATH;
+const filesDirectory = process.env.UNITY_ARCHIVE_FILES_DIR;
+const objectsDirectory = process.env.UNITY_ARCHIVE_OBJECT_DIR;
+const lanceDirectory = process.env.UNITY_ARCHIVE_LANCE_DIR;
+const readOnly = process.env.UNITY_ARCHIVE_READ_ONLY === '1';
+if (process.env.UNITY_ARCHIVE_READ_ONLY !== undefined && !['0', '1'].includes(process.env.UNITY_ARCHIVE_READ_ONLY)) throw new Error('UNITY_ARCHIVE_READ_ONLY must be 0 or 1');
+if (readOnly && mode !== 'existing') throw new Error('UNITY_ARCHIVE_READ_ONLY=1 requires existing Archive mode');
+const documentEmbedder = mode === 'existing' && !readOnly && embeddingConfig ? createDocumentEmbedder(embeddingOptions, process.env.UNITY_ARCHIVE_EMBEDDING_KEY ?? '') : undefined;
+if (mode === 'existing' && (!databasePath || !filesDirectory || (!readOnly && !objectsDirectory))) {
+  throw new Error('Existing Archive mode requires UNITY_ARCHIVE_DATABASE_PATH, UNITY_ARCHIVE_FILES_DIR and, for writes, UNITY_ARCHIVE_OBJECT_DIR');
+}
+if (mode === 'existing' && embedder && !lanceDirectory) throw new Error('Existing Archive embedding configuration requires UNITY_ARCHIVE_LANCE_DIR');
+const search = mode === 'existing' && lanceDirectory ? await openExistingSearch({ lanceDirectory, databasePath: databasePath!,
+  ...(process.env.UNITY_ARCHIVE_LANCE_TABLE ? { tableName: process.env.UNITY_ARCHIVE_LANCE_TABLE } : {}),
+  ...(process.env.UNITY_ARCHIVE_VECTOR_TABLE ? { vectorTableName: process.env.UNITY_ARCHIVE_VECTOR_TABLE } : {}),
+  ...(embedder ? { embedder } : {}),
+}) : undefined;
+let native;
+try {
+  native = mode === 'native' ? await openNativeArchive(dataDirectory!) : mode === 'existing' ? await openExistingArchive({
+    databasePath: databasePath!, filesDirectory: filesDirectory!,
+    ...(objectsDirectory ? { objectsDirectory } : {}), readOnly,
+    ...(search ? { search } : {}),
+    ...(documentEmbedder ? { documentEmbedder } : {}),
+    ...(process.env.UNITY_ARCHIVE_LEGACY_ROOT ? { legacyRoot: process.env.UNITY_ARCHIVE_LEGACY_ROOT } : {}),
+  }) : undefined;
+} catch (error) { search?.close(); throw error; }
+const scheduler = native ? createScheduler(native, sources, {
+  log: (event) => console.log(JSON.stringify(event)),
+  ...('flushSearchQueue' in native ? { onFinished: async (signal: AbortSignal) => {
+    while (!signal.aborted) {
+      const lexical = await native.flushSearchQueue(100);
+      signal.throwIfAborted();
+      const vector = await native.flushVectorQueue(100, signal);
+      if (!lexical.processed && !vector.processed) break;
+    }
+  } } : {}),
+}) : undefined;
 const app = native && scheduler
   ? createNativeArchiveApp(native, scheduler, sources, adminToken ? { adminToken } : {})
   : createArchiveApp(source, { readOrigins: (process.env.UNITY_ARCHIVE_READ_ORIGINS ?? '').split(',').map((value) => value.trim()).filter(Boolean) });
-if (scheduler && process.env.UNITY_ARCHIVE_SCHEDULE !== 'off') scheduler.begin();
+if (scheduler && !readOnly && process.env.UNITY_ARCHIVE_SCHEDULE !== 'off') scheduler.begin();
 const server = serve({ fetch: app.fetch, hostname, port }, (address) => {
   console.log(JSON.stringify({ event: 'listening', service: 'unity-archive', host: hostname, port: address.port }));
 });
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.once(signal, () => {
     void (scheduler?.stop() ?? Promise.resolve()).finally(() => {
-      server.close((error) => { native?.close(); process.exitCode = error ? 1 : 0; });
+      server.close((error) => { native?.close(); search?.close(); process.exitCode = error ? 1 : 0; });
     });
   });
 }
