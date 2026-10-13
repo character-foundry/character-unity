@@ -22,8 +22,8 @@ export interface HttpOptions {
 }
 
 export interface HttpResponse { status: number; bytes: Uint8Array; type: string; url: string }
-/** A request's own options: `timeoutMs` overrides the client's per-attempt timeout (e.g. for large downloads). */
-export type RequestOptions = RequestInit & { timeoutMs?: number };
+/** A request's own options: `timeoutMs` and `maxBytes` override the client's limits (e.g. for large downloads). */
+export type RequestOptions = RequestInit & { timeoutMs?: number; maxBytes?: number };
 
 const transient = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]);
 
@@ -48,7 +48,8 @@ export function createHttp(options: HttpOptions) {
   let queue: Promise<unknown> = Promise.resolve();
   let lastStart = -Infinity;
 
-  async function once(url: string, { timeoutMs, ...init }: RequestOptions): Promise<{ response: HttpResponse; retryAfter: string | null }> {
+  async function once(url: string, { timeoutMs, maxBytes: requestMax, ...init }: RequestOptions): Promise<{ response: HttpResponse; retryAfter: string | null }> {
+    const limit = requestMax ?? maxBytes;
     const gap = lastStart + options.minIntervalMs - Date.now();
     if (gap > 0) await wait(gap, options.signal);
     options.signal?.throwIfAborted();
@@ -56,9 +57,9 @@ export function createHttp(options: HttpOptions) {
     const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs ?? options.timeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
     const response = await fetcher(url, { redirect: 'follow', ...init, headers: { ...options.headers, ...init.headers as Record<string, string> }, signal });
     const length = Number(response.headers.get('content-length') ?? 0);
-    if (length > maxBytes) { await response.body?.cancel(); throw new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${maxBytes} bytes`); }
+    if (length > limit) { await response.body?.cancel(); throw new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${limit} bytes`); }
     const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength > maxBytes) throw new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${maxBytes} bytes`);
+    if (bytes.byteLength > limit) throw new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${limit} bytes`);
     return { response: { status: response.status, bytes, type: response.headers.get('content-type') ?? '', url: response.url || url }, retryAfter: response.headers.get('retry-after') };
   }
 

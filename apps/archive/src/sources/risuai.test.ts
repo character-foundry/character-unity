@@ -74,11 +74,13 @@ describe('safe Realm literal reader', () => {
 function fakeRealm() {
   const requests: string[] = [];
   const state = {
-    pages: [['r1', 'r2'], ['r2', 'r3'], []] as string[][],
+    pages: [['r1', 'r2'], ['r2', 'r3', 'r4'], []] as string[][],
     cards: {
       r1: { formats: { 'charx-v3': () => writeCharX(v3('Charx One') as never, []).buffer }, img: 'one.webp', imgBytes: webp, date: 17_000_000 },
       r2: { formats: { 'png-v3': () => embedIntoPNG(tinyPng, v3('Png Two') as never) }, img: 'two.jpg', imgBytes: jpeg, date: null },
       r3: { formats: { 'json-v2': () => encoder.encode(JSON.stringify(v3('Json Three'))), 'charx-v3': () => encoder.encode('<html>error</html>') }, img: '', imgBytes: tinyPng, date: null },
+      // Realm also serves CharX wrapped in a JPEG preview (the zip appended after the image).
+      r4: { formats: { 'charx-v3': () => { const zip = writeCharX(v3('Jpeg Charx') as never, []).buffer; const out = new Uint8Array(jpeg.length + zip.length); out.set(jpeg); out.set(zip, jpeg.length); return out; } }, img: '', imgBytes: tinyPng, date: null },
     } as Record<string, { formats: Record<string, () => Uint8Array>; img: string; imgBytes: Uint8Array; date: number | null }>,
   };
   const fetch = async (url: string) => {
@@ -117,7 +119,7 @@ describe('RisuAI source', () => {
 
   it('pages the browse list, downloads the best format and keeps the thumbnail with its real type', async () => {
     const fake = fakeRealm();
-    expect(await run(fake)).toMatchObject({ status: 'done', listed: 3, added: 3, errors: 0 });
+    expect(await run(fake)).toMatchObject({ status: 'done', listed: 4, added: 4, errors: 0 });
     // Paging stops at the first empty page; each card is fetched once.
     expect(fake.requests.filter((url) => new URL(url).pathname === '/').map((url) => new URL(url).searchParams.get('page'))).toEqual(['1', '2', '3']);
     expect(fake.requests[0]).toBe('https://realm.risuai.net/?sort=latest&page=1');
@@ -128,26 +130,27 @@ describe('RisuAI source', () => {
     expect(await files('risuai:r2')).toEqual(['card:card.png:image/png', 'portrait:portrait.jpeg:image/jpeg', 'raw:record.json:application/json']);
     // charx answered HTML (not a zip) and png/json-v3 404 → json-v2; no image name → no portrait
     expect(await files('risuai:r3')).toEqual(['card:card.json:application/json', 'raw:record.json:application/json']);
+    expect(await files('risuai:r4')).toEqual(['card:card.charx:application/zip', 'raw:record.json:application/json']);
     expect(fake.requests.filter((url) => url.includes('/download/') && url.includes('/r2'))).toEqual([
       'https://realm.risuai.net/api/v1/download/charx-v3/r2?non_commercial=true', 'https://realm.risuai.net/api/v1/download/png-v3/r2?non_commercial=true']);
 
     const cards = archive.list({ sort: 'name' }).cards;
-    expect(cards.map((card) => card.name)).toEqual(['Charx One', 'Json Three', 'Png Two']);
+    expect(cards.map((card) => card.name)).toEqual(['Charx One', 'Jpeg Charx', 'Json Three', 'Png Two']);
     expect(cards[0]).toMatchObject({ id: 'risuai:r1', creator: 'kai', url: 'https://realm.risuai.net/character/r1', tagline: 'A sailor.',
       stats: { downloads: 2500 }, flags: { gallery: true, expressions: false }, remoteUpdatedAt: new Date(17_000_000 * 100_000).toISOString() });
     expect(cards[0]!.tags).toEqual(expect.arrayContaining(['Sea', 'Pirate']));
-    expect(cards[2]).toMatchObject({ flags: { expressions: true }, remoteUpdatedAt: unchangedSentinel });
+    expect(cards[3]).toMatchObject({ flags: { expressions: true }, remoteUpdatedAt: unchangedSentinel });
   });
 
   it('does not refetch cards it already has unless asked to', async () => {
     const fake = fakeRealm();
     await run(fake);
     fake.requests.length = 0;
-    expect(await run(fake)).toMatchObject({ listed: 3, unchanged: 3, added: 0 });
+    expect(await run(fake)).toMatchObject({ listed: 4, unchanged: 4, added: 0 });
     expect(fake.requests.every((url) => new URL(url).pathname === '/')).toBe(true);
 
     fake.requests.length = 0;
-    expect(await run(fake, { forceUpdate: true })).toMatchObject({ listed: 3, unchanged: 3 });
+    expect(await run(fake, { forceUpdate: true })).toMatchObject({ listed: 4, unchanged: 4 });
     expect(fake.requests.some((url) => url.includes('/download/'))).toBe(true);
     expect((await archive.card('risuai:r1')).versions).toBe(1);
   });

@@ -1,6 +1,6 @@
 import type { CardDocument } from '@character-unity/store';
 import type { Actor, CardService, ImportAsset } from './index.js';
-import { CardError } from './types.js';
+import { CardError, importByteLimit } from './types.js';
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 export interface NativeArchiveOptions { origin: string; adminToken?: string; fetch?: Fetch }
@@ -91,12 +91,27 @@ export function createNativeArchiveService(cards: CardService, options: NativeAr
       const container = current?.objects.find((object) => object.role === 'card');
       if (!current || !container) throw new CardError('UNSUPPORTED_FORMAT', 'This Archive card has no card file');
       const portrait = current.objects.find((object) => object.role === 'portrait');
+      const megabytes = (bytes: number) => `${Math.ceil(bytes / 1024 / 1024)} MB`;
+      if (container.byteLength + (portrait?.byteLength ?? 0) > importByteLimit) {
+        throw new CardError('TOO_LARGE', `This card is ${megabytes(container.byteLength)}; the library imports up to ${megabytes(importByteLimit)}, so it stays in the Archive only.`);
+      }
       const assets: ImportAsset[] = [];
       if (portrait && container.mediaType === 'application/json') assets.push({ bytes: await bytes(portrait), binding: { kind: 'portrait' }, mediaType: portrait.mediaType });
       const provenance: CardDocument = { kind: 'archive', contract: 'unity.archive.native.v1', cardId: card.id, versionId: card.versionId,
         originalHash: container.sha256, source: { provider: card.provider, recordId: card.recordId, url: card.url } };
-      const imported = await cards.import(actor, workspaceId, await bytes(container), provenance, assets);
-      return { cardId: imported.card.id, created: true };
+      try {
+        const imported = await cards.import(actor, workspaceId, await bytes(container), provenance, assets);
+        return { cardId: imported.card.id, created: true };
+      } catch (error) {
+        // The Archive keeps every file as fetched; the library only takes what it can edit and export without loss.
+        if (error instanceof CardError && error.code === 'UNSUPPORTED_FORMAT') {
+          throw new CardError('UNSUPPORTED_FORMAT', `The library can't keep everything in this ${container.name} yet (for example a RisuAI module), so it stays in the Archive only.`);
+        }
+        if (error instanceof CardError && error.code === 'ASSET_UNAVAILABLE') {
+          throw new CardError('ASSET_UNAVAILABLE', `This ${container.name} lists files it does not contain, so the library can't take it; it stays in the Archive.`);
+        }
+        throw error;
+      }
     },
     admin: {
       async sources(actor: Actor, workspaceId: string) {

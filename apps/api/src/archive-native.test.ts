@@ -100,6 +100,20 @@ describe('native Archive through the API', () => {
     expect((await (await call('/cards')).json() as { total: number }).total).toBe(1);
   });
 
+  it('explains why an Archive card is too large for the library before downloading it', async () => {
+    const { scheduler, call } = setup();
+    await call('/sources/chub/runs', { method: 'POST' });
+    await scheduler.settled('chub');
+    // A 33 MB portrait on top of the card: over the library's 32 MB import limit.
+    const big = new Uint8Array(33 * 1024 * 1024); big.set(portrait);
+    await archive.put({ provider: 'chub', recordId: '103', url: 'https://chub.ai/characters/ash/103',
+      objects: [{ role: 'card', bytes: card('Card 103'), mediaType: 'application/json' }, { role: 'portrait', bytes: big, mediaType: 'image/png' }] });
+    const response = await call('/cards/chub:103/import', { method: 'POST' });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({ error: { code: 'TOO_LARGE', message: expect.stringContaining('stays in the Archive only') } });
+    expect((await services.cards.summaries(actor, workspace, {})).total).toBe(0);
+  });
+
   it('reports an unreachable Archive as unavailable', async () => {
     const nativeArchive = createNativeArchiveService(services.cards, { origin: 'http://archive.test', fetch: async () => { throw new Error('refused'); } });
     const api = createApi({ cards: services.cards, nativeArchive, authenticate: () => actor });

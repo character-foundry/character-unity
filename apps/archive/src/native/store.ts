@@ -70,7 +70,9 @@ const count = (value: number | undefined) => typeof value === 'number' && Number
 function describe(card: ScrapedCard, container: ScrapedObject) {
   let parsed: ReturnType<typeof parseCard>;
   try {
-    parsed = parseCard(container.bytes, { maxFileSize: 64 * 1024 * 1024, maxAssetSize: 64 * 1024 * 1024, maxTotalSize: 64 * 1024 * 1024, extractAssets: true });
+    // CharX packages can be large; the Archive keeps them whole (the library's own import limit is separate).
+    const limit = 256 * 1024 * 1024;
+    parsed = parseCard(container.bytes, { maxFileSize: limit, maxAssetSize: limit, maxTotalSize: limit, extractAssets: true });
   } catch (error) {
     throw new NativeArchiveError('UNSUPPORTED_FORMAT', `The ${card.provider} card ${card.recordId} is not a readable character card: ${error instanceof Error ? error.message : String(error)}`);
   }

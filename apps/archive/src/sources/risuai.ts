@@ -177,11 +177,20 @@ export function imageType(bytes: Uint8Array): string | null {
 
 /** Each download format, the file name it is stored under, and a check that the answer really is that format. */
 const formats = [
-  { path: 'charx-v3', name: 'card.charx', mediaType: 'application/zip', valid: (bytes: Uint8Array) => bytes[0] === 0x50 && bytes[1] === 0x4b },
+  { path: 'charx-v3', name: 'card.charx', mediaType: 'application/zip', valid: isCharx },
   { path: 'png-v3', name: 'card.png', mediaType: 'image/png', valid: (bytes: Uint8Array) => imageType(bytes) === 'image/png' },
   { path: 'json-v3', name: 'card.json', mediaType: 'application/json', valid: isJsonObject },
   { path: 'json-v2', name: 'card.json', mediaType: 'application/json', valid: isJsonObject },
 ] as const;
+/** A CharX zip, or the JPEG-wrapped CharX Realm also serves (a JPEG preview with the zip appended). */
+function isCharx(bytes: Uint8Array) {
+  if (bytes[0] === 0x50 && bytes[1] === 0x4b) return true;
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return false;
+  for (let index = 2; index < bytes.length - 3; index++) {
+    if (bytes[index] === 0x50 && bytes[index + 1] === 0x4b && bytes[index + 2] === 3 && bytes[index + 3] === 4) return true;
+  }
+  return false;
+}
 function isJsonObject(bytes: Uint8Array) {
   try { const value = JSON.parse(new TextDecoder().decode(bytes)) as unknown; return !!value && typeof value === 'object' && !Array.isArray(value); } catch { return false; }
 }
@@ -227,12 +236,14 @@ export const risuai: ScraperPlugin = {
     for (const format of formats) {
       try {
         // CharX packages carry every asset and can be large; give them the old scraper's two minutes.
-        const bytes = (await http.request(`${base}/api/v1/download/${format.path}/${encodeURIComponent(id)}?non_commercial=true`, { timeoutMs: format.path === 'charx-v3' ? 120_000 : 30_000 })).bytes;
+        const charx = format.path === 'charx-v3';
+        const bytes = (await http.request(`${base}/api/v1/download/${format.path}/${encodeURIComponent(id)}?non_commercial=true`,
+          { timeoutMs: charx ? 120_000 : 30_000, ...(charx ? { maxBytes: 256 * 1024 * 1024 } : {}) })).bytes;
         if (format.valid(bytes)) { card = { role: 'card', bytes, mediaType: format.mediaType, name: format.name }; break; }
         failures.push(`${format.path}: not a ${format.name.split('.')[1]} file`);
       } catch (error) {
         if (!(error instanceof ScrapeHttpError)) throw error;
-        failures.push(`${format.path}: HTTP ${error.status || 'no answer'}`);
+        failures.push(`${format.path}: ${error.status >= 300 ? `HTTP ${error.status}` : error.status ? error.message : 'no answer'}`);
       }
     }
     if (!card) throw new Error(`RisuAI card ${id} could not be downloaded in any format (${failures.join('; ')})`);

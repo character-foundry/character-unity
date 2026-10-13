@@ -1,5 +1,6 @@
 import { ScrapeHttpError } from '@character-unity/scraper-kit';
 import type { Listing, ScrapeContext, ScrapedCard, ScrapedObject, ScraperPlugin, SourceStats } from '@character-unity/scraper-kit';
+import { readSvelteKitData } from './sveltekit.js';
 
 const site = 'https://character-tavern.com';
 const images = 'https://ct-cards.storage.character-tavern.com';
@@ -26,13 +27,6 @@ function iso(value: unknown): string | undefined {
 }
 const updatedOf = (node: Node) => iso(node.lastUpdatedAt) ?? iso(node.lastUpdateAt) ?? iso(node.updatedAt) ?? iso(node.updated_at) ?? iso(node.createdAt) ?? iso(node.created_at);
 const tokensOf = (node: Node) => number(node.tokenTotal) ?? number(node.totalTokens);
-const statsOf = (hit: Node, card: Node = {}): SourceStats => {
-  const stats: SourceStats = {};
-  const pairs = [['downloads', card.analytics_downloads ?? hit.analytics_downloads ?? hit.downloads], ['favorites', hit.likes ?? card.likes],
-    ['messages', card.analytics_messages ?? hit.analytics_messages ?? hit.messages]] as const;
-  for (const [key, value] of pairs) { const parsed = number(value); if (parsed !== undefined) stats[key] = parsed; }
-  return stats;
-};
 /** Example messages may be a string or a list of strings/objects. */
 function examples(value: unknown): string {
   if (typeof value === 'string') return value;
@@ -50,9 +44,18 @@ function cookie(context: ScrapeContext): Record<string, string> {
   return parts.length ? { cookie: parts.join('; ') } : {};
 }
 
+/** A SvelteKit page's data nodes, with CT's Cloudflare refusal explained. */
+async function pageData(context: ScrapeContext, url: string) {
+  try { return readSvelteKitData(new TextDecoder().decode((await context.http.request(url, { headers: cookie(context) })).bytes)); }
+  catch (error) {
+    if (error instanceof ScrapeHttpError && error.status === 403) throw new Error('Character Tavern refused the request (403); refresh the cf_clearance cookie in Settings', { cause: error });
+    throw error;
+  }
+}
+
 /**
- * Character Tavern (character-tavern.com). Listings come from the card search; per card it reads the card
- * record, its tags, alternate greetings, content warnings and lorebook, and the card image. CT serves fields,
+ * Character Tavern (character-tavern.com). Listings come from the catalog page's data; per card it reads the
+ * card page's data (record, tags, content warnings, likes, alternate greetings, lorebook) and the card image. CT serves fields,
  * not a card file, so the card JSON is built from them and the records are kept alongside it.
  */
 export const ct: ScraperPlugin = {
@@ -73,10 +76,9 @@ export const ct: ScraperPlugin = {
     { key: 'sort', label: 'Order', type: 'choice', default: 'newest', choices: [{ value: 'newest', label: 'Newest' }, { value: 'trending', label: 'Trending' }, { value: 'oldest', label: 'Oldest' }] },
     { key: 'query', label: 'Search text', type: 'text', default: '' },
     { key: 'pages', label: 'Pages per run', type: 'number', default: 3, min: 1, max: 200 },
-    { key: 'perPage', label: 'Cards per page', type: 'number', default: 30, min: 1, max: 50 },
     { key: 'fullReconcile', label: 'Walk every page', type: 'boolean', default: false, help: 'Ignores the page limit and goes through the whole listing.' },
     { key: 'minTokens', label: 'Minimum tokens', type: 'number', default: 300, min: 0, max: 10_000_000 },
-    { key: 'maxTokens', label: 'Maximum tokens', type: 'number', default: 900_000, min: 0, max: 10_000_000 },
+    { key: 'maxTokens', label: 'Maximum tokens (0 = no limit)', type: 'number', default: 0, min: 0, max: 10_000_000 },
     { key: 'bannedTags', label: 'Leave out these tags', type: 'list', default: [] },
     { key: 'excludedWarnings', label: 'Leave out these content warnings', type: 'list', default: ['underage'] },
     { key: 'allowedWarnings', label: 'Content warnings to show', type: 'list', default: [], help: 'Sent as the content_warnings cookie.' },
@@ -87,24 +89,23 @@ export const ct: ScraperPlugin = {
     const minTokens = settings.minTokens as number, maxTokens = settings.maxTokens as number;
     for (let page = 1; ; page++) {
       context.signal.throwIfAborted();
-      const params = new URLSearchParams({ limit: String(settings.perPage), page: String(page), sort: settings.sort as string });
+      const params = new URLSearchParams({ page: String(page), sort: settings.sort as string });
       if ((settings.query as string).trim()) params.set('query', (settings.query as string).trim());
-      let body: Node;
-      try { body = record(await context.http.json(`${site}/api/search/cards?${params}`, { headers: cookie(context) })); }
-      catch (error) {
-        if (error instanceof ScrapeHttpError && error.status === 403) throw new Error('Character Tavern refused the request (403); refresh the cf_clearance cookie in Settings', { cause: error });
-        throw error;
-      }
-      const hits = Array.isArray(body.hits) ? body.hits.map(record) : [];
+      if (minTokens) params.set('minimum_tokens', String(minTokens));
+      if (maxTokens) params.set('maximum_tokens', String(maxTokens));
+      // The catalog page's own data (SvelteKit): { searchResults: { hits, totalPages } }.
+      const nodes = await pageData(context, `${site}/search/cards/__data.json?${params}`);
+      const results = record(nodes.map(record).find((node) => node.searchResults)?.searchResults);
+      const hits = Array.isArray(results.hits) ? results.hits.map(record) : [];
       for (const hit of hits) {
-        const id = text(hit.id) || (number(hit.id) !== undefined ? String(hit.id) : '');
+        const id = text(hit.id);
         if (!id || /[\s/]/.test(id) || !normalizePath(hit.path).includes('/')) continue;
-        const tokens = tokensOf(hit);
+        const tokens = number(hit.permanentTokens) ?? tokensOf(hit);
         if (tokens !== undefined && (tokens < minTokens || (maxTokens && tokens > maxTokens))) continue;
-        const updatedAt = updatedOf(hit);
-        yield { recordId: id, stats: statsOf(hit), hint: hit, ...(updatedAt ? { updatedAt } : {}) } satisfies Listing;
+        // Listings carry no update time, so every listed card is read again; unchanged files make no new version.
+        yield { recordId: id, hint: hit } satisfies Listing;
       }
-      const totalPages = number(body.totalPages);
+      const totalPages = number(results.totalPages);
       if (!hits.length || (totalPages !== undefined && page >= totalPages)) return;
       if (!settings.fullReconcile && page >= (settings.pages as number)) return;
     }
@@ -114,16 +115,17 @@ export const ct: ScraperPlugin = {
     const hit = record(listing.hint);
     const path = normalizePath(hit.path);
     const http = context.http, headers = cookie(context);
-    const card = record(record(await http.json(`${site}/api/character/${path}`, { headers })).card);
-    const cardId = text(card.id) || (number(card.id) !== undefined ? String(card.id) : '');
+    // The card page's data: the card record, tags, warnings and likes, with greetings and lorebook streamed after.
+    const page = record((await pageData(context, `${site}/character/${path}/__data.json`)).map(record).find((node) => node.character));
+    const card = record(page.character);
+    const cardId = text(card.id);
     if (!cardId) throw new Error(`Character Tavern returned no card for ${path}`);
-    const about = (suffix: string) => http.json(`${site}/api/character/${encodeURIComponent(cardId)}/${suffix}`, { headers });
-    const tags = names(await about('tags'));
-    const greetingList = await about('alternative-greetings');
-    const alternate = Array.isArray(greetingList) ? greetingList.filter((value): value is string => typeof value === 'string' && !!value.trim()) : [];
-    const warningBody = record(await about('content-warnings'));
-    const warnings = Array.isArray(warningBody.contentWarnings) ? warningBody.contentWarnings.filter((value): value is string => typeof value === 'string') : [];
-    const lorebook = card.lorebookId !== undefined && card.lorebookId !== null && card.lorebookId !== '' ? record(await about('lorebook')) : null;
+    const tags = names(page.tags);
+    const alternate = (Array.isArray(page.alternativeGreetings) ? page.alternativeGreetings : [])
+      .map((value) => typeof value === 'string' ? value : text(record(value).greeting) || text(record(value).content) || text(record(value).text))
+      .filter((value) => !!value.trim());
+    const warnings = names(page.contentWarnings);
+    const lorebook = page.lorebook && typeof page.lorebook === 'object' ? record(page.lorebook) : null;
 
     const banned = new Set((context.settings.bannedTags as string[]).map((tag) => tag.toLowerCase()));
     if (tags.some((tag) => banned.has(tag.toLowerCase()))) return null;
@@ -159,14 +161,18 @@ export const ct: ScraperPlugin = {
     const encode = (value: unknown) => new TextEncoder().encode(JSON.stringify(value));
     const objects: ScrapedObject[] = [{ role: 'card', bytes: encode({ spec: 'chara_card_v2', spec_version: '2.0', data }), mediaType: 'application/json', name: 'card.json' }];
     if (image) objects.push({ role: 'portrait', bytes: image, mediaType: 'image/png', name: 'card.png' });
-    objects.push({ role: 'raw', bytes: encode({ hit, card, tags, greetings: alternate, warnings, lorebook }), mediaType: 'application/json', name: 'record.json' });
+    objects.push({ role: 'raw', bytes: encode({ hit, page }), mediaType: 'application/json', name: 'record.json' });
 
     const createdAt = iso(card.createdAt) ?? iso(hit.createdAt);
     const updatedAt = updatedOf(card) ?? listing.updatedAt;
+    const stats: SourceStats = {};
+    for (const [key, value] of [['chats', card.analytics_chats], ['messages', card.analytics_messages], ['favorites', record(page.likesData).likeCount]] as const) {
+      const parsed = number(value); if (parsed !== undefined) stats[key] = parsed;
+    }
     return {
       provider: 'ct', recordId: listing.recordId, url: `${site}/character/${path}`,
-      name: text(card.name) || text(card.inChatName), creator, tagline: text(card.tagline), tags,
-      ...(createdAt ? { createdAt } : {}), ...(updatedAt ? { updatedAt } : {}), stats: statsOf(hit, card), objects,
+      name: text(card.name) || text(card.inChatName), creator: text(page.authorUsername) || creator, tagline: text(card.tagline), tags,
+      ...(createdAt ? { createdAt } : {}), ...(updatedAt ? { updatedAt } : {}), stats, objects,
     };
   },
 };
