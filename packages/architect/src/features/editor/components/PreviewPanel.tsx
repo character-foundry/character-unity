@@ -1,10 +1,8 @@
-import { cardImageUrl } from '../../../unity/config';
-import { marked } from 'marked';
+import { useEditorSession } from '../../../unity/context';
+import { marked, type Tokens } from 'marked';
 import DOMPurify from 'dompurify';
 import { useCardStore, extractCardData } from '../../../store/card-store';
 import { useState, useEffect } from 'react';
-import { localDB } from '../../../lib/db';
-import { getDeploymentConfig } from '../../../config/deployment';
 
 // Custom marked extension to support image sizing syntax: ![alt](url =widthxheight)
 // This handles syntax like: ![image](url =100%x100%) or ![image](url =400x300)
@@ -28,8 +26,10 @@ const imageSizeExtension = {
       };
     }
   },
-  renderer(token: { alt: string; href: string; size: string }) {
-    const { alt, href, size } = token;
+  renderer(token: Tokens.Generic) {
+    const alt = typeof token.alt === 'string' ? token.alt : '';
+    const href = typeof token.href === 'string' ? token.href : '';
+    const size = typeof token.size === 'string' ? token.size : '';
 
     // Parse size: can be "widthxheight", "width", or "100%x100%"
     const sizeMatch = size.match(/^(\d+%?|\*)?x?(\d+%?|\*)?$/);
@@ -57,33 +57,34 @@ const imageSizeExtension = {
 };
 
 // Configure marked with the extension once (outside component to avoid re-registration)
-let markedConfigured = false;
-if (!markedConfigured) {
-  marked.use({ extensions: [imageSizeExtension as any] });
-  markedConfigured = true;
-}
+marked.use({ extensions: [imageSizeExtension] });
 
 export function PreviewPanel() {
+  const session = useEditorSession();
   const currentCard = useCardStore((state) => state.currentCard);
+  const selection = session.selection();
   const [viewMode, setViewMode] = useState<'preview' | 'raw'>('preview');
   const [copied, setCopied] = useState(false);
-  const [cachedImageUrl, setCachedImageUrl] = useState<string | null>(null);
-
-  const config = getDeploymentConfig();
-  const isLightMode = config.mode === 'light' || config.mode === 'static';
-
-  // Load cached image from IndexedDB in light mode
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageFailed, setImageFailed] = useState(false);
   useEffect(() => {
-    if (isLightMode && currentCard?.meta?.id) {
-      localDB.getImage(currentCard.meta.id, 'thumbnail').then((imageData) => {
-        setCachedImageUrl(imageData);
-      });
-    }
-  }, [isLightMode, currentCard?.meta?.id]);
+    let active = true;
+    const signal = session.liveSignal();
+    setImageUrl(''); setImageFailed(false);
+    const refresh = async () => {
+      const card = session.cards.getState().currentCard;
+      if (!card) return;
+      const entries = await session.assets.list(card);
+      if (active && !signal.aborted && session.selection() === selection) {
+        setImageUrl(entries.find((asset) => asset.portrait)?.url ?? ''); setImageFailed(false);
+      }
+    };
+    void refresh().catch(() => { if (active) setImageFailed(true); });
+    const unsubscribe = session.assets.subscribe(() => { void refresh().catch(() => { if (active) setImageFailed(true); }); });
+    return () => { active = false; unsubscribe(); };
+  }, [session, selection]);
 
   if (!currentCard) return null;
-  const cardId = currentCard.meta.id;
-
   const cardData = extractCardData(currentCard);
 
   const renderMarkdown = (text: string) => {
@@ -142,23 +143,13 @@ export function PreviewPanel() {
             {/* Large centered thumbnail */}
             <div className="flex justify-center mb-6">
               <div className="w-64 bg-dark-bg border border-dark-border rounded-lg overflow-hidden shadow-lg">
-                {(isLightMode ? cachedImageUrl : true) ? (
+                {imageUrl && !imageFailed ? (
                   <img
-                    src={isLightMode ? (cachedImageUrl || '') : cardImageUrl(cardId)}
+                    src={imageUrl}
                     alt="Character Avatar"
                     className="w-full h-auto object-contain"
-                    style={{ minHeight: '256px', maxHeight: '384px', display: (isLightMode && !cachedImageUrl) ? 'none' : 'block' }}
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none';
-                      const parent = e.currentTarget.parentElement;
-                      if (parent && !parent.querySelector('.no-image-placeholder')) {
-                        const placeholder = document.createElement('div');
-                        placeholder.className = 'no-image-placeholder flex items-center justify-center text-dark-muted text-sm';
-                        placeholder.style.height = '256px';
-                        placeholder.textContent = 'No Image';
-                        parent.appendChild(placeholder);
-                      }
-                    }}
+                    style={{ minHeight: '256px', maxHeight: '384px' }}
+                    onError={() => setImageFailed(true)}
                   />
                 ) : (
                   <div className="flex items-center justify-center text-dark-muted text-sm" style={{ height: '256px' }}>

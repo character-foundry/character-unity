@@ -1,4 +1,4 @@
-import { api } from '../lib/api';
+import type { UnityApiClient } from '../lib/api';
 import type { Card } from '../lib/types';
 
 export interface ImportOptions {
@@ -6,7 +6,7 @@ export interface ImportOptions {
 }
 
 /** Submit the original container. Foundry parses and preserves it on the server. */
-export async function importCharacterFile(file: File, options: ImportOptions = {}): Promise<Card> {
+export async function importCharacterFile(api: UnityApiClient, file: File, options: ImportOptions = {}): Promise<Card> {
   options.signal?.throwIfAborted();
   const result = await api.importFile(file, options);
   options.signal?.throwIfAborted();
@@ -16,7 +16,7 @@ export async function importCharacterFile(file: File, options: ImportOptions = {
 }
 
 /** Direct file URLs use the same loss-preserving path as uploads. Site pages belong to Archive. */
-export async function importCharacterUrl(url: string, options: ImportOptions = {}): Promise<Card> {
+export async function importCharacterUrl(api: UnityApiClient, url: string, options: ImportOptions = {}): Promise<Card> {
   const source = new URL(url);
   if (!['https:', 'http:'].includes(source.protocol) || source.username || source.password) {
     throw new Error('Use an HTTP or HTTPS card file URL');
@@ -27,5 +27,5 @@ export async function importCharacterUrl(url: string, options: ImportOptions = {
   const blob = await response.blob();
   options.signal?.throwIfAborted();
   const filename = decodeURIComponent(source.pathname.split('/').pop() || 'character');
-  return importCharacterFile(new File([blob], filename, { type: blob.type }), options);
+  return importCharacterFile(api, new File([blob], filename, { type: blob.type }), options);
 }

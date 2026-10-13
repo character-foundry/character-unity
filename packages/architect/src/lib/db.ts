@@ -16,6 +16,8 @@ interface DraftCard {
   id: string;
   card: Card;
   lastSaved: string;
+  snapshotId?: string;
+  baseRevisionId?: string;
 }
 
 interface StoredImage {
@@ -65,9 +67,12 @@ export interface RestoreCounts {
 
 export class LocalDB {
   private db: IDBPDatabase | null = null;
+  private opening: Promise<void> | null = null;
 
-  async init() {
-    this.db = await openDB(DB_NAME, DB_VERSION, {
+  init(): Promise<void> {
+    if (this.db) return Promise.resolve();
+    if (this.opening) return this.opening;
+    this.opening = openDB(DB_NAME, DB_VERSION, {
       upgrade(db, oldVersion) {
         // Version 1: drafts store
         if (!db.objectStoreNames.contains(DRAFTS_STORE)) {
@@ -97,7 +102,8 @@ export class LocalDB {
           store.createIndex('cardId_type', ['cardId', 'type']);
         }
       },
-    });
+    }).then((db) => { this.db = db; }).finally(() => { this.opening = null; });
+    return this.opening;
   }
 
   // Cards store (for client-side mode)
@@ -121,13 +127,15 @@ export class LocalDB {
     return this.db!.getAll(CARDS_STORE);
   }
 
-  async saveDraft(id: string, card: Card) {
+  async saveDraft(id: string, card: Card, baseRevisionId?: string) {
     if (!this.db) await this.init();
 
     const draft: DraftCard = {
       id,
       card,
       lastSaved: new Date().toISOString(),
+      snapshotId: crypto.randomUUID(),
+      ...(baseRevisionId ? { baseRevisionId } : {}),
     };
 
     await this.db!.put(DRAFTS_STORE, draft);
@@ -143,9 +151,9 @@ export class LocalDB {
     await this.db!.delete(DRAFTS_STORE, id);
   }
 
-  async listDrafts(): Promise<DraftCard[]> {
+  async listDrafts(prefix?: string): Promise<DraftCard[]> {
     if (!this.db) await this.init();
-    return this.db!.getAll(DRAFTS_STORE);
+    return this.db!.getAll(DRAFTS_STORE, prefix ? IDBKeyRange.bound(prefix, `${prefix}\uffff`) : undefined);
   }
 
   // Images store (for card thumbnails in client-side mode)

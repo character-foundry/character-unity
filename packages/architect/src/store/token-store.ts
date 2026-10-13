@@ -1,8 +1,8 @@
-import { create } from 'zustand';
-import { api } from '../lib/api';
+import { useStore } from 'zustand';
+import { createStore, type StoreApi } from 'zustand/vanilla';
+import type { UnityApiClient } from '../lib/api';
 import { extractCardData } from '../lib/card-utils';
-import { getDeploymentConfig } from '../config/deployment';
-import { registry } from '@character-foundry/character-foundry/tokenizers';
+import { useEditorSession } from '../unity/context';
 import type { Card } from '../lib/types';
 import type { CardExtensions } from '../lib/extension-types';
 import { getVisualDescription, getDepthPrompt } from '../lib/extension-types';
@@ -12,7 +12,7 @@ interface TokenCounts {
   total: number;
 }
 
-interface TokenStore {
+export interface TokenStore {
   tokenCounts: TokenCounts;
   tokenizerModel: string;
   
@@ -20,11 +20,18 @@ interface TokenStore {
   setTokenizerModel: (model: string) => void;
 }
 
-export const useTokenStore = create<TokenStore>((set, get) => ({
+export function createTokenStore({ api, isDisposed, signal }: {
+  api: Pick<UnityApiClient, 'tokenize'>; isDisposed(): boolean; signal: AbortSignal;
+}): StoreApi<TokenStore> {
+  let generation = 0;
+  const inactive = () => signal.aborted || isDisposed();
+  return createStore<TokenStore>((set, get) => ({
   tokenCounts: { total: 0 },
   tokenizerModel: 'gpt-4',
 
   updateTokenCounts: async (card) => {
+    const request = ++generation;
+    if (inactive()) return;
     const { tokenizerModel } = get();
     if (!card) {
         set({ tokenCounts: { total: 0 } });
@@ -70,27 +77,8 @@ export const useTokenStore = create<TokenStore>((set, get) => ({
       payload.lorebook = cardData.character_book.entries.map((e) => e.content).join('\n');
     }
 
-    const config = getDeploymentConfig();
-
-    // Client-side tokenization for light/static modes
-    if (config.mode === 'light' || config.mode === 'static') {
-      const tokenizer = registry.get(tokenizerModel);
-
-      const fields: Record<string, number> = {};
-      let total = 0;
-
-      for (const [key, value] of Object.entries(payload)) {
-        const count = tokenizer.count(value);
-        fields[key] = count;
-        total += count;
-      }
-
-      set({ tokenCounts: { ...fields, total } });
-      return;
-    }
-
-    // Server-side tokenization for full mode
     const { data, error } = await api.tokenize({ model: tokenizerModel, payload });
+    if (inactive() || generation !== request || get().tokenizerModel !== tokenizerModel) return;
     if (error) {
       console.error('Failed to tokenize:', error);
       return;
@@ -102,7 +90,16 @@ export const useTokenStore = create<TokenStore>((set, get) => ({
   },
 
   setTokenizerModel: (model) => {
+    if (inactive()) return;
+    generation++;
     set({ tokenizerModel: model });
     // Note: Consumer should call updateTokenCounts(card) after this if they have the card
   },
-}));
+  }));
+}
+
+export function useTokenStore(): TokenStore;
+export function useTokenStore<T>(selector: (state: TokenStore) => T): T;
+export function useTokenStore<T>(selector?: (state: TokenStore) => T): T | TokenStore {
+  return useStore(useEditorSession().tokens, (state): T | TokenStore => selector ? selector(state) : state);
+}

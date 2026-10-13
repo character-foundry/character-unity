@@ -13,7 +13,9 @@ See [current editor status and remaining gaps](docs/editor-port.md).
 
 Existing Archive database/files/LanceDB stay in place. Live writer takeover is
 on hold. The native viewer/shell no longer uses Next shims or old CardsHub
-server fallbacks. Editor isolation is next; Archive-reference favorites/import
+server fallbacks. Each editor now owns its workspace, draft, assets, expected
+revision heads and request lifetime; multiple hosts do not share editing state.
+Archive-reference favorites/import
 deduplication remain subsequent work, not completed features.
 
 The following foundation history describes the earlier standalone/scaffold

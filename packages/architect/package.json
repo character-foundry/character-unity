@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "Unity's character editor, with native revision persistence and Foundry imports.",
+  "scripts": { "type-check": "tsc -p tsconfig.json" },
   "exports": {
     "./host": "./src/unity/host.tsx",
     "./styles.css": "./src/unity/architect.css"

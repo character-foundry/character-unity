@@ -1,5 +1,31 @@
 # Editor validation inventory
 
+## Active unified application
+
+`pnpm test:e2e:unity` builds `apps/web` plus a separate two-host fixture beneath
+the test build's `/assets/` route. It runs the actual production Node host with
+isolated temporary SQLite/blobs, never a live Archive or inherited API process.
+The ordinary web build does not include the fixture or expose a testing route.
+
+Twenty-four Chromium workflows cover nine import/editor/assets/first-Save/Restore
+flows, eight native viewer/navigation/download flows and seven lifecycle isolation
+flows. The two hosts exercise independent workspaces with colliding transport IDs,
+reversed reads/saves, focused Ctrl+S, staged uploads/portraits, rooted settings
+dialogs, disposal, same-card expected-head conflicts, late AI completions, pending
+same-parent fork cancellation, failed-selection Save gating and explicit recovery.
+The recovery flow additionally runs with a frozen clock to prove two distinct
+snapshots in the same millisecond do not share dismissal identity. Unit seams
+cover late token counts, model changes, API auxiliary-read heads, queued recovery
+writes and ownership. Screenshots are separately inspected; Playwright interaction
+uses real controls rather than evaluating stores to simulate user actions.
+
+Recovery covers saved-card text only. Staged files and unsaved New/Fork drafts
+remain memory-only. Wizard workflow QA is separately deferred at low priority.
+Evidence: `runtime/unity-e2e-report` and `runtime/unity-e2e-results`; the final
+frozen-clock rerun preserves that full report and uses separate recovery results.
+
+## Earlier scaffold/profile inventory
+
 The browser suite runs production Architect assets with either the built Node
 API on the same loopback origin or a separate static-only server with no API. Each API run uses a new temporary SQLite database and blob directory. Each
 browser-only test gets a fresh browser context and isolated IndexedDB storage. It never reuses an existing server or accesses legacy/Archive data.

@@ -245,11 +245,12 @@ export async function invokeClientLLM(request: ClientLLMRequest): Promise<Client
 /**
  * Test connection to a provider
  */
-export async function testClientLLMConnection(provider: ClientLLMProvider): Promise<{ success: boolean; error?: string }> {
+export async function testClientLLMConnection(provider: ClientLLMProvider, options: { signal?: AbortSignal } = {}): Promise<{ success: boolean; error?: string }> {
   const result = await invokeClientLLM({
     provider,
     messages: [{ role: 'user', content: 'Say "Connection successful" and nothing else.' }],
     maxTokens: 20,
+    signal: options.signal,
   });
 
   return {
@@ -261,8 +262,9 @@ export async function testClientLLMConnection(provider: ClientLLMProvider): Prom
 /**
  * Fetch available models from provider
  */
-export async function fetchClientLLMModels(provider: ClientLLMProvider): Promise<{ success: boolean; models?: string[]; error?: string }> {
+export async function fetchClientLLMModels(provider: ClientLLMProvider, options: { signal?: AbortSignal } = {}): Promise<{ success: boolean; models?: string[]; error?: string }> {
   try {
+    options.signal?.throwIfAborted();
     let url: string;
     let headers: Record<string, string> = {};
 
@@ -290,12 +292,13 @@ export async function fetchClientLLMModels(provider: ClientLLMProvider): Promise
       }
     }
 
-    const response = await fetch(url, { headers });
+    const response = await fetch(url, { headers, signal: options.signal });
     if (!response.ok) {
       throw new Error(`Failed to fetch models: ${response.status}`);
     }
 
     const data = await response.json();
+    options.signal?.throwIfAborted();
     const models = Array.isArray(data.data)
       ? data.data.map((model: Record<string, unknown>) => model.id || model.model || model.name)
         .filter((model: unknown): model is string => typeof model === 'string').sort()

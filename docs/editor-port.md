@@ -21,17 +21,37 @@ preferences remain. Nonexistent Architect-server RAG/ComfyUI/backup/name-tool
 paths and old dashboard/import/parser shells are retired, not replaced with
 fake endpoints. Native optional tools are tracked in `cu-1o2.5.13`.
 
-The editor still uses global Zustand stores (one editor per page); per-instance
-and workspace isolation is tracked in `cu-1o2.5.12` and is next. The viewer and
+Each editor has an explicit `EditorSession`: immutable workspace/API client,
+per-instance vanilla card/UI/token/LLM stores, staged assets, revision heads,
+portal root, wizard transcript and cancellable selection/lifetime. React hooks
+require that session's provider; there is no default/current-session fallback.
+Closing or selecting in one editor cannot retarget another editor's pending work.
+Auxiliary reads never advance its expected Save head. Concurrent same-card edits
+retain independent drafts and use the server's existing expected-head conflict.
+The application retains the same session through New/Fork's first Save and route
+promotion, preserving edits/assets entered during the pending Save.
+
+Recovery keys include workspace, card and draft owner; deleting or saving one
+owner does not erase another's snapshot. Restore copies the offered snapshot into
+the restoring owner before acknowledging it; Discard acknowledges only the exact
+offered snapshot, and later changes from its original owner remain recoverable.
+The original expected head stays pinned so restoring stale text cannot overwrite
+a newer revision. This is text recovery, not durable recovery of staged files or
+unsaved New/Fork drafts. Browser-local preference contents are intentionally shared.
+
+The viewer and
 shell now use native React Router/HTML without Next shims (`cu-1o2.26`). General
 import deduplication and Archive-reference favorites/forks are separate remaining
 work (`cu-1o2.27`), not capabilities of this editor integration.
 
-Owner work order: native viewer/Next-shim removal is complete; editor isolation
-follows. Wizard workflow QA (`cu-1o2.5.5`) is low priority, not a prerequisite.
+Native viewer/Next-shim removal (`cu-1o2.26`) and editor isolation (`cu-1o2.5.12`)
+are complete. Wizard workflow QA (`cu-1o2.5.5`) remains low priority.
 
 `pnpm dev` starts API + unified web. `pnpm test:e2e:unity` builds the real unified
-web UI and runs its isolated production-bundle browser workflows. The legacy
+web UI and a separate two-host browser fixture beneath the test build's existing
+`/assets/` route, then runs isolated production-Node browser workflows. The fixture
+is not part of the ordinary production build and adds no application/API route.
+The legacy
 host tests below remain useful scaffold regressions but do not prove parity of
 the active editor.
 

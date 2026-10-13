@@ -1,38 +1,26 @@
-import { create } from 'zustand';
+import { useStore } from 'zustand';
+import { createStore, type StoreApi } from 'zustand/vanilla';
+import { useEditorSession } from '../unity/context';
 
-/**
- * Known core editor tabs (for type hints, not enforced)
- * With the plugin architecture, any string tab ID is valid.
- */
-export type CoreEditorTab =
-  | 'edit'
-  | 'preview'
-  | 'diff'
-  | 'focused'
-  | 'assets'
-  | 'block-editor'
-  | 'wwwyzzerdd'
-  | 'comfyui';
-
-/**
- * Tab ID type - accepts any string to support plugin-registered tabs
- */
+export type CoreEditorTab = 'edit' | 'preview' | 'diff' | 'focused' | 'assets' | 'wwwyzzerdd';
 export type EditorTab = string;
-
-interface UIStore {
-  // Editor UI State
+export interface UIStore {
   activeTab: EditorTab;
   showAdvanced: boolean;
-
-  // Actions
-  setActiveTab: (tab: EditorTab) => void;
-  setShowAdvanced: (show: boolean) => void;
+  setActiveTab(tab: EditorTab): void;
+  setShowAdvanced(show: boolean): void;
 }
 
-export const useUIStore = create<UIStore>((set) => ({
-  activeTab: 'edit',
-  showAdvanced: false,
+export function createUIStore(): StoreApi<UIStore> {
+  return createStore<UIStore>((set) => ({
+    activeTab: 'edit', showAdvanced: false,
+    setActiveTab: (activeTab) => set({ activeTab }),
+    setShowAdvanced: (showAdvanced) => set({ showAdvanced }),
+  }));
+}
 
-  setActiveTab: (tab) => set({ activeTab: tab }),
-  setShowAdvanced: (show) => set({ showAdvanced: show }),
-}));
+export function useUIStore(): UIStore;
+export function useUIStore<T>(selector: (state: UIStore) => T): T;
+export function useUIStore<T>(selector?: (state: UIStore) => T): T | UIStore {
+  return useStore(useEditorSession().ui, (state): T | UIStore => selector ? selector(state) : state);
+}

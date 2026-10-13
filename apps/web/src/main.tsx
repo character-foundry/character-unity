@@ -7,6 +7,7 @@ import LibraryPage from '@/app/library';
 import CardDetailPage from '@/features/viewer/page';
 import EditPage from '@/app/edit';
 import NewCardPage from '@/app/new';
+import EditorSessionLayout from '@/app/editor-session';
 import ArchivePage from '@/app/archive';
 import SettingsPage from '@/app/settings';
 import './styles.css';
@@ -40,9 +41,11 @@ createRoot(root).render(
           <Route path="/explore" element={<LibraryPage />} />
           <Route path="/archive" element={<ArchivePage />} />
           <Route path="/card/:id" element={<CardDetailPage />} />
-          <Route path="/card/:id/edit" element={<EditPage />} />
-          <Route path="/new" element={<NewCardPage />} />
-          <Route path="/card/:id/fork" element={<NewCardPage key="fork" />} />
+          <Route element={<EditorSessionLayout />}>
+            <Route path="/card/:id/edit" element={<EditPage />} />
+            <Route path="/new" element={<NewCardPage />} />
+            <Route path="/card/:id/fork" element={<NewCardPage key="fork" />} />
+          </Route>
           <Route path="/search" element={<SearchRedirect />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/chat-apps" element={<Navigate to="/settings#chat-apps" replace />} />

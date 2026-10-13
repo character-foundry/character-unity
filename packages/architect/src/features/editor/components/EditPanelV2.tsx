@@ -12,8 +12,8 @@
  * - Tab content generated from configuration
  */
 
-import { editorAssets } from '../../../unity/assets';
-import { useState, useEffect } from 'react';
+import { useEditorSession } from '../../../unity/context';
+import { useState, useEffect, useId } from 'react';
 import { useCardStore, extractCardData } from '../../../store/card-store';
 import { useSettingsStore } from '../../../store/settings-store';
 import { useTokenStore } from '../../../store/token-store';
@@ -44,7 +44,11 @@ type EditTab = TabId | 'lorebook' | 'extensions';
 // ============================================================================
 
 function AvatarUpload() {
-  const cardId = useCardStore((state) => state.currentCard?.meta.id);
+  const session = useEditorSession();
+  const editorAssets = session.assets;
+  useCardStore((state) => state.currentCard);
+  const selection = session.selection();
+  const inputId = useId();
   const [imageUrl, setImageUrl] = useState('');
   const [imageFailed, setImageFailed] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -54,41 +58,46 @@ function AvatarUpload() {
     let active = true;
     setImageUrl('');
     setError(null);
+    setIsUploading(false);
     const refresh = async () => {
-      const card = useCardStore.getState().currentCard;
+      const card = session.cards.getState().currentCard;
       if (!card) return;
       try {
         const assets = await editorAssets.list(card);
-        if (active) {
+        if (active && session.selection() === selection) {
           setImageUrl(assets.find((asset) => asset.portrait)?.url ?? '');
           setImageFailed(false);
         }
       } catch (err) {
-        if (active) setError(err instanceof Error ? err.message : 'Failed to load portrait');
+        if (active && session.selection() === selection) setError(err instanceof Error ? err.message : 'Failed to load portrait');
       }
     };
     void refresh();
     const unsubscribe = editorAssets.subscribe(() => { queueMicrotask(() => { if (active) void refresh(); }); });
     return () => { active = false; unsubscribe(); };
-  }, [cardId]);
+  }, [session, editorAssets, selection]);
 
   const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const input = event.currentTarget;
     const file = input.files?.[0];
-    const card = useCardStore.getState().currentCard;
+    const card = session.cards.getState().currentCard;
     if (!file || !card) return;
+    const signal = session.liveSignal();
+    const live = () => session.selection() === selection && !signal.aborted;
     setIsUploading(true);
     setError(null);
     try {
       await editorAssets.setPortrait(card, file);
-      if (useCardStore.getState().currentCard?.meta.id === card.meta.id) {
-        useCardStore.setState({ isDirty: true });
+      if (live()) {
+        session.cards.setState({ isDirty: true });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add portrait');
+      if (live()) setError(err instanceof Error ? err.message : 'Failed to add portrait');
     } finally {
-      setIsUploading(false);
-      input.value = '';
+      if (live()) {
+        setIsUploading(false);
+        input.value = '';
+      }
     }
   };
 
@@ -108,10 +117,10 @@ function AvatarUpload() {
           </div>
         )}
       </div>
-      <label htmlFor="avatar-upload" className="btn-secondary inline-flex px-3 py-2 rounded-lg text-sm cursor-pointer focus-within:ring-2 focus-within:ring-blue-500">
+      <label htmlFor={inputId} className="btn-secondary inline-flex px-3 py-2 rounded-lg text-sm cursor-pointer focus-within:ring-2 focus-within:ring-blue-500">
         {isUploading ? 'Adding portrait...' : 'Upload Image'}
         <input
-          id="avatar-upload"
+          id={inputId}
           type="file"
           accept="image/*"
           aria-label="Choose portrait"

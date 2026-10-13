@@ -1,12 +1,12 @@
 import '../polyfills/process';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CardEditor } from '../features/editor/CardEditor';
 import { initializeModules } from '../lib/modules';
 import { registerCustomWidgets } from '../lib/schemas/widgets';
 import { useCardStore } from '../store/card-store';
-import type { Card, CCv3Data } from '../lib/types';
 import { useSettingsStore, THEMES } from '../store/settings-store';
-import { localDB } from '../lib/db';
+import { useEditorSession } from './context';
+import type { RecoveryDraft } from './recovery';
 import { SettingsModal } from '../components/shared/SettingsModal';
 import { SettingsButton } from '../components/shared/SettingsButton';
 
@@ -37,30 +37,25 @@ function useScopedTheme(root: React.RefObject<HTMLDivElement | null>) {
   }, [root, themeId]);
 }
 
-/** Architect's blank character (card-store createNewCard) without its immediate save. */
-function blankCard(): Card {
-  const now = new Date().toISOString();
-  return {
-    meta: { id: '', name: 'New Character', spec: 'v3', tags: [], createdAt: now, updatedAt: now },
-    data: { spec: 'chara_card_v3', spec_version: '3.0', data: {
-      name: 'New Character', description: '', personality: '', scenario: '', first_mes: '', mes_example: '', creator: '',
-      character_version: '1.0', tags: [], system_prompt: '', post_history_instructions: '', alternate_greetings: [], group_only_greetings: [],
-    } } as CCv3Data,
-  };
-}
-
 export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
   cardId: string; forkOf?: string | undefined; onExit?: (() => void) | undefined; onCreated?: ((cardId: string) => void) | undefined;
 }) {
   const isDraft = cardId === '';
-  const root = useRef<HTMLDivElement>(null);
+  const session = useEditorSession();
+  const root = session.root;
   const currentCard = useCardStore((state) => state.currentCard);
+  const matchesSelection = Boolean(currentCard && (isDraft
+    ? currentCard.meta.id === '' && currentCard.meta.forkOf === forkOf
+    : currentCard.meta.id === cardId));
   const isDirty = useCardStore((state) => state.isDirty);
   const isSaving = useCardStore((state) => state.isSaving);
-  const isRestoring = useCardStore((state) => state.isRestoring);
+  const historyRestoring = useCardStore((state) => state.isRestoring);
+  const [recovering, setRecovering] = useState(false);
+  const isRestoring = historyRestoring || recovering;
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [draft, setDraft] = useState<{ savedAt: string } | null>(null);
+  const selection = useCardStore((state) => state.selectionVersion);
+  const [draft, setDraft] = useState<RecoveryDraft | null>(null);
   const [savedAt, setSavedAt] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   useScopedTheme(root);
@@ -68,43 +63,16 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
   useEffect(() => {
     let active = true;
     setLoading(true); setError(null); setDraft(null);
-    // First Save assigns an id and changes the route. Keep any changes typed
-    // while that Save was in flight rather than reloading over the draft.
-    const existing = useCardStore.getState();
-    if (!isDraft && existing.currentCard?.meta.id === cardId && existing.isDirty) {
-      setLoading(false);
-      return () => { active = false; };
-    }
-    useCardStore.getState().setCurrentCard(null);
-    if (isDraft && forkOf) {
-      // A fork draft is the original's current version without an id, so it is held in memory like a new card.
-      void (async () => {
-        await useCardStore.getState().loadCard(forkOf);
-        if (!active) return;
-        const loaded = useCardStore.getState().currentCard;
-        if (!loaded || loaded.meta.id !== forkOf) { setError('The card to fork could not be opened.'); setLoading(false); return; }
-        useCardStore.setState({ currentCard: { ...loaded, meta: { ...loaded.meta, id: '', forkOf } }, isDirty: false });
-        setLoading(false);
-      })().catch((failure) => {
-        if (!active) return;
-        setError(failure instanceof Error ? failure.message : 'The card to fork could not be opened.');
-        setLoading(false);
-      });
-      return () => { active = false; };
-    }
-    if (isDraft) {
-      // Held in memory only: the store skips autosave and IndexedDB drafts for a card without an id.
-      useCardStore.setState({ currentCard: blankCard(), isDirty: false });
-      setLoading(false);
-      return () => { active = false; };
-    }
+    const existing = session.cards.getState();
+    const alreadySelected = !isDraft && existing.currentCard?.meta.id === cardId;
+    if (!alreadySelected) { setShowSettings(false); setSavedAt(null); }
     void (async () => {
-      await useCardStore.getState().loadCard(cardId);
+      await session.open({ cardId, forkOf });
       if (!active) return;
-      const loaded = useCardStore.getState().currentCard;
-      if (!loaded || loaded.meta.id !== cardId) { setError('This card could not be opened.'); setLoading(false); return; }
-      const stored = await localDB.getDraft(cardId).catch(() => null);
-      if (active && stored && stored.lastSaved > loaded.meta.updatedAt) setDraft({ savedAt: stored.lastSaved });
+      const loaded = session.cards.getState().currentCard;
+      if (!loaded || loaded.meta.id !== cardId) throw new Error('This card could not be opened.');
+      const stored = cardId && !alreadySelected ? await session.recovery.load(cardId) : null;
+      if (active && stored?.card.meta.id === cardId && (stored.lastSaved > loaded.meta.updatedAt || JSON.stringify(stored.card.data) !== JSON.stringify(loaded.data))) setDraft(stored);
       if (active) setLoading(false);
     })().catch((failure) => {
       if (!active) return;
@@ -113,50 +81,69 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
     });
     return () => {
       active = false;
-      const state = useCardStore.getState();
-      if (state.autoSaveTimeout) clearTimeout(state.autoSaveTimeout);
     };
-  }, [cardId, forkOf, isDraft]);
+  }, [session, cardId, forkOf, isDraft]);
 
-  async function save() {
+  const save = useCallback(async () => {
+    if (loading || !matchesSelection || isRestoring) return;
+    const selection = session.selection();
     setError(null);
     try {
-      const state = useCardStore.getState();
+      const state = session.cards.getState();
       if (state.isSaving) return; // a second Ctrl+S on a draft would otherwise create a second card
       if (state.autoSaveTimeout) clearTimeout(state.autoSaveTimeout);
-      await state.saveCard();
+      await session.save();
+      if (session.signal.aborted || session.selection() !== selection) return;
       setSavedAt(new Date().toLocaleTimeString());
-      const created = useCardStore.getState().currentCard?.meta.id;
+      const created = session.cards.getState().currentCard?.meta.id;
       if (isDraft && created) onCreated?.(created);
     } catch (failure) {
-      setError(failure instanceof Error ? failure.message : 'Save failed');
+      if (!session.signal.aborted && session.selection() === selection) setError(failure instanceof Error ? failure.message : 'Save failed');
     }
-  }
+  }, [session, isDraft, onCreated, loading, matchesSelection, isRestoring]);
 
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') { event.preventDefault(); void save(); }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's' && root.current?.contains(document.activeElement)) {
+        event.preventDefault(); void save();
+      }
     };
     const leave = (event: BeforeUnloadEvent) => {
-      if (useCardStore.getState().isDirty) { event.preventDefault(); event.returnValue = ''; }
+      if (session.cards.getState().isDirty) { event.preventDefault(); event.returnValue = ''; }
     };
     window.addEventListener('keydown', keys);
     window.addEventListener('beforeunload', leave);
     return () => { window.removeEventListener('keydown', keys); window.removeEventListener('beforeunload', leave); };
-  }, []);
+  }, [session, root, save]);
 
   async function restoreDraft() {
-    const stored = await localDB.getDraft(cardId);
-    if (stored?.card) {
-      useCardStore.getState().setCurrentCard(stored.card);
-      useCardStore.setState({ isDirty: true });
-    }
-    setDraft(null);
+    if (!draft || isRestoring || isSaving) return;
+    const snapshot = draft, selected = session.selection();
+    setRecovering(true); setError(null);
+    try {
+      // Copy recovery into this owner before acknowledging the offered snapshot.
+      // A crash between Restore and Save must still leave a recoverable draft.
+      await session.recovery.save(cardId, snapshot.card, snapshot.baseRevisionId);
+      await session.recovery.dismiss?.(snapshot);
+      if (session.signal.aborted || selected !== session.selection()) return;
+      session.cards.getState().setCurrentCard(structuredClone(snapshot.card));
+      if (snapshot.baseRevisionId) session.api.pinRevision(cardId, snapshot.baseRevisionId);
+      session.cards.setState({ isDirty: true });
+      setDraft(null);
+    } catch (failure) {
+      if (!session.signal.aborted && selected === session.selection()) setError(failure instanceof Error ? failure.message : 'Recovery failed');
+    } finally { if (!session.signal.aborted) setRecovering(false); }
   }
 
   async function discardDraft() {
-    await localDB.deleteDraft(cardId).catch(() => undefined);
-    setDraft(null);
+    if (!draft || isRestoring || isSaving) return;
+    const selected = session.selection();
+    try {
+      await session.recovery.dismiss?.(draft);
+      if (!session.signal.aborted && selected === session.selection()) setDraft(null);
+    } catch (failure) {
+      if (!session.signal.aborted && selected === session.selection()) setError(failure instanceof Error ? failure.message : 'Recovery could not be dismissed');
+    }
   }
 
   async function discardChanges() {
@@ -164,44 +151,43 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
     setError(null);
     try {
       if (isDraft) {
-        useCardStore.getState().setCurrentCard(null);
+        await session.discard();
         onExit?.();
       } else {
-        await localDB.deleteDraft(cardId).catch(() => undefined);
-        await useCardStore.getState().loadCard(cardId);
+        await session.discard();
         setDraft(null);
       }
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not discard changes'); }
   }
 
   function exit() {
-    if (useCardStore.getState().isDirty && !window.confirm('Leave without saving changes to this card and its assets?')) return;
-    useCardStore.getState().setCurrentCard(null);
+    if (session.cards.getState().isDirty && !window.confirm('Leave without saving changes to this card and its assets?')) return;
+    session.cards.getState().setCurrentCard(null);
     onExit?.();
   }
 
-  const status = loading ? 'Loading card…' : error && !currentCard ? 'Card unavailable' : isRestoring ? 'Restoring saved revision…' : isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? 'Unsaved changes — Save creates a revision' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
+  const status = loading ? 'Loading card…' : !matchesSelection ? 'Card unavailable' : isRestoring ? 'Restoring saved revision…' : isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? 'Unsaved changes — Save creates a revision' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
 
   return (
     <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 7rem)' }}>
       <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b" style={{ background: 'var(--color-surface)' }}>
         <span className="text-sm opacity-80 flex-1 min-w-40">{status}</span>
         <SettingsButton onClick={() => setShowSettings(true)} />
-        {isDirty && <button className="btn-secondary text-sm" disabled={isSaving || isRestoring} onClick={() => { void discardChanges(); }}>Discard changes</button>}
-        {onExit && <button className="btn-secondary text-sm" disabled={isSaving || isRestoring} onClick={exit}>Done</button>}
-        <button className="btn-primary text-sm" disabled={isSaving || isRestoring || (!isDirty && !isDraft)} onClick={() => { void save(); }} title="Save a new revision (Ctrl+S)">Save</button>
+        {isDirty && matchesSelection && <button className="btn-secondary text-sm" disabled={loading || isSaving || isRestoring} onClick={() => { void discardChanges(); }}>Discard changes</button>}
+        {onExit && <button className="btn-secondary text-sm" disabled={loading || isSaving || isRestoring} onClick={exit}>Done</button>}
+        <button className="btn-primary text-sm" disabled={loading || !matchesSelection || isSaving || isRestoring || (!isDirty && !isDraft)} onClick={() => { void save(); }} title="Save a new revision (Ctrl+S)">Save</button>
       </div>
       {draft && (
         <div className="flex items-center gap-3 px-4 py-2 text-sm bg-yellow-900/40 border-b">
-          <span className="flex-1">You have unsaved changes from {new Date(draft.savedAt).toLocaleString()}.</span>
-          <button className="btn-primary text-sm" onClick={() => { void restoreDraft(); }}>Restore</button>
-          <button className="btn-secondary text-sm" onClick={() => { void discardDraft(); }}>Discard</button>
+          <span className="flex-1">You have unsaved changes from {new Date(draft.lastSaved).toLocaleString()}.</span>
+          <button className="btn-primary text-sm" disabled={isRestoring || isSaving} onClick={() => { void restoreDraft(); }}>Restore</button>
+          <button className="btn-secondary text-sm" disabled={isRestoring || isSaving} onClick={() => { void discardDraft(); }}>Discard</button>
         </div>
       )}
       {error && <div className="px-4 py-2 text-sm bg-red-900/50 border-b" role="alert">{error}</div>}
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
       <div className="flex-1 min-h-0" inert={isRestoring}>
-        {loading ? <div className="p-12 text-center opacity-60">Loading card…</div> : currentCard && <CardEditor />}
+        {loading ? <div className="p-12 text-center opacity-60">Loading card…</div> : matchesSelection && <CardEditor key={selection} />}
       </div>
     </div>
   );

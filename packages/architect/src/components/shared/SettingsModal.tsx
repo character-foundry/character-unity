@@ -1,4 +1,4 @@
-import { useState, Suspense, type KeyboardEvent } from 'react';
+import { useState, useId, Suspense, type KeyboardEvent } from 'react';
 import { useSettingsPanels, useModules } from '../../lib/registry/hooks';
 import { groupSettingsPanels } from '../../lib/registry/settings-navigation';
 import { ModuleToggle } from '../../features/settings/ModuleToggle';
@@ -18,6 +18,7 @@ function moveTab(event: KeyboardEvent<HTMLElement>) {
 }
 
 export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+  const id = useId();
   const [categoryId, setCategoryId] = useState('general');
   const [selectedPanels, setSelectedPanels] = useState<Record<string, string>>({});
   const panels = useSettingsPanels();
@@ -41,24 +42,24 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       </div>
       <div role="tablist" aria-label="Settings categories" onKeyDown={moveTab} className="settings-categories">
         {categories.map(item => (
-          <button key={item.id} id={`settings-category-${item.id}`} type="button" role="tab"
-            aria-selected={category?.id === item.id} aria-controls="settings-category-content"
+          <button key={item.id} id={`${id}-category-${item.id}`} type="button" role="tab"
+            aria-selected={category?.id === item.id} aria-controls={`${id}-category-content`}
             tabIndex={category?.id === item.id ? 0 : -1}
             className="settings-tab" onClick={() => setCategoryId(item.id)}>{item.label}</button>
         ))}
       </div>
-      {category && <div role="tabpanel" id="settings-category-content" aria-labelledby={`settings-category-${category.id}`} className="flex flex-col min-h-0 flex-1">
+      {category && <div role="tabpanel" id={`${id}-category-content`} aria-labelledby={`${id}-category-${category.id}`} className="flex flex-col min-h-0 flex-1">
         {category.panels.length > 1 && (
           <div role="tablist" aria-label={`${category.label} settings`} onKeyDown={moveTab} className="settings-subtabs">
             {category.panels.map(item => (
-              <button key={item.id} id={`settings-panel-${item.id}`} type="button" role="tab" aria-selected={panel?.id === item.id}
-                aria-controls="settings-panel-content" tabIndex={panel?.id === item.id ? 0 : -1}
+              <button key={item.id} id={`${id}-panel-${item.id}`} type="button" role="tab" aria-selected={panel?.id === item.id}
+                aria-controls={`${id}-panel-content`} tabIndex={panel?.id === item.id ? 0 : -1}
                 className="settings-subtab" onClick={() => setSelectedPanels(previous => ({ ...previous, [category.id]: item.id }))}>{item.label}</button>
             ))}
           </div>
         )}
-        <div key={panel?.id} id="settings-panel-content" role={category.panels.length > 1 ? 'tabpanel' : undefined}
-          aria-labelledby={category.panels.length > 1 ? `settings-panel-${panel?.id}` : undefined}
+        <div key={panel?.id} id={`${id}-panel-content`} role={category.panels.length > 1 ? 'tabpanel' : undefined}
+          aria-labelledby={category.panels.length > 1 ? `${id}-panel-${panel?.id}` : undefined}
           className="settings-content flex-1 overflow-y-auto px-5 sm:px-7 py-6">
           <div className="max-w-4xl mx-auto">
             {module && <div className="settings-list mb-6"><ModuleToggle module={module} /></div>}

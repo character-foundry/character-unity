@@ -4,7 +4,7 @@
  * Configure LLM providers with connection testing and model fetching.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { useLLMStore } from '../../../store/llm-store';
 import { SearchableSelect } from '../../../components/ui/SearchableSelect';
 import type { ProviderConfig } from '../../../lib/types';
@@ -12,6 +12,7 @@ import type { ProviderConfig } from '../../../lib/types';
 type ProviderKind = 'openai' | 'anthropic' | 'openai-compatible';
 
 export function ProvidersSettingsPanel() {
+  const streamDefaultId = useId();
   const {
     settings,
     loadSettings,
@@ -245,12 +246,12 @@ export function ProvidersSettingsPanel() {
             <div className="flex items-center gap-2">
               <input
                 type="checkbox"
-                id="streamDefault"
+                id={streamDefaultId}
                 checked={editingProvider.streamDefault ?? true}
                 onChange={(e) => updateField('streamDefault', e.target.checked)}
                 className="w-4 h-4"
               />
-              <label htmlFor="streamDefault" className="text-sm">Enable streaming by default</label>
+              <label htmlFor={streamDefaultId} className="text-sm">Enable streaming by default</label>
             </div>
 
             {/* Mode (OpenAI only) */}

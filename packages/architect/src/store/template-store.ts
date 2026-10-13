@@ -2,15 +2,13 @@
  * Template Store
  *
  * Manages templates and snippets for character creation.
- * Uses PersistenceAdapter to handle server/local mode automatically.
- *
- * REFACTORED: Reduced from 552 lines to ~200 lines by using PersistenceAdapter
- * to abstract deployment mode differences.
+ * Shared browser preferences have no access to an editor's selected card.
  */
 
 import { create } from 'zustand';
 import type { Template, Snippet } from '../lib/types';
-import { persistence } from '../adapters/persistence';
+import { EditorPreferences } from '../adapters/persistence/editor-preferences';
+const persistence = new EditorPreferences();
 
 interface TemplateStore {
   templates: Template[];

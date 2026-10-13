@@ -1,5 +1,36 @@
 # Implementation status and acceptance gates
 
+## Editor lifecycle checkpoint, 2026-10-13
+
+`cu-1o2.5.12` is implemented after the native viewer: each explicit editor session
+owns its immutable workspace/API, draft/UI/token/provider stores, revision heads,
+assets, recovery owner, portal root, wizard conversation and cancellable requests.
+No singleton/current-session fallback remains. First Save keeps the same session
+across route promotion; auxiliary reads do not repin its Save head. Module
+registration is concurrency-safe; tokenizer tables load on demand. Unreachable
+collection/sidebar and old deployment-mode paths are removed.
+
+Recovery snapshots are workspace/card/owner scoped. Exact UUID acknowledgments
+survive reopening without deleting another live editor's row, even for two edits
+in the same millisecond. Restore first creates an owned recovery copy and retains
+the source expected head; stale text still encounters the normal Save conflict.
+Staged files and unsaved New/Fork drafts remain memory-only, not crash-recovered.
+
+627 tests across 79 files, every conformance report, expanded lint, full package
+and E2E type-check, builds and built Node smoke pass. Twenty-four production
+Node/browser workflows pass (nine editor, eight viewer, seven isolation), plus
+the rebuilt frozen-clock recovery regression after the UUID change. Coverage
+includes colliding IDs across workspaces, reversed loads/saves, focused Ctrl+S,
+independent assets/dialogs, same-card conflicts, late AI/disposal, pending fork
+cancellation, failed-route Save gating and recovery ownership. Late tokens/model
+changes are tested at the injected store seam. Screenshots and independent
+Standards/Spec review pass. All 45 earlier scaffold/account/browser workflows
+also pass; those are regressions, not a claim of unified publication UI parity.
+
+Native viewer and editor isolation beads are closed. Wizard QA stays low priority.
+Archive reference/deduplication, optional native tools and scaffold retirement
+remain separate work. Live Archive takeover and Foundry publishing stay on hold.
+
 ## Native viewer checkpoint, 2026-10-13
 
 `cu-1o2.26` is implemented: native React Router shell and viewer, no Next/sharp
@@ -17,9 +48,10 @@ read/export/favorite failures, canceled routes and 401 recovery, URL navigation,
 mobile fit and long content beyond the former 5000px clipping cap. Independent
 review findings were fixed. Live Archive and Foundry publishing remain untouched.
 
-Editor isolation (`cu-1o2.5.12`) is next; wizard QA stays low priority.
+At this checkpoint editor isolation (`cu-1o2.5.12`) was next; it is now completed
+above. Wizard QA stays low priority.
 
-## Native editor integration, 2026-10-13
+## Earlier native editor integration checkpoint (`14609c6`), 2026-10-13
 
 Owner authorized editor/import cleanup while live Archive takeover remains on
 hold. The active `apps/web` editor is `packages/architect`; sections below about
@@ -29,7 +61,7 @@ Native file imports, staged portrait/attachment edits, atomic first Save/forks,
 assets-aware immutable Restore and supported browser-local AI/settings replace
 old-server fallbacks. Viewer/Next-shim removal follows the editor phase.
 
-Latest owner priority: native viewer/Next-shim removal (`cu-1o2.26`) next,
+Owner priority at that checkpoint: native viewer/Next-shim removal (`cu-1o2.26`) next,
 then editor isolation (`cu-1o2.5.12`). Wizard QA (`cu-1o2.5.5`) is low
 priority and does not gate either pass.
 
@@ -47,7 +79,8 @@ Chromium workflows across the old profiles and active unified application.
 Closed editor beads: `cu-1o2.5.8`, `.5.9`, `.5.10`, `.5.11`. Wizard workflow QA
 (`.5.5`), instance isolation (`.5.12`), native optional tools (`.5.13`), scaffold
 retirement (`.5.6`, `.15`), viewer/shims (`.26`) and reference/deduplication (`.27`)
-remain explicit work. The one external-image Risu card is deferred (`.9.10`);
+were explicit work at that checkpoint; `.26` and `.5.12` are now complete above.
+The one external-image Risu card is deferred (`.9.10`);
 Foundry publishing remains on hold (`.25`). No live Archive processes or data
 were changed during editor integration.
 

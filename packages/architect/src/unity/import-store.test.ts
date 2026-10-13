@@ -1,13 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { configureUnityHost } from './config';
-import { useCardStore } from '../store/card-store';
+import { createCardStore } from '../store/card-store';
+import { createTokenStore } from '../store/token-store';
+import { UnityApiClient } from '../lib/api';
+import type { DraftRecovery } from './recovery';
 import type { Card } from '../lib/types';
 
-const { tokenCounts, saveLocalCard, saveLocalImage, saveLocalAsset } = vi.hoisted(() => ({
-  tokenCounts: vi.fn(), saveLocalCard: vi.fn(), saveLocalImage: vi.fn(), saveLocalAsset: vi.fn(),
-}));
-vi.mock('../store/token-store', () => ({ useTokenStore: { getState: () => ({ updateTokenCounts: tokenCounts }) } }));
-vi.mock('../lib/db', () => ({ localDB: { saveCard: saveLocalCard, saveImage: saveLocalImage, saveAsset: saveLocalAsset } }));
+const tokenCounts = vi.fn(async (_card: Card | null) => { void _card; });
+const saveRecovery = vi.fn(async () => undefined);
 
 const existing: Card = {
   meta: { id: 'existing-card', name: 'My work', spec: 'v3', tags: [], createdAt: '', updatedAt: '' },
@@ -15,14 +14,23 @@ const existing: Card = {
 };
 
 describe('editor import state', () => {
+  let cards: ReturnType<typeof createCardStore>;
+  let controller: AbortController;
+  let api: UnityApiClient;
   beforeEach(() => {
-    configureUnityHost({ workspaceId: 'store-import-tests' });
-    useCardStore.setState({ currentCard: existing, isDirty: true, isSaving: false, autoSaveTimeout: null });
+    controller = new AbortController();
+    api = new UnityApiClient({ workspaceId: 'store-import-tests' }, { signal: controller.signal });
+    const isDisposed = () => controller.signal.aborted;
+    const tokens = createTokenStore({ api, isDisposed, signal: controller.signal });
+    vi.spyOn(tokens.getState(), 'updateTokenCounts').mockImplementation(tokenCounts);
+    const recovery: DraftRecovery = { load: async () => null, save: saveRecovery, remove: async () => undefined, flush: async () => undefined };
+    cards = createCardStore({ api, assets: api.assets, tokens, recovery, signal: controller.signal, isDisposed });
+    cards.setState({ currentCard: existing, isDirty: true });
     vi.clearAllMocks();
   });
   afterEach(() => {
-    useCardStore.setState({ currentCard: null, isDirty: false });
-    vi.unstubAllGlobals();
+    controller.abort(); cards.getState().cancelPending(); api.dispose();
+    vi.restoreAllMocks(); vi.unstubAllGlobals();
   });
 
   it('preserves unsaved work when Foundry rejects an import and creates no local records', async () => {
@@ -31,14 +39,12 @@ describe('editor import state', () => {
     ));
     vi.stubGlobal('fetch', fetcher);
 
-    await expect(useCardStore.getState().importCard(new File(['bad'], 'bad.charx'))).rejects.toThrow('Unsupported card container');
+    await expect(cards.getState().importCard(new File(['bad'], 'bad.charx'))).rejects.toThrow('Unsupported card container');
 
-    expect(useCardStore.getState().currentCard).toBe(existing);
-    expect(useCardStore.getState().isDirty).toBe(true);
+    expect(cards.getState().currentCard).toBe(existing);
+    expect(cards.getState().isDirty).toBe(true);
     expect(tokenCounts).not.toHaveBeenCalled();
-    expect(saveLocalCard).not.toHaveBeenCalled();
-    expect(saveLocalImage).not.toHaveBeenCalled();
-    expect(saveLocalAsset).not.toHaveBeenCalled();
+    expect(saveRecovery).not.toHaveBeenCalled();
   });
 
   it('activates only the opened native card after a successful import', async () => {
@@ -48,13 +54,39 @@ describe('editor import state', () => {
       .mockResolvedValueOnce(Response.json({ card: { id: 'native-card', createdAt: '', forkedFromRevisionId: null },
         revision: { id: 'native-head', document, assets: [], createdAt: '' } })));
 
-    expect(await useCardStore.getState().importCard(new File(['original'], 'original.json'))).toBe('native-card');
+    expect(await cards.getState().importCard(new File(['original'], 'original.json'))).toBe('native-card');
 
-    expect(useCardStore.getState().currentCard?.data).toEqual(document);
-    expect(useCardStore.getState().isDirty).toBe(false);
-    expect(tokenCounts).toHaveBeenCalledWith(useCardStore.getState().currentCard);
-    expect(saveLocalCard).not.toHaveBeenCalled();
-    expect(saveLocalImage).not.toHaveBeenCalled();
-    expect(saveLocalAsset).not.toHaveBeenCalled();
+    expect(cards.getState().currentCard?.data).toEqual(document);
+    expect(cards.getState().isDirty).toBe(false);
+    expect(tokenCounts).toHaveBeenCalledWith(cards.getState().currentCard);
+    expect(saveRecovery).not.toHaveBeenCalled();
+  });
+
+  it('keeps already staged bytes when an attempted import fails', async () => {
+    api.pinRevision(existing.meta.id, 'existing-head');
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ assets: [] }))
+      .mockResolvedValueOnce(Response.json({ error: { message: 'Rejected import' } }, { status: 400 })));
+    const attachment = new File(['unsaved attachment'], 'notes.txt', { type: 'text/plain' });
+    await api.assets.add(existing, attachment);
+    await expect(cards.getState().importCard(new File(['invalid'], 'invalid.charx'))).rejects.toThrow('Rejected import');
+    expect(cards.getState().currentCard).toBe(existing);
+    expect((await api.assets.prepare(existing)).uploads).toEqual([attachment]);
+    expect(api.assets.hasChanges(existing)).toBe(true);
+  });
+
+  it('does not activate a late import after another draft has been selected', async () => {
+    let resolve!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(() => new Promise<Response>((done) => { resolve = done; }));
+    vi.stubGlobal('fetch', fetcher);
+    const pending = cards.getState().importCard(new File(['original'], 'original.json'));
+    await cards.getState().createNewCard();
+    cards.getState().updateCardFields({ name: 'Keep the selected draft' });
+    const selected = cards.getState().currentCard;
+    resolve(Response.json({ card: { id: 'late-import' } }, { status: 201 }));
+    expect(await pending).toBeNull();
+    expect(cards.getState().currentCard).toBe(selected);
+    expect(cards.getState().isDirty).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(1);
   });
 });

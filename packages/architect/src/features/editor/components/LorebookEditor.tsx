@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { useCardStore, extractCardData } from '../../../store/card-store';
-import { api } from '../../../lib/api';
-import { localDB } from '../../../lib/db';
-import { getDeploymentConfig } from '../../../config/deployment';
+import { useEditorSession } from '../../../unity/context';
 import { normalizeSpec } from '../../../lib/types';
 import { LLMAssistSidebar } from './LLMAssistSidebar';
+import { Dialog } from '../../../components/ui/Dialog';
 import {
   addEntry as lorebookAddEntry,
   updateEntry as lorebookUpdateEntry,
@@ -15,11 +14,14 @@ import { getLorebookEntryExtensions } from '../../../lib/extension-types';
 import type { Card, CCv3LorebookEntry } from '../../../lib/types';
 
 export function LorebookEditor() {
+  const session = useEditorSession();
+  const api = session.api;
   const { currentCard, updateCardFields } = useCardStore();
   const [selectedEntryIndex, setSelectedEntryIndex] = useState<number | null>(null);
   const [showImportModal, setShowImportModal] = useState(false);
   const [availableLorebooks, setAvailableLorebooks] = useState<Card[]>([]);
   const [loadingLorebooks, setLoadingLorebooks] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
 
   // LLM Assist state
   const [llmAssistOpen, setLLMAssistOpen] = useState(false);
@@ -120,7 +122,9 @@ export function LorebookEditor() {
     if (!lorebook) return;
 
     const entryToCopy = entries[index];
-    const { id: _id, insertion_order: _order, ...entryData } = entryToCopy;
+    const entryData: Partial<typeof entryToCopy> = { ...entryToCopy };
+    delete entryData.id;
+    delete entryData.insertion_order;
     const updatedBook = lorebookAddEntry(lorebook, {
       ...entryData,
       name: (entryToCopy.name || `Entry ${index + 1}`) + ' (Copy)',
@@ -146,26 +150,18 @@ export function LorebookEditor() {
   // Load available lorebooks for import modal
   const loadAvailableLorebooks = async () => {
     setLoadingLorebooks(true);
-    const config = getDeploymentConfig();
-
+    setImportError(null);
+    const selection = session.selection();
+    const signal = session.liveSignal();
     try {
-      if (config.mode === 'light' || config.mode === 'static') {
-        // Light mode: load from IndexedDB
-        const allCards = await localDB.listCards();
-        const lorebooks = allCards.filter((card: Card) => card.meta.spec === 'lorebook');
-        setAvailableLorebooks(lorebooks);
-      } else {
-        // Server mode: load from API
-        const { data } = await api.listCards();
-        if (data?.items) {
-          const lorebooks = data.items.filter((card: Card) => card.meta.spec === 'lorebook');
-          setAvailableLorebooks(lorebooks);
-        }
-      }
+      const { data, error } = await api.listCards(undefined, 1, 100, false, { has: ['lorebook'], sort: 'name' }, { signal });
+      if (signal.aborted || session.selection() !== selection) return;
+      if (error || !data) throw new Error(error ?? 'Failed to load cards with lorebooks');
+      setAvailableLorebooks(data.items.filter((card) => card.meta.id !== currentCard.meta.id));
     } catch (error) {
-      console.error('Failed to load lorebooks:', error);
+      if (!signal.aborted && session.selection() === selection) setImportError(error instanceof Error ? error.message : 'Failed to load lorebooks');
     } finally {
-      setLoadingLorebooks(false);
+      if (!signal.aborted && session.selection() === selection) setLoadingLorebooks(false);
     }
   };
 
@@ -174,14 +170,25 @@ export function LorebookEditor() {
     loadAvailableLorebooks();
   };
 
-  const handleImportLorebook = (lorebookCard: Card) => {
-    const lorebookData = extractCardData(lorebookCard);
-    if (lorebookData.character_book) {
+  const handleImportLorebook = async (lorebookCard: Card) => {
+    const selection = session.selection();
+    const signal = session.liveSignal();
+    setImportError(null); setLoadingLorebooks(true);
+    try {
+      const result = await api.getCard(lorebookCard.meta.id, { signal, pinHead: false });
+      if (signal.aborted || session.selection() !== selection) return;
+      if (result.error || !result.data) throw new Error(result.error ?? 'Failed to load this card');
+      const lorebookData = extractCardData(result.data);
+      if (!lorebookData.character_book) throw new Error('This card no longer has an embedded lorebook');
       updateLorebookData({
-        character_book: { ...lorebookData.character_book },
+        character_book: structuredClone(lorebookData.character_book),
       });
+      setShowImportModal(false);
+    } catch (error) {
+      if (!signal.aborted && session.selection() === selection) setImportError(error instanceof Error ? error.message : 'Failed to import lorebook');
+    } finally {
+      if (!signal.aborted && session.selection() === selection) setLoadingLorebooks(false);
     }
-    setShowImportModal(false);
   };
 
   // LLM Assist handlers
@@ -249,7 +256,7 @@ export function LorebookEditor() {
                 Initialize Lorebook
               </button>
               <button onClick={handleOpenImportModal} className="btn-secondary mt-3 ml-3">
-                Import Lorebook
+                Import from another card
               </button>
             </div>
           </div>
@@ -734,10 +741,10 @@ export function LorebookEditor() {
 
         {/* Import Lorebook Modal */}
         {showImportModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-dark-surface border border-dark-border rounded-lg w-[600px] max-h-[80vh] flex flex-col">
+          <Dialog label="Import lorebook from another card" onClose={() => setShowImportModal(false)} className="w-[600px]">
+            <div className="bg-dark-surface border border-dark-border rounded-lg w-full max-h-[80vh] flex flex-col">
               <div className="flex items-center justify-between px-4 py-2 border-b border-dark-border">
-                <h3 className="text-lg font-semibold">Import Lorebook</h3>
+                <h3 className="text-lg font-semibold">Import lorebook from another card</h3>
                 <button
                   onClick={() => setShowImportModal(false)}
                   className="text-dark-muted hover:text-dark-text"
@@ -746,6 +753,7 @@ export function LorebookEditor() {
                 </button>
               </div>
               <div className="flex-1 overflow-auto p-4">
+                {importError && <p role="alert" className="mb-3 text-sm text-red-300">{importError}</p>}
                 {loadingLorebooks ? (
                   <div className="flex items-center justify-center py-8">
                     <p className="text-dark-muted">Loading lorebooks...</p>
@@ -753,14 +761,13 @@ export function LorebookEditor() {
                 ) : availableLorebooks.length === 0 ? (
                   <div className="flex items-center justify-center py-8">
                     <p className="text-dark-muted">
-                      No standalone lorebooks found. Create one from the dashboard.
+                      No other cards with embedded lorebooks found.
                     </p>
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-3">
                     {availableLorebooks.map((lorebook) => {
                       const data = extractCardData(lorebook);
-                      const entryCount = data.character_book?.entries?.length || 0;
                       return (
                         <button
                           key={lorebook.meta.id}
@@ -769,7 +776,7 @@ export function LorebookEditor() {
                         >
                           <p className="font-medium truncate">{data.name || lorebook.meta.name}</p>
                           <p className="text-sm text-dark-muted">
-                            {entryCount} {entryCount === 1 ? 'entry' : 'entries'}
+                            {data.creator || lorebook.meta.creator || 'Anonymous'}
                           </p>
                         </button>
                       );
@@ -778,7 +785,7 @@ export function LorebookEditor() {
                 )}
               </div>
             </div>
-          </div>
+          </Dialog>
         )}
       </div>
 

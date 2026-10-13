@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api } from './api';
+import { UnityApiClient } from './api';
 import type { Card } from './types';
-import { editorAssets } from '../unity/assets';
-import { configureUnityHost } from '../unity/config';
+import type { EditorAssetService } from '../unity/assets';
 
 const document = { spec: 'chara_card_v3', spec_version: '3.0', opaque: { retain: true }, data: {
   name: 'Character', description: 'Original', extensions: { vendor: [null, 42] },
@@ -15,8 +14,10 @@ function opened(id: string, value = revision()) {
 const metadata = { assets: [{ path: 'declared/0', mediaType: 'text/plain', byteLength: 5 }, { path: 'module.risum', mediaType: 'application/octet-stream', byteLength: 17 }] };
 
 describe('native editor Save API', () => {
-  beforeEach(() => { configureUnityHost({ workspaceId: 'asset-tests' }); editorAssets.reset(false); });
-  afterEach(() => { editorAssets.reset(false); vi.unstubAllGlobals(); });
+  let api: UnityApiClient;
+  let editorAssets: EditorAssetService;
+  beforeEach(() => { api = new UnityApiClient({ workspaceId: 'asset-tests' }); editorAssets = api.assets; });
+  afterEach(() => { api.dispose(); vi.unstubAllGlobals(); });
 
   it('keeps an asset draft and original expected head after a failed Save, then commits document and asset changes in one request', async () => {
     let head = 'head-1';
@@ -165,5 +166,77 @@ describe('native editor Save API', () => {
     const plan = await editorAssets.prepare(other);
     expect(plan.uploads).toHaveLength(1);
     expect(await plan.uploads[0]!.text()).toBe('keep these bytes');
+  });
+
+  it('pins identical card ids to independent immutable workspace clients', async () => {
+    const config = { workspaceId: 'second-workspace' };
+    const second = new UnityApiClient(config);
+    config.workspaceId = 'changed-after-construction';
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(opened('same-id', revision('first-head'))))
+      .mockResolvedValueOnce(Response.json(opened('same-id', revision('second-head'))));
+    vi.stubGlobal('fetch', fetcher);
+    await api.getCard('same-id'); await second.getCard('same-id');
+    expect(fetcher.mock.calls.map(([path]) => path)).toEqual([
+      '/api/workspaces/asset-tests/cards/same-id', '/api/workspaces/second-workspace/cards/same-id',
+    ]);
+    expect(api.headRevision('same-id')).toBe('first-head');
+    expect(second.headRevision('same-id')).toBe('second-head');
+    api.dispose();
+    expect(second.headRevision('same-id')).toBe('second-head');
+    second.dispose();
+  });
+
+  it('does not repin a draft to an older response from the same card id', async () => {
+    let resolve!: (response: Response) => void;
+    const old = new Promise<Response>((done) => { resolve = done; });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockReturnValueOnce(old)
+      .mockResolvedValueOnce(Response.json(opened('same-id', revision('new-head')))));
+    const pending = api.getCard('same-id');
+    expect((await api.getCard('same-id')).data?.meta.id).toBe('same-id');
+    resolve(Response.json(opened('same-id', revision('old-head'))));
+    expect((await pending).error).toContain('superseded');
+    expect(api.headRevision('same-id')).toBe('new-head');
+  });
+
+  it('rejects late reads after disposal and does not leave remembered card heads', async () => {
+    let resolve!: (response: Response) => void;
+    const fetcher = vi.fn<typeof fetch>().mockImplementationOnce(() => new Promise<Response>((done) => { resolve = done; }));
+    vi.stubGlobal('fetch', fetcher);
+    const pending = api.getCard('disposed');
+    api.dispose();
+    expect(fetcher.mock.calls[0]![1]?.signal?.aborted).toBe(true);
+    resolve(Response.json(opened('disposed')));
+    expect((await pending).error).toBeTruthy();
+    expect(api.headRevision('disposed')).toBeUndefined();
+    expect((await api.getCard('another')).error).toBeTruthy();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not advance the saved draft head when reading newer same-id auxiliary data', async () => {
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json(opened('same-id', revision('pinned-head'))))
+      .mockResolvedValueOnce(Response.json(opened('same-id', revision('newer-auxiliary-head'))))
+      .mockImplementationOnce(async (_path, options) => {
+        expect(JSON.parse(options!.body as string).expectedHead).toBe('pinned-head');
+        return Response.json({ error: { message: 'Expected stale-head conflict' } }, { status: 409 });
+      });
+    vi.stubGlobal('fetch', fetcher);
+    const draft = (await api.getCard('same-id')).data!;
+    expect((await api.getCard('same-id', { pinHead: false })).data?.meta.id).toBe('same-id');
+    expect(api.headRevision('same-id')).toBe('pinned-head');
+    expect((await api.updateCard('same-id', draft)).error).toBe('Expected stale-head conflict');
+  });
+
+  it('keeps primary and auxiliary same-id read generations independent', async () => {
+    let resolve!: (response: Response) => void;
+    const pending = new Promise<Response>((done) => { resolve = done; });
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockReturnValueOnce(pending)
+      .mockResolvedValueOnce(Response.json(opened('same-id', revision('auxiliary-head')))));
+    const primary = api.getCard('same-id');
+    expect((await api.getCard('same-id', { pinHead: false })).data?.meta.id).toBe('same-id');
+    resolve(Response.json(opened('same-id', revision('primary-head'))));
+    expect((await primary).error).toBeUndefined();
+    expect(api.headRevision('same-id')).toBe('primary-head');
   });
 });

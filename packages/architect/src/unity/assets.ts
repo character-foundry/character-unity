@@ -216,12 +216,6 @@ export class EditorAssetService {
   }
 }
 
-export const editorAssets = new EditorAssetService({
-  head: () => undefined,
-  list: async () => { throw new Error('The Unity asset service is not configured'); },
-  url: () => '',
-});
-
 export function assetPlanForm(plan: AssetPlan, expectedHead?: string): FormData {
   const form = new FormData();
   form.set('input', JSON.stringify({ ...(expectedHead ? { expectedHead } : {}), document: plan.document, bindings: plan.bindings }));

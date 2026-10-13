@@ -8,13 +8,14 @@
  * - Provides token counts and generates AI content
  */
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { FieldRenderer } from './FieldRenderer';
 import type { FieldDefinition } from '../config/field-definitions';
 import { getValueByPath, setValueByPath, isFieldVisible } from '../config/field-definitions';
 import type { FocusField, LLMProvider } from '../../../lib/types';
 import { invokeClientLLM } from '../../../lib/client-llm';
 import { clientProvider } from '../../../store/llm-store';
+import { useEditorSession } from '../../../unity/context';
 
 // ============================================================================
 // PROPS INTERFACE
@@ -219,7 +220,23 @@ export function DynamicField({
   llmSettings,
   aiPrompts,
 }: DynamicFieldProps) {
+  const session = useEditorSession();
+  const generation = session.selection();
   const [generating, setGenerating] = useState(false);
+  const requestRef = useRef<AbortController | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+  const fieldRef = useRef(definition.id);
+  fieldRef.current = definition.id;
+
+  useEffect(() => {
+    setGenerating(false);
+    return () => {
+      const request = requestRef.current;
+      requestRef.current = null;
+      request?.abort();
+    };
+  }, [session, generation, definition.id]);
 
   // Check if field should be visible
   const hasVoxtaExtension = !!(cardData.extensions as Record<string, unknown> | undefined)?.voxta;
@@ -332,6 +349,22 @@ export function DynamicField({
       return;
     }
 
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, session.liveSignal()]);
+    const requestGeneration = session.selection();
+    const requestField = definition.id;
+    requestRef.current = controller;
+    const isCurrentRequest = () => requestRef.current === controller &&
+      !signal.aborted && sessionRef.current === session &&
+      session.selection() === requestGeneration && fieldRef.current === requestField;
+    const onAbort = () => {
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setGenerating(false);
+      }
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
     setGenerating(true);
 
     try {
@@ -354,7 +387,9 @@ export function DynamicField({
         ],
         temperature: isTagsField ? 0.7 : 0.8,
         maxTokens: 200,
+        signal,
       });
+      if (!isCurrentRequest()) return;
       if (!result.success) throw new Error(result.error || 'LLM request failed');
       content = result.content || '';
 
@@ -386,6 +421,7 @@ export function DynamicField({
         }
       }
     } catch (err) {
+      if (!isCurrentRequest()) return;
       console.error(`Failed to generate ${definition.label.toLowerCase()}:`, err);
       alert(
         `Failed to generate ${definition.label.toLowerCase()}: ${
@@ -393,7 +429,11 @@ export function DynamicField({
         }`
       );
     } finally {
-      setGenerating(false);
+      signal.removeEventListener('abort', onAbort);
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        setGenerating(false);
+      }
     }
   }, [
     definition,
@@ -402,6 +442,7 @@ export function DynamicField({
     cardData,
     value,
     handleChange,
+    session,
   ]);
 
   // Don't render if not visible

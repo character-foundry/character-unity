@@ -10,6 +10,12 @@ const nativeEditorFiles = [
   'features/wwwyzzerdd/WwwyzzerddTab.tsx', 'features/settings/panels/PresetsSettingsPanel.tsx',
   'modules/wwwyzzerdd/settings/WwwyzzerddSettings.tsx', 'store/card-store.ts', 'store/llm-store.ts', 'store/llm-store.test.ts',
   'features/editor/components/DynamicField.tsx',
+  'adapters/persistence/index.ts', 'adapters/persistence/server-adapter.test.ts',
+  'store/{ui-store,token-store,template-store}.ts', 'store/{ui-store,token-store}.test.ts',
+  'lib/{client-llm,modules,db,card-list}.ts', 'lib/modules.test.ts',
+  'components/shared/SettingsModal.tsx', 'components/ui/Dialog.tsx',
+  'features/editor/components/{FocusedEditor,LorebookEditor,PreviewPanel}.tsx',
+  'features/settings/panels/ProvidersSettingsPanel.tsx',
 ];
 
 export default [

@@ -1,509 +1,253 @@
-import { create } from 'zustand';
+import { useStore } from 'zustand';
+import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { Card, CCv2Data, CCv3Data, CardMeta } from '../lib/types';
 import type { CharacterBook, CCv2Wrapped } from '@character-foundry/character-foundry/schemas';
-import { api } from '../lib/api';
-import { localDB } from '../lib/db';
+import type { UnityApiClient } from '../lib/api';
 import { extractCardData } from '../lib/card-utils';
-import { useTokenStore } from './token-store';
-import { editorAssets } from '../unity/assets';
+import type { TokenStore } from './token-store';
+import type { EditorAssetService } from '../unity/assets';
+import type { DraftRecovery } from '../unity/recovery';
+import { useEditorSession } from '../unity/context';
 import { importCharacterFile, importCharacterUrl } from '../unity/import';
 import { isV3Card, isV2Card, isWrappedV2, getInnerData, type CardFields } from '../lib/card-type-guards';
 import type { CardExtensions } from '../lib/extension-types';
 
 export { extractCardData };
-let selectionVersion = 0;
-export const editorSelection = () => selectionVersion;
 
-interface CardStore {
-  // Current card
+export interface CardStore {
   currentCard: Card | null;
   isDirty: boolean;
   isSaving: boolean;
   isRestoring: boolean;
+  selectionVersion: number;
   autoSaveTimeout: ReturnType<typeof setTimeout> | null;
-
-  // Actions
-  setCurrentCard: (card: Card | null) => void;
-  updateCardData: (updates: Partial<CCv2Data | CCv3Data>) => void;
-  updateCardMeta: (updates: Partial<CardMeta>) => void;
-  saveCard: () => Promise<void>;
-  debouncedAutoSave: () => void;
-  loadCard: (id: string) => Promise<void>;
-  createNewCard: () => Promise<void>;
-  createNewLorebook: () => Promise<void>;
-  importCard: (file: File) => Promise<string | null>;
-  importVoxtaPackage: (file: File) => Promise<string | null>;
-  importCardFromURL: (url: string) => Promise<string | null>;
-  exportCard: (format: 'json' | 'png' | 'charx' | 'voxta') => Promise<void>;
-
-  // Data mutations
-  convertSpec: (mode: 'v2' | 'v3') => void;
-
-  // Type-safe update helpers (use these instead of updateCardData with 'as any')
-  updateCardFields: (fields: Partial<CardFields>) => void;
-  updateExtensions: (extensions: Partial<CardExtensions>) => void;
-  updateCharacterBook: (book: Partial<CharacterBook>) => void;
-  setExtension: <K extends keyof CardExtensions>(key: K, value: CardExtensions[K]) => void;
+  setCurrentCard(card: Card | null): void;
+  updateCardData(updates: Partial<CCv2Data | CCv3Data>): void;
+  updateCardMeta(updates: Partial<CardMeta>): void;
+  saveCard(): Promise<void>;
+  debouncedAutoSave(): void;
+  cancelPending(): void;
+  loadCard(id: string): Promise<void>;
+  createNewCard(): Promise<void>;
+  createNewLorebook(): Promise<void>;
+  importCard(file: File): Promise<string | null>;
+  importVoxtaPackage(file: File): Promise<string | null>;
+  importCardFromURL(url: string): Promise<string | null>;
+  exportCard(format: 'json' | 'png' | 'charx' | 'voxta'): Promise<void>;
+  convertSpec(mode: 'v2' | 'v3'): void;
+  updateCardFields(fields: Partial<CardFields>): void;
+  updateExtensions(extensions: Partial<CardExtensions>): void;
+  updateCharacterBook(book: Partial<CharacterBook>): void;
+  setExtension<K extends keyof CardExtensions>(key: K, value: CardExtensions[K]): void;
 }
 
-export const useCardStore = create<CardStore>((set, get) => ({
-  // Initial state
-  currentCard: null,
-  isDirty: false,
-  isSaving: false,
-  isRestoring: false,
-  autoSaveTimeout: null,
+export interface CardStoreDependencies {
+  api: UnityApiClient;
+  assets: EditorAssetService;
+  tokens: StoreApi<TokenStore>;
+  recovery: DraftRecovery;
+  isDisposed(): boolean;
+  signal: AbortSignal;
+}
 
-  // Set current card
-  setCurrentCard: (card) => {
-    selectionVersion++;
-    const timeout = get().autoSaveTimeout;
-    if (timeout) clearTimeout(timeout);
-    editorAssets.reset();
-    set({ currentCard: card, isDirty: false, autoSaveTimeout: null });
-    if (card) {
-      useTokenStore.getState().updateTokenCounts(card);
-    }
-  },
+function blankCard(lorebook = false): Card {
+  const now = new Date().toISOString();
+  const name = lorebook ? 'New Lorebook' : 'New Character';
+  const tags = lorebook ? ['LORE'] : [];
+  return {
+    meta: { id: '', name, spec: lorebook ? 'lorebook' : 'v3', tags, createdAt: now, updatedAt: now },
+    data: { spec: 'chara_card_v3', spec_version: '3.0', data: {
+      name, description: '', personality: '', scenario: '', first_mes: '', mes_example: '', creator: '',
+      character_version: '1.0', tags, system_prompt: '', post_history_instructions: '', alternate_greetings: [], group_only_greetings: [],
+      ...(lorebook ? { character_book: { name, description: '', scan_depth: 100, token_budget: 500,
+        recursive_scanning: false, extensions: {}, entries: [] } } : {}),
+    } } as CCv3Data,
+  };
+}
 
-  // Update card data
-  updateCardData: (updates) => {
-    const { currentCard } = get();
-    if (!currentCard) return;
-
-    // Deep merge to preserve spec/spec_version and nested data for both V2 and V3
-    // V2 can be wrapped { spec, spec_version, data } or unwrapped (legacy)
-    // V3 is always wrapped { spec, spec_version, data }
-    let newData: Card['data'];
-
-    if (currentCard.meta.spec === 'v3') {
-      const v3Data = currentCard.data as CCv3Data;
-      const updatesAsV3 = updates as Partial<CCv3Data>;
-
-      newData = {
-        ...v3Data,
-        ...updatesAsV3,
-        // Deep merge the nested data object
-        data: {
-          ...v3Data.data,
-          ...(updatesAsV3.data || {}),
-        },
-      } as CCv3Data;
-    } else {
-      // V2 - handle both wrapped and unwrapped formats
-      const v2Data = currentCard.data as unknown as Record<string, unknown>;
-      const isWrapped = v2Data.spec === 'chara_card_v2' && 'data' in v2Data;
-
-      if (isWrapped) {
-        // Wrapped V2: preserve wrapper structure
-        const updatesAsV2 = updates as unknown as Record<string, unknown>;
-        newData = {
-          ...v2Data,
-          data: {
-            ...(v2Data.data as Record<string, unknown>),
-            ...((updatesAsV2.data as Record<string, unknown> | undefined) ?? updatesAsV2),
-          },
-        } as unknown as CCv2Data;
-      } else {
-        // Unwrapped/legacy V2
-        newData = { ...v2Data, ...updates } as CCv2Data;
-      }
-    }
-
-    const newCard = { ...currentCard, data: newData };
-
-    set({ currentCard: newCard, isDirty: true });
-
-    // Autosave to IndexedDB
-    if (currentCard.meta.id) {
-      localDB.saveDraft(currentCard.meta.id, newCard).catch(console.error);
-    }
-
-    // Update token counts
-    useTokenStore.getState().updateTokenCounts(newCard);
-
-    // Auto-save to server (debounced)
-    if (currentCard.meta.id) {
-      get().debouncedAutoSave();
-    }
-  },
-
-  // Update card metadata
-  updateCardMeta: (updates) => {
-    const { currentCard } = get();
-    if (!currentCard) return;
-
-    const newMeta = { ...currentCard.meta, ...updates };
-    const newCard = { ...currentCard, meta: newMeta };
-
-    set({ currentCard: newCard, isDirty: true });
-
-    // Autosave to IndexedDB
-    if (currentCard.meta.id) {
-      localDB.saveDraft(currentCard.meta.id, newCard).catch(console.error);
-    }
-
-    // Auto-save to server (debounced)
-    if (currentCard.meta.id) {
-      get().debouncedAutoSave();
-    }
-  },
-
-  // Debounced auto-save
-  debouncedAutoSave: () => {
-    const { autoSaveTimeout } = get();
-    if (autoSaveTimeout) {
-      clearTimeout(autoSaveTimeout);
-    }
-
-    // Recovery drafts are local only. Immutable library revisions are written
-    // by explicit Save, never by a timer or merely opening the editor.
-    set({ autoSaveTimeout: null });
-  },
-
-  // Save card to API or IndexedDB
-  saveCard: async () => {
-    const { currentCard, isDirty, isSaving } = get();
-    // Export/send callers flush pending edits, but a saved card should not be
-    // rewritten: even identical server updates advance its last-edited date.
-    if (!currentCard || isSaving || get().isRestoring || (currentCard.meta.id && !isDirty && !editorAssets.hasChanges(currentCard))) {
-      return;
-    }
-
-    set({ isSaving: true });
-    const savingSelection = selectionVersion;
-
-    try {
-      const result = currentCard.meta.id ? await api.updateCard(currentCard.meta.id, currentCard) : await api.createCard(currentCard);
-      if (result.error || !result.data) throw new Error(result.error ?? 'Save returned no card');
-      const saved = result.data;
-      const latest = get().currentCard;
-      // Never replace another card opened while the request was in flight.
-      if (selectionVersion !== savingSelection || !latest || (latest.meta.id !== currentCard.meta.id || latest.meta.forkOf !== currentCard.meta.forkOf)) return;
-      const changedDuringSave = latest !== currentCard;
-      let merged = saved;
-      if (changedDuringSave) {
-        const data = structuredClone(latest.data) as unknown as Record<string, unknown>;
-        const inner = data.data as Record<string, unknown>;
-        const savedInner = (saved.data as unknown as { data: Record<string, unknown> }).data;
-        if (Object.hasOwn(savedInner, 'assets')) inner.assets = structuredClone(savedInner.assets);
-        else delete inner.assets;
-        const extensions = { ...(inner.extensions as Record<string, unknown> | undefined) };
-        const savedExtensions = savedInner.extensions as Record<string, unknown> | undefined;
-        const foundry = { ...(extensions.foundry as Record<string, unknown> | undefined) };
-        const savedFoundry = savedExtensions?.foundry as Record<string, unknown> | undefined;
-        if (savedFoundry?.lineage !== undefined) foundry.lineage = savedFoundry.lineage;
-        else delete foundry.lineage;
-        extensions.foundry = foundry; inner.extensions = extensions;
-        merged = { data: data as unknown as Card['data'], meta: { ...latest.meta, id: saved.meta.id, forkOf: undefined,
-          updatedAt: saved.meta.updatedAt, createdAt: saved.meta.createdAt } };
-      }
-      const dirty = changedDuringSave || editorAssets.hasChanges(merged);
-      set({ currentCard: merged, isDirty: dirty });
-      useTokenStore.getState().updateTokenCounts(merged);
-      if (dirty) await localDB.saveDraft(saved.meta.id, merged).catch(console.warn);
-      else if (currentCard.meta.id) await localDB.deleteDraft(currentCard.meta.id).catch(console.warn);
-    } catch (err) {
-      console.error('[saveCard] FAILED to save card:', err);
-      throw err; // Re-throw so caller knows it failed
-    } finally {
-      set({ isSaving: false });
-    }
-  },
-
-  // Load card from API or IndexedDB
-  loadCard: async (id) => {
-    const loadingSelection = selectionVersion;
-    const { data, error } = await api.getCard(id);
-    if (loadingSelection !== selectionVersion) return;
-    if (error) {
-      throw new Error(error);
-    }
-
-    if (data) {
-      get().setCurrentCard(data);
-
-      // Check for draft in IndexedDB
-      const draft = await localDB.getDraft(id);
-      if (draft && draft.lastSaved > data.meta.updatedAt) {
-        console.log('Found newer draft in IndexedDB');
-      }
-    }
-  },
-
-  // Create new card
-  createNewCard: async () => {
-    const newCard: Card = {
-      meta: {
-        id: '',
-        name: 'New Character',
-        spec: 'v3',
-        tags: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      data: {
-        spec: 'chara_card_v3',
-        spec_version: '3.0',
-        data: {
-          name: 'New Character',
-          description: '',
-          personality: '',
-          scenario: '',
-          first_mes: '',
-          mes_example: '',
-          creator: '',
-          character_version: '1.0',
-          tags: [],
-          system_prompt: '',
-          post_history_instructions: '',
-          alternate_greetings: [],
-          group_only_greetings: [],
-        },
-      } as CCv3Data,
+/** State and asynchronous work belong to one editor, not to the mounted page. */
+export function createCardStore({ api, assets, tokens, recovery, isDisposed, signal }: CardStoreDependencies): StoreApi<CardStore> {
+  let loading: AbortController | null = null;
+  let saving: AbortController | null = null;
+  const inactive = () => signal.aborted || isDisposed();
+  return createStore<CardStore>((set, get) => {
+    const updateTokens = (card: Card | null) => { void tokens.getState().updateTokenCounts(card); };
+    const recover = (card: Card) => {
+      if (card.meta.id && !inactive()) void recovery.save(card.meta.id, card, api.headRevision(card.meta.id)).catch(console.warn);
     };
-
-    get().setCurrentCard(newCard);
-    set({ isDirty: true });
-  },
-
-  // Create new standalone lorebook
-  createNewLorebook: async () => {
-    const newCard: Card = {
-      meta: {
-        id: '',
-        name: 'New Lorebook',
-        spec: 'lorebook',
-        tags: ['LORE'],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      data: {
-        spec: 'chara_card_v3',
-        spec_version: '3.0',
-        data: {
-          name: 'New Lorebook',
-          description: '',
-          personality: '',
-          scenario: '',
-          first_mes: '',
-          mes_example: '',
-          creator: '',
-          character_version: '1.0',
-          tags: ['LORE'],
-          system_prompt: '',
-          post_history_instructions: '',
-          alternate_greetings: [],
-          group_only_greetings: [],
-          character_book: {
-            name: 'New Lorebook',
-            description: '',
-            scan_depth: 100,
-            token_budget: 500,
-            recursive_scanning: false,
-            extensions: {},
-            entries: [],
-          },
-        },
-      } as CCv3Data,
+    const mutate = (card: Card) => {
+      if (inactive()) return;
+      set({ currentCard: card, isDirty: true });
+      recover(card); updateTokens(card);
     };
-
-    get().setCurrentCard(newCard);
-    set({ isDirty: true });
-  },
-
-  // Import card
-  importCard: async (file) => {
-    const card = await importCharacterFile(file);
-    get().setCurrentCard(card);
-    return card.meta.id;
-  },
-
-  // Container support is owned by Foundry's server adapter, including explicit errors.
-  importVoxtaPackage: async (file) => get().importCard(file),
-
-  importCardFromURL: async (url) => {
-    const card = await importCharacterUrl(url);
-    get().setCurrentCard(card);
-    return card.meta.id;
-  },
-
-  // Export card
-  exportCard: async (format) => {
-    const { currentCard } = get();
-    if (!currentCard || !currentCard.meta.id) return;
-
-    // Save before exporting to ensure DB has latest data
-    if (currentCard.meta.spec === 'collection') {
-      // For collections: save member cards, not the collection container itself
-      // The collection card is just metadata - members need to be saved/validated
-      const collectionData = currentCard.data as { members?: Array<{ cardId: string }> };
-      if (collectionData.members && collectionData.members.length > 0) {
-        // Member cards should already be saved individually when edited
-        // Just ensure they exist - actual save happens in their own edit sessions
-      }
-    } else {
-      // Regular character card: save before export
+    const beginSelection = () => {
+      loading?.abort(); saving?.abort();
+      api.select();
+      const timeout = get().autoSaveTimeout;
+      if (timeout) clearTimeout(timeout);
+      const selection = get().selectionVersion + 1;
+      set({ selectionVersion: selection, isSaving: false, isRestoring: false, autoSaveTimeout: null });
+      return selection;
+    };
+    const selected = (selection: number) => !inactive() && get().selectionVersion === selection;
+    const importCard = async (source: File | string): Promise<string | null> => {
+      if (inactive()) return null;
+      const selection = beginSelection();
+      const controller = new AbortController(); loading = controller;
+      const options = { signal: AbortSignal.any([signal, controller.signal]) };
       try {
-        await get().saveCard();
-      } catch (err) {
-        alert(`Failed to save card before export: ${err}`);
-        return;
-      }
-    }
-
-    // Server mode: use API
-    const { data, error } = await api.exportCard(currentCard.meta.id, format);
-    if (error) {
-      return;
-    }
-
-    if (data) {
-      // Download file
-      const url = URL.createObjectURL(data);
-      const a = document.createElement('a');
-      a.href = url;
-
-      let ext: string = format;
-      if (format === 'voxta') {
-          ext = 'voxpkg';
-      }
-
-      a.download = `${currentCard.meta.name}.${ext}`;
-      a.click();
-      URL.revokeObjectURL(url);
-    }
-  },
-
-  // Type-safe update for normalized card fields
-  // Handles v2/v3 wrapping automatically
-  updateCardFields: (fields) => {
-    const { currentCard } = get();
-    if (!currentCard) return;
-
-    let newData: CCv2Data | CCv3Data;
-
-    if (isV3Card(currentCard)) {
-      // V3: Always wrapped, update data.data
-      const v3Data = currentCard.data;
-      newData = {
-        ...v3Data,
-        data: {
-          ...v3Data.data,
-          ...fields,
-        },
-      };
-    } else if (isV2Card(currentCard)) {
-      if (isWrappedV2(currentCard.data)) {
-        // Wrapped V2: update data.data
-        const wrapped = currentCard.data as CCv2Wrapped;
-        newData = {
-          ...wrapped,
-          spec: 'chara_card_v2',
-          spec_version: '2.0',
-          data: {
-            ...wrapped.data,
-            ...fields,
-          },
-        } as unknown as CCv2Data;
-      } else {
-        // Unwrapped V2: update directly
-        newData = {
-          ...currentCard.data,
-          ...fields,
-        } as CCv2Data;
-      }
-    } else {
-      // Unknown format, try direct update
-      newData = { ...currentCard.data, ...fields } as CCv2Data;
-    }
-
-    const newCard = { ...currentCard, data: newData };
-    set({ currentCard: newCard, isDirty: true });
-
-    // Autosave and token update
-    if (currentCard.meta.id) {
-      localDB.saveDraft(currentCard.meta.id, newCard).catch(console.error);
-      get().debouncedAutoSave();
-    }
-    useTokenStore.getState().updateTokenCounts(newCard);
-  },
-
-  // Type-safe update for extensions only
-  updateExtensions: (extensions) => {
-    const { currentCard } = get();
-    if (!currentCard) return;
-
-    const inner = getInnerData(currentCard);
-    const currentExtensions = (inner.extensions || {}) as CardExtensions;
-    const mergedExtensions = { ...currentExtensions, ...extensions };
-
-    get().updateCardFields({ extensions: mergedExtensions });
-  },
-
-  // Type-safe update for character book
-  updateCharacterBook: (book) => {
-    const { currentCard } = get();
-    if (!currentCard) return;
-
-    const inner = getInnerData(currentCard);
-    const currentBook = inner.character_book || { entries: [] };
-    const mergedBook = { ...currentBook, ...book } as CharacterBook;
-
-    get().updateCardFields({ character_book: mergedBook });
-  },
-
-  // Set a specific extension namespace
-  setExtension: (key, value) => {
-    const { currentCard } = get();
-    if (!currentCard) return;
-
-    const inner = getInnerData(currentCard);
-    const currentExtensions = (inner.extensions || {}) as CardExtensions;
-
-    get().updateCardFields({
-      extensions: {
-        ...currentExtensions,
-        [key]: value,
+        const card = typeof source === 'string' ? await importCharacterUrl(api, source, options) : await importCharacterFile(api, source, options);
+        if (!selected(selection)) return null;
+        get().setCurrentCard(card);
+        return card.meta.id;
+      } catch (error) {
+        if (!selected(selection) || controller.signal.aborted) return null;
+        throw error;
+      } finally { if (loading === controller) loading = null; }
+    };
+    return {
+      currentCard: null, isDirty: false, isSaving: false, isRestoring: false, selectionVersion: 0, autoSaveTimeout: null,
+      setCurrentCard(card) {
+        if (inactive()) return;
+        beginSelection(); assets.reset();
+        set({ currentCard: card, isDirty: false });
+        updateTokens(card);
       },
-    });
-  },
-
-  convertSpec: (mode) => {
-    const { currentCard } = get();
-    if (!currentCard) return;
-
-    // Update the card's spec mode
-    const updatedCard = {
-      ...currentCard,
-      meta: {
-        ...currentCard.meta,
-        spec: mode,
+      updateCardData(updates) {
+        const current = get().currentCard;
+        if (!current) return;
+        const document = current.data as unknown as Record<string, unknown>;
+        const wrapped = typeof document.data === 'object' && document.data !== null && 'spec' in document;
+        const changes = updates as unknown as Record<string, unknown>;
+        const data = wrapped ? { ...document, ...('data' in changes ? changes : {}),
+          data: { ...(document.data as Record<string, unknown>), ...((changes.data as Record<string, unknown> | undefined) ?? changes) } } : { ...document, ...changes };
+        mutate({ ...current, data: data as unknown as Card['data'] });
+      },
+      updateCardMeta(updates) {
+        const current = get().currentCard;
+        if (current) mutate({ ...current, meta: { ...current.meta, ...updates } });
+      },
+      // Explicit Save is the only operation that writes an immutable server revision.
+      debouncedAutoSave() {
+        const timeout = get().autoSaveTimeout;
+        if (timeout) clearTimeout(timeout);
+        if (!inactive()) set({ autoSaveTimeout: null });
+      },
+      cancelPending() { beginSelection(); loading = null; saving = null; },
+      async saveCard() {
+        const { currentCard, isDirty, isSaving, isRestoring, selectionVersion } = get();
+        if (inactive() || !currentCard || isSaving || isRestoring || (currentCard.meta.id && !isDirty && !assets.hasChanges(currentCard))) return;
+        const controller = new AbortController(); saving = controller;
+        const options = { signal: AbortSignal.any([signal, controller.signal]) };
+        set({ isSaving: true });
+        try {
+          const result = currentCard.meta.id ? await api.updateCard(currentCard.meta.id, currentCard, options) : await api.createCard(currentCard, options);
+          if (!selected(selectionVersion) || controller.signal.aborted) return;
+          if (result.error || !result.data) throw new Error(result.error ?? 'Save returned no card');
+          const saved = result.data, latest = get().currentCard;
+          if (!latest || latest.meta.id !== currentCard.meta.id || latest.meta.forkOf !== currentCard.meta.forkOf) return;
+          const changedDuringSave = latest !== currentCard;
+          let merged = saved;
+          if (changedDuringSave) {
+            const data = structuredClone(latest.data) as unknown as Record<string, unknown>;
+            const inner = data.data as Record<string, unknown>;
+            const savedInner = (saved.data as unknown as { data: Record<string, unknown> }).data;
+            if (Object.hasOwn(savedInner, 'assets')) inner.assets = structuredClone(savedInner.assets);
+            else delete inner.assets;
+            const extensions = { ...(inner.extensions as Record<string, unknown> | undefined) };
+            const savedExtensions = savedInner.extensions as Record<string, unknown> | undefined;
+            const foundry = { ...(extensions.foundry as Record<string, unknown> | undefined) };
+            const savedFoundry = savedExtensions?.foundry as Record<string, unknown> | undefined;
+            if (savedFoundry?.lineage !== undefined) foundry.lineage = savedFoundry.lineage;
+            else delete foundry.lineage;
+            extensions.foundry = foundry; inner.extensions = extensions;
+            merged = { data: data as unknown as Card['data'], meta: { ...latest.meta, id: saved.meta.id, forkOf: undefined,
+              updatedAt: saved.meta.updatedAt, createdAt: saved.meta.createdAt } };
+          }
+          const dirty = changedDuringSave || assets.hasChanges(merged);
+          set({ currentCard: merged, isDirty: dirty }); updateTokens(merged);
+          if (dirty) await recovery.save(saved.meta.id, merged, api.headRevision(saved.meta.id)).catch(console.warn);
+          else if (currentCard.meta.id) await recovery.remove(currentCard.meta.id).catch(console.warn);
+        } catch (error) {
+          if (selected(selectionVersion) && !controller.signal.aborted) throw error;
+        } finally {
+          if (saving === controller) {
+            saving = null;
+            if (selected(selectionVersion)) set({ isSaving: false });
+          }
+        }
+      },
+      async loadCard(id) {
+        if (inactive()) return;
+        const selection = beginSelection();
+        const controller = new AbortController(); loading = controller;
+        try {
+          const result = await api.getCard(id, { signal: AbortSignal.any([signal, controller.signal]) });
+          if (!selected(selection) || controller.signal.aborted) return;
+          if (result.error || !result.data) throw new Error(result.error ?? 'The card could not be opened');
+          get().setCurrentCard(result.data);
+        } finally { if (loading === controller) loading = null; }
+      },
+      async createNewCard() { get().setCurrentCard(blankCard()); if (!inactive()) set({ isDirty: true }); },
+      async createNewLorebook() { get().setCurrentCard(blankCard(true)); if (!inactive()) set({ isDirty: true }); },
+      importCard,
+      importVoxtaPackage: importCard,
+      importCardFromURL: importCard,
+      async exportCard(format) {
+        const { currentCard, selectionVersion } = get();
+        if (inactive() || !currentCard?.meta.id) return;
+        await get().saveCard();
+        if (!selected(selectionVersion)) return;
+        const { data, error } = await api.exportCard(currentCard.meta.id, format, { signal });
+        if (!selected(selectionVersion)) return;
+        if (error) throw new Error(error);
+        if (!data) throw new Error('Export returned no file');
+        const url = URL.createObjectURL(data);
+        try {
+          const anchor = document.createElement('a'); anchor.href = url;
+          anchor.download = `${currentCard.meta.name}.${format === 'voxta' ? 'voxpkg' : format}`;
+          anchor.click();
+        } finally { URL.revokeObjectURL(url); }
+      },
+      updateCardFields(fields) {
+        const current = get().currentCard;
+        if (!current) return;
+        let data: CCv2Data | CCv3Data;
+        if (isV3Card(current)) data = { ...current.data, data: { ...current.data.data, ...fields } };
+        else if (isV2Card(current) && isWrappedV2(current.data)) {
+          const wrapped = current.data as CCv2Wrapped;
+          data = { ...wrapped, data: { ...wrapped.data, ...fields } } as unknown as CCv2Data;
+        } else data = { ...current.data, ...fields } as CCv2Data;
+        mutate({ ...current, data });
+      },
+      updateExtensions(extensions) {
+        const current = get().currentCard;
+        if (current) get().updateCardFields({ extensions: { ...(getInnerData(current).extensions || {}), ...extensions } });
+      },
+      updateCharacterBook(book) {
+        const current = get().currentCard;
+        if (current) get().updateCardFields({ character_book: { ...(getInnerData(current).character_book || { entries: [] }), ...book } as CharacterBook });
+      },
+      setExtension(key, value) {
+        const current = get().currentCard;
+        if (current) get().updateCardFields({ extensions: { ...(getInnerData(current).extensions || {}), [key]: value } });
+      },
+      convertSpec(mode) {
+        const current = get().currentCard;
+        if (!current || current.meta.spec === mode) return;
+        const document = current.data as unknown as Record<string, unknown>;
+        const wrapped = typeof document.data === 'object' && document.data !== null && 'spec' in document;
+        // Preserve opaque root/inner fields when changing the schema envelope.
+        const data = { ...(wrapped ? document : {}), spec: mode === 'v3' ? 'chara_card_v3' : 'chara_card_v2',
+          spec_version: mode === 'v3' ? '3.0' : '2.0', data: structuredClone(wrapped ? document.data : document) };
+        mutate({ ...current, meta: { ...current.meta, spec: mode }, data: data as unknown as Card['data'] });
       },
     };
+  });
+}
 
-    // Convert data format if needed
-    if (mode === 'v3' && currentCard.meta.spec === 'v2') {
-      // Convert v2 to v3 format
-      const v2Data = currentCard.data as CCv2Data;
-      updatedCard.data = {
-        spec: 'chara_card_v3',
-        spec_version: '3.0',
-        data: {
-          ...v2Data,
-          creator: v2Data.creator || '',
-          character_version: v2Data.character_version || '1.0',
-          tags: v2Data.tags || [],
-        },
-      } as CCv3Data;
-    } else if (mode === 'v2' && currentCard.meta.spec === 'v3') {
-      // Convert v3 to v2 format
-      const v3Data = currentCard.data as CCv3Data;
-      updatedCard.data = {
-        ...v3Data.data,
-      } as CCv2Data;
-    }
-
-    set({ currentCard: updatedCard, isDirty: true });
-  },
-}));
+export function useCardStore(): CardStore;
+export function useCardStore<T>(selector: (state: CardStore) => T): T;
+export function useCardStore<T>(selector?: (state: CardStore) => T): T | CardStore {
+  return useStore(useEditorSession().cards, (state): T | CardStore => selector ? selector(state) : state);
+}

@@ -10,11 +10,14 @@ import { invokeClientLLM, type ClientLLMProvider } from '../../lib/client-llm';
 import { type WwwyzzerddPromptSet, defaultWwwyzzerddPrompts, initializeWwwyzzerddPrompts, } from '../../lib/default-wwwyzzerdd';
 import { getExtensions, type CardFields } from '../../lib/card-type-guards';
 import { getVisualDescription, updateVoxtaExtension, type CardExtensions } from '../../lib/extension-types';
+import { useEditorSession } from '../../unity/context';
 interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
     timestamp: Date;
     parsedData?: Partial<CharacterFields>;
+    selection?: number;
+    sessionId?: string;
 }
 interface CharacterFields {
     name: string;
@@ -28,9 +31,6 @@ interface CharacterFields {
 }
 // Default prompt set fallback
 const DEFAULT_PROMPT_SET = defaultWwwyzzerddPrompts[0];
-// Persist messages across component remounts
-let persistedMessages: ChatMessage[] = [];
-let hasInitializedGreeting = false;
 // Try to parse JSON from assistant response
 function tryParseCharacterJson(content: string): Partial<CharacterFields> | null {
     // Look for JSON block in the response
@@ -60,12 +60,16 @@ function tryParseCharacterJson(content: string): Partial<CharacterFields> | null
     return null;
 }
 export function WwwyzzerddTab() {
+    const session = useEditorSession();
+    const generation = session.selection();
+    const sessionRef = useRef(session);
+    sessionRef.current = session;
     const { currentCard, updateCardFields, updateExtensions } = useCardStore();
     const llmSettings = useLLMStore((state) => state.settings);
     const loadSettings = useLLMStore((state) => state.loadSettings);
     const activePromptSetId = useSettingsStore((state) => state.wwwyzzerdd?.activePromptSetId);
     // Initialize messages from persisted state
-    const [messages, setMessagesState] = useState<ChatMessage[]>(persistedMessages);
+    const [messages, setMessagesState] = useState<ChatMessage[]>(() => session.wizard.messages as ChatMessage[]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [promptSet, setPromptSet] = useState<WwwyzzerddPromptSet | null>(null);
@@ -74,12 +78,21 @@ export function WwwyzzerddTab() {
     const abortControllerRef = useRef<AbortController | null>(null);
     // Wrapper to persist messages
     const setMessages = (newMessages: ChatMessage[] | ((prev: ChatMessage[]) => ChatMessage[])) => {
-        setMessagesState((prev) => {
-            const result = typeof newMessages === 'function' ? newMessages(prev) : newMessages;
-            persistedMessages = result;
-            return result;
-        });
+        const previous = session.wizard.messages as ChatMessage[];
+        const result = typeof newMessages === 'function' ? newMessages(previous) : newMessages;
+        session.wizard.messages = result;
+        setMessagesState(result);
     };
+    useEffect(() => {
+        setMessagesState(session.wizard.messages as ChatMessage[]);
+        setInput('');
+        setIsLoading(false);
+        return () => {
+            const controller = abortControllerRef.current;
+            abortControllerRef.current = null;
+            controller?.abort();
+        };
+    }, [session, generation]);
     // Get card data
     const cardData = currentCard ? extractCardData(currentCard) : null;
     const extensions = currentCard ? getExtensions(currentCard) : {};
@@ -111,10 +124,10 @@ export function WwwyzzerddTab() {
     useEffect(() => {
         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }, [messages]);
-    // Add initial greeting when prompt set loads (only once ever, using module-level flag)
+    // Preserve the greeting across tab remounts, only within this editor selection.
     useEffect(() => {
-        if (promptSet && !hasInitializedGreeting && persistedMessages.length === 0) {
-            hasInitializedGreeting = true;
+        if (promptSet && !session.wizard.hasShownGreeting && session.wizard.messages.length === 0) {
+            session.wizard.hasShownGreeting = true;
             const greeting = `Hello! I'm wwwyzzerdd, your character creation assistant. ${promptSet.personality}
 
 Before we begin, I need to know a few things:
@@ -133,10 +146,10 @@ Tell me your preferences and describe the character you'd like to create!`;
                     content: greeting,
                     timestamp: new Date(),
                 }];
-            persistedMessages = newMessages;
+            session.wizard.messages = newMessages;
             setMessagesState(newMessages);
         }
-    }, [promptSet]);
+    }, [promptSet, session, generation]);
     const handleSendMessage = async () => {
         if (!input.trim() || isLoading)
             return;
@@ -161,8 +174,19 @@ Tell me your preferences and describe the character you'd like to create!`;
         setMessages((prev) => [...prev, userMessage]);
         setInput('');
         setIsLoading(true);
-        // Create abort controller for this request
-        abortControllerRef.current = new AbortController();
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+        const signal = AbortSignal.any([controller.signal, session.liveSignal()]);
+        const requestGeneration = session.selection();
+        const isCurrentRequest = () => abortControllerRef.current === controller && !signal.aborted &&
+            sessionRef.current === session && session.selection() === requestGeneration;
+        const onAbort = () => {
+            if (abortControllerRef.current === controller) {
+                abortControllerRef.current = null;
+                setIsLoading(false);
+            }
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
         try {
             // Build context from current card
             const cardContext = cardData ? `
@@ -227,9 +251,9 @@ Only include fields you want to update. The user can then apply these to the cha
                     temperature: 0.7,
                     maxTokens: 2048,
                     model: activeProvider.defaultModel,
-                    signal: abortControllerRef.current?.signal,
+                    signal,
                 });
-                if (abortControllerRef.current?.signal.aborted) throw new DOMException('Request stopped', 'AbortError');
+                if (!isCurrentRequest()) return;
                 if (!result.success) {
                     throw new Error(result.error || 'LLM request failed');
                 }
@@ -241,21 +265,13 @@ Only include fields you want to update. The user can then apply these to the cha
                 content,
                 timestamp: new Date(),
                 parsedData: parsedData || undefined,
+                selection: requestGeneration,
+                sessionId: session.id,
             };
             setMessages((prev) => [...prev, assistantMessage]);
         }
         catch (err) {
-            if (err instanceof Error && err.name === 'AbortError') {
-                setMessages((prev) => [
-                    ...prev,
-                    {
-                        role: 'assistant',
-                        content: '[Request stopped by user]',
-                        timestamp: new Date(),
-                    },
-                ]);
-            }
-            else {
+            if (isCurrentRequest()) {
                 console.error('Chat error:', err);
                 setMessages((prev) => [
                     ...prev,
@@ -268,13 +284,21 @@ Only include fields you want to update. The user can then apply these to the cha
             }
         }
         finally {
-            setIsLoading(false);
-            abortControllerRef.current = null;
+            signal.removeEventListener('abort', onAbort);
+            if (abortControllerRef.current === controller) {
+                abortControllerRef.current = null;
+                setIsLoading(false);
+            }
         }
     };
     const handleStop = () => {
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
+            setMessages((prev) => [...prev, {
+                role: 'assistant',
+                content: '[Request stopped by user]',
+                timestamp: new Date(),
+            }]);
         }
     };
     const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -284,12 +308,15 @@ Only include fields you want to update. The user can then apply these to the cha
         }
     };
     const clearChat = () => {
-        // Clear persisted messages
-        persistedMessages = [];
-        hasInitializedGreeting = false;
+        const controller = abortControllerRef.current;
+        abortControllerRef.current = null;
+        controller?.abort();
+        setIsLoading(false);
+        session.wizard.messages = [];
+        session.wizard.hasShownGreeting = false;
         // Immediately show greeting
         if (promptSet) {
-            hasInitializedGreeting = true;
+            session.wizard.hasShownGreeting = true;
             const greeting = `Hello! I'm wwwyzzerdd, your character creation assistant. ${promptSet.personality}
 
 Before we begin, I need to know a few things:
@@ -308,15 +335,16 @@ Tell me your preferences and describe the character you'd like to create!`;
                     content: greeting,
                     timestamp: new Date(),
                 }];
-            persistedMessages = newMessages;
+            session.wizard.messages = newMessages;
             setMessagesState(newMessages);
         }
         else {
             setMessagesState([]);
         }
     };
-    const applyParsedData = (data: Partial<CharacterFields>) => {
-        if (!currentCard || !cardData)
+    const applyParsedData = (message: ChatMessage) => {
+        const data = message.parsedData;
+        if (!currentCard || !cardData || !data || message.sessionId !== session.id || message.selection !== session.selection())
             return;
         // Build the complete update object with all fields at once
         const fieldsToUpdate: Partial<CardFields> = {};
@@ -455,7 +483,7 @@ Tell me your preferences and describe the character you'd like to create!`;
                       <span className="text-xs text-green-400">
                         JSON detected: {Object.keys(msg.parsedData).join(', ')}
                       </span>
-                      <button onClick={() => applyParsedData(msg.parsedData!)} className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors">
+                      <button onClick={() => applyParsedData(msg)} disabled={msg.sessionId !== session.id || msg.selection !== generation} className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded transition-colors">
                         Apply to Card
                       </button>
                     </div>

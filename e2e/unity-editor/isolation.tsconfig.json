@@ -1,0 +1,13 @@
+{
+  "extends": "../../packages/architect/tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "paths": {
+      "react": ["../../apps/web/node_modules/@types/react/index.d.ts"],
+      "react/*": ["../../apps/web/node_modules/@types/react/*"],
+      "react-dom/*": ["../../apps/web/node_modules/@types/react-dom/*"],
+      "@character-unity/architect/host": ["../../packages/architect/src/unity/host.tsx"]
+    }
+  },
+  "include": ["./isolation.tsx", "../../packages/architect/src/unity/shims.d.ts", "../../apps/web/node_modules/vite/client.d.ts"]
+}

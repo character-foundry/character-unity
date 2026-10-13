@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { portalRoot } from '../../unity/config';
+import { useEditorSession } from '../../unity/context';
 
 interface DialogProps {
   label: string;
@@ -11,6 +11,7 @@ interface DialogProps {
 
 /** Native modal supplies focus containment, Escape, and focus restoration. */
 export function Dialog({ label, onClose, children, className = '' }: DialogProps) {
+  const session = useEditorSession();
   const ref = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -23,10 +24,12 @@ export function Dialog({ label, onClose, children, className = '' }: DialogProps
     };
   }, []);
 
+  const root = session.root.current;
+  if (!root) return null;
   return createPortal(
     <dialog ref={ref} aria-label={label} onCancel={event => { event.preventDefault(); onClose(); }}
       className={`app-dialog ${className}`}>
       {children}
-    </dialog>, portalRoot()
+    </dialog>, root
   );
 }

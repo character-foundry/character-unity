@@ -31,8 +31,8 @@ export async function call<T>(path: string, init: RequestInit = {}, retried = fa
   return response.json() as Promise<T>;
 }
 
-export async function reconnectSession() {
-  await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' } });
+export async function reconnectSession(signal?: AbortSignal) {
+  await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' }, signal });
 }
 
 /** Raw fetch (for binary responses) that reconnects the local session once on 401. */

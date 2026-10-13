@@ -8,8 +8,9 @@
  */
 
 import { useEffect, useState, useRef, lazy, Suspense } from 'react';
-import { editorSelection, useCardStore } from '../../../store/card-store';
-import { api, type UnityVersion } from '../../../lib/api';
+import { useCardStore } from '../../../store/card-store';
+import type { UnityVersion } from '../../../lib/api';
+import { useEditorSession } from '../../../unity/context';
 import type { Card, DiffViewMode } from '../../../lib/types';
 import {
   getLorebookFromData,
@@ -104,7 +105,10 @@ function ViewModeSelector({
 }
 
 export function DiffPanel() {
+  const session = useEditorSession();
+  const api = session.api;
   const currentCard = useCardStore((state) => state.currentCard);
+  const selection = session.selection();
   const setCurrentCard = useCardStore((state) => state.setCurrentCard);
   const [versions, setVersions] = useState<UnityVersion[]>([]);
   const [selectedVersion, setSelectedVersion] = useState<(UnityVersion & { data: Card['data'] }) | null>(null);
@@ -115,6 +119,11 @@ export function DiffPanel() {
   const [isRestoring, setIsRestoring] = useState(false);
   const [loadingVersionId, setLoadingVersionId] = useState<string | null>(null);
   const request = useRef(0);
+  const lifetime = useRef(new AbortController());
+  useEffect(() => {
+    lifetime.current = new AbortController();
+    return () => { lifetime.current.abort(); request.current++; };
+  }, []);
 
   // Check if current card has a lorebook
   const hasLorebook = currentCard ? cardHasLorebook(currentCard) : false;
@@ -128,7 +137,7 @@ export function DiffPanel() {
     if (currentCard?.meta.id) {
       void loadVersions();
     }
-  }, [currentCard?.meta.id, currentCard?.meta.updatedAt]);
+  }, [selection, currentCard?.meta.id, currentCard?.meta.updatedAt]);
 
   // Compute lorebook diff when version is selected
   useEffect(() => {
@@ -152,8 +161,9 @@ export function DiffPanel() {
     if (!currentCard?.meta.id) return;
     const generation = request.current;
     setIsLoading(true);
-    const result = await api.listVersions(currentCard.meta.id);
-    if (request.current !== generation) return;
+    const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal]);
+    const result = await api.listVersions(currentCard.meta.id, { signal });
+    if (request.current !== generation || signal.aborted || session.selection() !== selection) return;
     if (result.error) setError(result.error);
     else setVersions(result.data ?? []);
     setIsLoading(false);
@@ -161,29 +171,34 @@ export function DiffPanel() {
 
   const handleRestore = async (version: UnityVersion) => {
     if (!currentCard?.meta.id) return;
-    if (useCardStore.getState().isSaving || useCardStore.getState().isRestoring) return;
-    const warning = useCardStore.getState().isDirty ? '\nUnsaved edits will be discarded.' : '';
+    if (session.cards.getState().isSaving || session.cards.getState().isRestoring) return;
+    const warning = session.cards.getState().isDirty ? '\nUnsaved edits will be discarded.' : '';
     if (!confirm(`Restore Version ${version.version} as a new saved revision?${warning}`)) return;
     setIsRestoring(true);
-    const selection = editorSelection();
-    useCardStore.setState({ isRestoring: true });
+    const selection = session.selection();
+    const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal]);
+    const live = () => session.selection() === selection && !signal.aborted;
+    session.cards.setState({ isRestoring: true });
     setError(null);
     try {
-      const result = await api.restoreVersion(currentCard.meta.id, version.id);
+      const result = await api.restoreVersion(currentCard.meta.id, version.id, { signal });
       if (result.error || !result.data) throw new Error(result.error ?? 'Restore failed');
-      if (editorSelection() !== selection || useCardStore.getState().currentCard?.meta.id !== currentCard.meta.id) return;
+      if (!live()) return;
       setCurrentCard(result.data);
       setSelectedVersion(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Restore failed');
+      if (live()) setError(err instanceof Error ? err.message : 'Restore failed');
     } finally {
-      setIsRestoring(false);
-      useCardStore.setState({ isRestoring: false });
+      if (live()) setIsRestoring(false);
+      if (session.selection() === selection && !session.signal.aborted) {
+        session.cards.setState({ isRestoring: false });
+      }
     }
   };
 
   const handleVersionClick = async (version: UnityVersion) => {
     const generation = ++request.current;
+    const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal]);
     if (selectedVersion?.id === version.id) {
       setSelectedVersion(null);
       return;
@@ -196,14 +211,14 @@ export function DiffPanel() {
     setLoadingVersionId(version.id);
     setError(null);
     try {
-      const result = await api.getVersion(currentCard.meta.id, version.id);
-      if (request.current !== generation) return;
+      const result = await api.getVersion(currentCard.meta.id, version.id, { signal });
+      if (request.current !== generation || signal.aborted || session.selection() !== selection) return;
       if (result.error || !result.data) throw new Error(result.error ?? 'Failed to load revision');
       setSelectedVersion(result.data);
     } catch (err) {
-      if (request.current === generation) setError(err instanceof Error ? err.message : 'Failed to load revision');
+      if (request.current === generation && !signal.aborted && session.selection() === selection) setError(err instanceof Error ? err.message : 'Failed to load revision');
     } finally {
-      if (request.current === generation) setLoadingVersionId(null);
+      if (request.current === generation && !signal.aborted && session.selection() === selection) setLoadingVersionId(null);
     }
   };
 

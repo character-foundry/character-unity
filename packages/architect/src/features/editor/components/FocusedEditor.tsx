@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useCardStore, extractCardData } from '../../../store/card-store';
+import { useEditorSession } from '../../../unity/context';
 import { useSettingsStore } from '../../../store/settings-store';
 import {
   normalizeSpec,
@@ -111,22 +112,19 @@ function updateCrepeContent(crepe: Crepe, markdown: string) {
 
 function CrepeMarkdownEditor({ value, editorKey, onChange, onReady }: CrepeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const crepeInstanceRef = useRef<Crepe | null>(null);
-  const loadingRef = useRef(false);
 
   useEffect(() => {
-    if (!containerRef.current || loadingRef.current) return;
-
-    loadingRef.current = true;
-
-    // Clear the container before creating a new editor
-    if (containerRef.current) {
-      containerRef.current.innerHTML = '';
-    }
+    if (!containerRef.current) return;
+    let disposed = false;
+    let ready = false;
+    // Pending creation owns its own mount, so late teardown cannot remove a replacement editor.
+    const mount = document.createElement('div');
+    containerRef.current.replaceChildren(mount);
+    const changed = throttle((markdown: string) => { if (!disposed) onChange(markdown); }, 200);
 
     // Crepe configuration with proper features enabled - playground pattern
     const crepe = new Crepe({
-      root: containerRef.current,
+      root: mount,
       defaultValue: value || '',
       featureConfigs: {
         [Crepe.Feature.CodeMirror]: {
@@ -141,36 +139,26 @@ function CrepeMarkdownEditor({ value, editorKey, onChange, onReady }: CrepeEdito
     // Use listener plugin approach with throttling (playground pattern)
     crepe.editor
       .config((ctx) => {
-        ctx.get(listenerCtx).markdownUpdated(
-          throttle((_, markdown) => {
-            onChange(markdown);
-          }, 200)
-        );
+        ctx.get(listenerCtx).markdownUpdated((_, markdown) => { changed(markdown); });
       })
       .use(listener);
 
     crepe
       .create()
       .then(() => {
-        crepeInstanceRef.current = crepe;
-        loadingRef.current = false;
+        if (disposed) { void crepe.destroy().catch((error: unknown) => { console.error('Error destroying discarded Crepe editor:', error); }); return; }
+        ready = true;
         onReady(crepe);
       })
       .catch((error) => {
-        console.error('Failed to create Crepe editor:', error);
-        loadingRef.current = false;
+        if (!disposed) console.error('Failed to create Crepe editor:', error);
       });
 
     return () => {
-      if (loadingRef.current) return;
-      if (crepeInstanceRef.current) {
-        try {
-          crepeInstanceRef.current.destroy();
-        } catch (error) {
-          console.error('Error destroying Crepe editor:', error);
-        }
-        crepeInstanceRef.current = null;
-      }
+      disposed = true;
+      changed.cancel();
+      if (ready) void crepe.destroy().catch((error: unknown) => { console.error('Error destroying Crepe editor:', error); });
+      mount.remove();
       onReady(null);
     };
   }, [editorKey]);
@@ -181,6 +169,7 @@ function CrepeMarkdownEditor({ value, editorKey, onChange, onReady }: CrepeEdito
 type FocusType = 'wysiwyg' | 'raw' | null;
 
 function FocusedEditorInner() {
+  const session = useEditorSession();
   const { currentCard, updateCardData } = useCardStore();
   const { creatorNotes, editor } = useSettingsStore();
   const [selectedField, setSelectedField] = useState<LocalFocusField>('description');
@@ -397,7 +386,7 @@ function FocusedEditorInner() {
     } else if (selectedField === 'appearance') {
       // Handle appearance specially - stored in extensions.voxta.appearance or visual_description
       // Use the store's type-safe updateExtensions helper
-      const { updateExtensions } = useCardStore.getState();
+      const { updateExtensions } = session.cards.getState();
       const extensions = (cardData?.extensions || {}) as CardExtensions;
       // Use voxta extension if it already exists, otherwise visual_description
       if (extensions.voxta) {
@@ -408,7 +397,7 @@ function FocusedEditorInner() {
     } else if (selectedField === 'character_note') {
       // Handle character_note specially - stored in extensions.depth_prompt.prompt
       // Use the store's type-safe updateExtensions helper
-      const { updateExtensions } = useCardStore.getState();
+      const { updateExtensions } = session.cards.getState();
       const extensions = (cardData?.extensions || {}) as CardExtensions;
       const currentDepth = getDepthPrompt(extensions);
       updateExtensions(

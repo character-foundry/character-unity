@@ -1,26 +1,20 @@
-import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { ArchitectEditorHost } from '@character-unity/architect/host';
 import { AppShell } from '@/components/layout';
-import { libraryId, reconnectSession } from '@/lib/unity';
+import { useLibraryEditorSession } from './editor-session';
 import { libraryChanged } from '@/lib/library-search';
 
 /** New card or fork (`/card/:id/fork`): an editor draft held in memory. Nothing reaches the library until Save. */
 export default function NewCardPage() {
   const navigate = useNavigate();
   const forkOf = useParams().id;
-  const [workspaceId, setWorkspaceId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => { libraryId().then(setWorkspaceId, (failure: Error) => setError(failure.message)); }, []);
+  const session = useLibraryEditorSession();
 
   return (
     <AppShell>
-      {error && <div className="bg-red-500/20 border border-red-500/40 rounded-lg px-4 py-3 text-red-200/90" role="alert">{error}</div>}
-      {workspaceId && (
-        <ArchitectEditorHost config={{ workspaceId, reconnect: reconnectSession }} cardId="" forkOf={forkOf}
+        <ArchitectEditorHost config={{ workspaceId: session.workspaceId }} session={session} cardId="" forkOf={forkOf}
           onExit={() => navigate(-1)}
           onCreated={(id) => { libraryChanged(); navigate(`/card/${id}/edit`, { replace: true }); }} />
-      )}
     </AppShell>
   );
 }

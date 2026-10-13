@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
 import { useCardStore } from '../../../store/card-store';
-import { editorAssets, type EditorAsset } from '../../../unity/assets';
+import type { EditorAsset } from '../../../unity/assets';
+import { useEditorSession } from '../../../unity/context';
 import type { CardAssetWithDetails } from '../../../lib/types';
-import { CollectionsView } from './CollectionsView';
 
 type ViewMode = 'list' | 'grid';
 type SortField = 'name' | 'type' | 'ext';
@@ -53,7 +53,12 @@ function formatFileSize(bytes: number): string {
 }
 
 export function AssetsPanel() {
+  const session = useEditorSession();
+  const editorAssets = session.assets;
   const currentCard = useCardStore((state) => state.currentCard);
+  const selection = session.selection();
+  const inputId = useId();
+  const request = useRef(0);
   const [assets, setAssets] = useState<DisplayAsset[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -144,12 +149,16 @@ export function AssetsPanel() {
   }, [assets, sortField, sortOrder, debouncedSearch]);
 
   const loadAssets = useCallback(async (showLoading = false) => {
-    const card = useCardStore.getState().currentCard;
+    const card = session.cards.getState().currentCard;
     if (!card) return;
+    const generation = ++request.current;
+    const selection = session.selection();
+    const signal = session.liveSignal();
+    const live = () => generation === request.current && session.selection() === selection && !signal.aborted;
     if (showLoading) setIsLoading(true);
     try {
       const entries = await editorAssets.list(card);
-      if (useCardStore.getState().currentCard?.meta.id !== card.meta.id) return;
+      if (!live()) return;
       setAssets(entries.map((asset) => displayAsset(asset, card.meta.id, card.meta.createdAt)));
       const ids = new Set(entries.map((asset) => asset.id));
       setSelectedAsset((selected) => selected && ids.has(selected) ? selected : null);
@@ -158,19 +167,21 @@ export function AssetsPanel() {
         return retained.length === selected.size ? selected : new Set(retained);
       });
     } catch (err) {
-      if (useCardStore.getState().currentCard?.meta.id === card.meta.id) {
+      if (live()) {
         setError(err instanceof Error ? err.message : 'Failed to load assets');
       }
     } finally {
-      if (showLoading && useCardStore.getState().currentCard?.meta.id === card.meta.id) setIsLoading(false);
+      if (showLoading && live()) setIsLoading(false);
     }
-  }, []);
+  }, [session, editorAssets]);
 
   useEffect(() => {
     let active = true;
     let queued = false;
     setAssets([]);
     setError(null);
+    setIsLoading(false);
+    setIsUploading(false);
     setSelectedAsset(null);
     setSelectedAssets(new Set());
     setLightboxImage(null);
@@ -182,8 +193,8 @@ export function AssetsPanel() {
       queued = true;
       queueMicrotask(() => { queued = false; if (active) void loadAssets(); });
     });
-    return () => { active = false; unsubscribe(); };
-  }, [currentCard?.meta.id, loadAssets]);
+    return () => { active = false; request.current++; unsubscribe(); };
+  }, [selection, loadAssets, editorAssets]);
 
   useEffect(() => {
     setEditingName(false);
@@ -206,8 +217,8 @@ export function AssetsPanel() {
   }, [lightboxImage]);
 
   const markDirty = () => {
-    if (useCardStore.getState().currentCard?.meta.id === currentCard?.meta.id) {
-      useCardStore.setState({ isDirty: true });
+    if (session.selection() === selection && !session.liveSignal().aborted) {
+      session.cards.setState({ isDirty: true });
     }
   };
 
@@ -216,11 +227,15 @@ export function AssetsPanel() {
 
     setIsUploading(true);
     setError(null);
+    const signal = session.liveSignal();
+    const live = () => session.selection() === selection && !signal.aborted;
     try {
       for (let i = 0; i < files.length; i++) {
+        if (!live()) return;
         const file = files[i];
         const name = files.length > 1 ? file.name : uploadName || file.name;
         await editorAssets.add(currentCard, file, { name, type: uploadType, main: uploadIsMain && i === 0 });
+        if (!live()) return;
         markDirty();
       }
 
@@ -228,10 +243,12 @@ export function AssetsPanel() {
       setUploadIsMain(false);
       setShowUploadForm(false);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to add one or more assets');
+      if (live()) setError(err instanceof Error ? err.message : 'Failed to add one or more assets');
     } finally {
-      setIsUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      if (live()) {
+        setIsUploading(false);
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -511,15 +528,6 @@ export function AssetsPanel() {
     }
   };
 
-  // For collection cards, show the CollectionsView instead of regular assets
-  if (currentCard?.meta.spec === 'collection') {
-    return (
-      <div className="h-full overflow-auto p-6">
-        <CollectionsView collectionCard={currentCard} />
-      </div>
-    );
-  }
-
   return (
     <div className="h-full flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
       {/* Sidebar */}
@@ -726,18 +734,18 @@ export function AssetsPanel() {
             {(uploadType === 'icon' || uploadType === 'background') && <div className="flex items-center gap-2">
               <input
                 type="checkbox"
-                id="upload-is-main"
+                id={`${inputId}-main`}
                 checked={uploadIsMain}
                 onChange={(e) => setUploadIsMain(e.target.checked)}
                 className="rounded"
               />
-              <label htmlFor="upload-is-main" className="text-sm">
+              <label htmlFor={`${inputId}-main`} className="text-sm">
                 Set as main {uploadType === 'icon' ? 'portrait' : 'background'}
               </label>
             </div>}
 
             <label
-              htmlFor="attachment-upload"
+              htmlFor={`${inputId}-attachment`}
               className={`block border-2 border-dashed rounded p-4 text-center cursor-pointer transition-colors focus-within:ring-2 focus-within:ring-blue-500 ${
                 dragOver
                   ? 'border-blue-500 bg-blue-500/10'
@@ -752,7 +760,7 @@ export function AssetsPanel() {
             >
               <input
                 ref={fileInputRef}
-                id="attachment-upload"
+                id={`${inputId}-attachment`}
                 type="file"
                 aria-label="Add attachment"
                 className="sr-only"

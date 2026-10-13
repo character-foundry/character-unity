@@ -4,7 +4,7 @@ import { getExtensions } from './card-type-guards';
 
 export type CardListSort = 'edited' | 'newest' | 'oldest' | 'name';
 export type CardListFilter = 'all' | 'favorites' | 'collection' | 'lorebook' | 'voxta' | 'charx' | 'v3' | 'v2';
-export interface CardListOptions { filter?: CardListFilter; sort?: CardListSort }
+export interface CardListOptions { filter?: CardListFilter; sort?: CardListSort; has?: readonly string[] }
 
 function cardType(card: Card): Exclude<CardListFilter, 'all' | 'favorites'> {
   if (card.meta.spec === 'collection' || card.meta.spec === 'lorebook') return card.meta.spec;

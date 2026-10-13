@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useLLMStore, clientProvider } from '../../../store/llm-store';
 import { invokeClientLLM } from '../../../lib/client-llm';
 import { loadPresets, savePreset } from '../../../lib/presets';
 import type { LLMAssistResponse, UserPreset } from '../../../lib/types';
 import { DiffViewer } from '../../../components/ui/DiffViewer';
+import { useEditorSession } from '../../../unity/context';
 
 interface LLMAssistSidebarProps {
   isOpen: boolean; onClose(): void; fieldName: string; currentValue: string; selection?: string;
@@ -12,6 +13,8 @@ interface LLMAssistSidebarProps {
 }
 
 export function LLMAssistSidebar({ isOpen, onClose, fieldName, currentValue, selection, onApply }: LLMAssistSidebarProps) {
+  const session = useEditorSession();
+  const generation = session.selection();
   const { settings, loadSettings } = useLLMStore();
   const [instruction, setInstruction] = useState('');
   const [presets, setPresets] = useState<UserPreset[]>([]);
@@ -24,6 +27,13 @@ export function LLMAssistSidebar({ isOpen, onClose, fieldName, currentValue, sel
   const [assistResponse, setAssistResponse] = useState<LLMAssistResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const fieldContext = useMemo(() => ({ session, isOpen, fieldName, currentValue, selection }),
+    [session, isOpen, fieldName, currentValue, selection]);
+  const fieldContextRef = useRef(fieldContext);
+  fieldContextRef.current = fieldContext;
+  const responseContextRef = useRef<{
+    generation: number; signal: AbortSignal; field: typeof fieldContext;
+  } | null>(null);
   const refreshPresets = () => {
     try { setPresets(loadPresets().filter((preset) => !preset.isHidden)); }
     catch (error) { setError(error instanceof Error ? error.message : 'Unable to load presets'); }
@@ -34,10 +44,18 @@ export function LLMAssistSidebar({ isOpen, onClose, fieldName, currentValue, sel
     const active = settings.providers.find((provider) => provider.id === settings.activeProviderId) || settings.providers[0];
     if (active) { setSelectedProvider(active.id); setModel(active.defaultModel); setTemperature(active.temperature ?? 0.7); }
   }, [settings]);
-  useEffect(() => () => { abortControllerRef.current?.abort(); }, []);
   useEffect(() => {
-    if (!isOpen) { abortControllerRef.current?.abort(); abortControllerRef.current = null; setIsProcessing(false); }
-  }, [isOpen]);
+    responseContextRef.current = null;
+    setAssistResponse(null);
+    setError(null);
+    setIsProcessing(false);
+    return () => {
+      const controller = abortControllerRef.current;
+      abortControllerRef.current = null;
+      responseContextRef.current = null;
+      controller?.abort();
+    };
+  }, [session, generation, isOpen, fieldName, currentValue, selection]);
   const handleStop = () => {
     abortControllerRef.current?.abort(); abortControllerRef.current = null;
     setIsProcessing(false); setError('Request stopped by user');
@@ -48,32 +66,51 @@ export function LLMAssistSidebar({ isOpen, onClose, fieldName, currentValue, sel
     if (!provider || !finalInstruction) { setError('Select a provider and an instruction first.'); return; }
     abortControllerRef.current?.abort();
     const controller = new AbortController(); abortControllerRef.current = controller;
+    const signal = AbortSignal.any([controller.signal, session.liveSignal()]);
+    const requestGeneration = session.selection();
+    const requestContext = fieldContextRef.current;
+    const isCurrentRequest = () => abortControllerRef.current === controller && !signal.aborted &&
+      requestGeneration === session.selection() && fieldContextRef.current === requestContext;
+    const onAbort = () => {
+      if (abortControllerRef.current === controller) {
+        abortControllerRef.current = null;
+        setIsProcessing(false);
+      }
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    responseContextRef.current = null;
     setIsProcessing(true); setError(null); setAssistResponse(null);
     const original = selection || currentValue;
     try {
       const result = await invokeClientLLM({
-        provider: clientProvider(provider), model, temperature, maxTokens: provider.maxTokens ?? 2048, signal: controller.signal,
+        provider: clientProvider(provider), model, temperature, maxTokens: provider.maxTokens ?? 2048, signal,
         messages: [
           { role: 'system', content: 'You are helping edit a character card. Field: ' + fieldName +
             '. Task: ' + finalInstruction + '. Respond only with revised text, without explanations or markdown formatting.' },
           { role: 'user', content: original },
         ],
       });
-      if (abortControllerRef.current !== controller || controller.signal.aborted) return;
+      if (!isCurrentRequest()) return;
       if (!result.success) throw new Error(result.error || 'LLM request failed');
       const revised = result.content ?? '';
       setAssistResponse({
         content: revised, model, original, revised, diff: [], usage: { promptTokens: 0, completionTokens: 0 },
         metadata: { provider: provider.label || provider.name, model, temperature, promptTokens: 0, completionTokens: 0 },
       });
+      responseContextRef.current = { generation: requestGeneration, signal, field: requestContext };
     } catch (error) {
-      if (abortControllerRef.current === controller && !controller.signal.aborted) setError(error instanceof Error ? error.message : 'LLM request failed');
+      if (isCurrentRequest()) setError(error instanceof Error ? error.message : 'LLM request failed');
     } finally {
+      signal.removeEventListener('abort', onAbort);
       if (abortControllerRef.current === controller) { abortControllerRef.current = null; setIsProcessing(false); }
     }
   };
   const handleApply = (action: 'replace' | 'append' | 'insert') => {
-    if (assistResponse) { onApply(assistResponse.revised || assistResponse.content, action); onClose(); }
+    const context = responseContextRef.current;
+    if (assistResponse && isOpen && context && !context.signal.aborted &&
+      context.generation === session.selection() && context.field === fieldContextRef.current) {
+      onApply(assistResponse.revised || assistResponse.content, action); onClose();
+    }
   };
   const handleUserPresetSelect = (id: string) => { setSelectedPresetId(id); setInstruction(''); };
   const handleSaveAsPreset = () => {

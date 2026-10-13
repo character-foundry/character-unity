@@ -1,5 +1,7 @@
 /** Browser-owned provider preferences. Card persistence remains in Unity. */
-import { create } from 'zustand';
+import { useStore } from 'zustand';
+import { createStore, type StoreApi } from 'zustand/vanilla';
+import { useEditorSession } from '../unity/context';
 import type { LLMSettings, ProviderConfig } from '../lib/types';
 import {
   loadClientLLMProviders, saveClientLLMProviders, loadActiveProvider, saveActiveProvider,
@@ -15,7 +17,7 @@ export function clientProvider(provider: ProviderConfig): ClientLLMProvider {
   };
 }
 
-interface LLMStore {
+export interface LLMStore {
   settings: LLMSettings;
   isLoading: boolean;
   error: string | null;
@@ -31,22 +33,30 @@ interface LLMStore {
   getCachedModels(id: string): string[];
 }
 
-export const useLLMStore = create<LLMStore>((set, get) => ({
+export function createLLMStore({ signal, isDisposed }: { signal: AbortSignal; isDisposed(): boolean }): StoreApi<LLMStore> {
+  const requests = new Map<string, number>();
+  let requestSequence = 0;
+  const inactive = () => signal.aborted || isDisposed();
+  return createStore<LLMStore>((set, get) => ({
   settings: { providers: [] }, isLoading: false, error: null, modelCache: {},
   loadSettings: async () => {
+    if (inactive()) return;
     const providers: ProviderConfig[] = loadClientLLMProviders().map((provider) => ({
       ...provider, name: provider.name,
       kind: provider.kind === 'openrouter' ? 'openai-compatible' : provider.kind,
       clientKind: provider.kind,
     }));
-    set({ settings: { providers, activeProviderId: loadActiveProvider() || undefined }, error: null });
+    requests.clear();
+    set({ settings: { providers, activeProviderId: loadActiveProvider() || undefined }, modelCache: {}, error: null });
   },
   saveSettings: async (updates) => {
+    if (inactive()) return;
     const settings = { ...get().settings, ...updates };
     try {
       saveClientLLMProviders(settings.providers.map(clientProvider));
       saveActiveProvider(settings.activeProviderId ?? null);
-      set({ settings, error: null });
+      requests.clear();
+      set({ settings, modelCache: {}, error: null });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Unable to save provider preferences' });
       throw error;
@@ -62,17 +72,34 @@ export const useLLMStore = create<LLMStore>((set, get) => ({
   }),
   setActiveProvider: async (id) => get().saveSettings({ activeProviderId: id }),
   testConnection: async (id) => {
-    const provider = get().settings.providers.find((item) => item.id === id);
-    return provider ? testClientLLMConnection(clientProvider(provider)) : { success: false, error: 'Provider not found' };
-  },
-  fetchModelsForProvider: async (id) => {
+    if (inactive()) return { success: false, error: 'The editor is closed' };
     const provider = get().settings.providers.find((item) => item.id === id);
     if (!provider) return { success: false, error: 'Provider not found' };
-    const result = await fetchClientLLMModels(clientProvider(provider));
+    const result = await testClientLLMConnection(clientProvider(provider), { signal });
+    return inactive() || get().settings.providers.find((item) => item.id === id) !== provider
+      ? { success: false, error: 'The editor or provider settings changed' } : result;
+  },
+  fetchModelsForProvider: async (id) => {
+    if (inactive()) return { success: false, error: 'The editor is closed' };
+    const provider = get().settings.providers.find((item) => item.id === id);
+    if (!provider) return { success: false, error: 'Provider not found' };
+    const request = ++requestSequence;
+    requests.set(id, request);
+    const result = await fetchClientLLMModels(clientProvider(provider), { signal });
+    if (inactive() || get().settings.providers.find((item) => item.id === id) !== provider || requests.get(id) !== request) {
+      return { success: false, error: 'Provider settings changed while models were loading' };
+    }
     if (result.success && result.models) {
       set((state) => ({ modelCache: { ...state.modelCache, [id]: result.models! } }));
     }
     return result;
   },
   getCachedModels: (id) => get().modelCache[id] || [],
-}));
+  }));
+}
+
+export function useLLMStore(): LLMStore;
+export function useLLMStore<T>(selector: (state: LLMStore) => T): T;
+export function useLLMStore<T>(selector?: (state: LLMStore) => T): T | LLMStore {
+  return useStore(useEditorSession().llm, (state): T | LLMStore => selector ? selector(state) : state);
+}

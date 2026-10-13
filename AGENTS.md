@@ -19,8 +19,11 @@
   revision/import/asset contracts in `src/lib/api.ts` and `src/unity/`. Do not restore
   old server fallbacks or placeholder endpoints. Save commits document and staged
   assets together; recovery drafts do not autosave immutable server revisions.
-  Global zustand stores still mean one editor per page; lifecycle isolation remains
-  the next implementation pass. The active viewer/shell is native React Router
+  Each `EditorSession` owns its immutable workspace/client, vanilla stores, revision
+  heads, recovery owner, staged assets and cancellation. Require the session provider;
+  never add a singleton/current-session fallback. Auxiliary reads must not repin
+  the editor's expected head. Shared browser preferences contain no card/draft state.
+  The active viewer/shell is native React Router
   and browser HTML; do not add Next aliases, shims or old CardsHub endpoints.
   `packages/editor` (scaffold form editor) is being retired. Host apps own auth and routing.
 - Do not kill processes you did not start, discard legacy working-tree changes,
