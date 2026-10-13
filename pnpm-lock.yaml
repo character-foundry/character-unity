@@ -85,6 +85,9 @@ importers:
       '@character-foundry/character-foundry':
         specifier: link:../../../.unity-foundry-sdk/packages/character-foundry
         version: link:../../../.unity-foundry-sdk/packages/character-foundry
+      '@character-unity/scraper-kit':
+        specifier: workspace:*
+        version: link:../../packages/scraper-kit
       '@types/better-sqlite3':
         specifier: 9.6.0
         version: 9.6.0

@@ -30,6 +30,7 @@
     "@types/better-sqlite3": "9.6.0",
     "esbuild": "0.28.2",
     "tsx": "4.23.15",
-    "wrangler": "4.149.0"
+    "wrangler": "4.149.0",
+    "@character-unity/scraper-kit": "workspace:*"
   }
 }

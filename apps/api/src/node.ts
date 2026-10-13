@@ -18,7 +18,10 @@ const databasePath = process.env.UNITY_DB_PATH ?? fileURLToPath(new URL('../runt
 const blobDirectory = process.env.UNITY_BLOB_DIR ?? fileURLToPath(new URL('../runtime/blobs', import.meta.url));
 const remoteConnections = await loadRemoteConnections(process.env.UNITY_REMOTE_CONNECTIONS_FILE);
 const services = await openLocalServices({ databasePath, blobDirectory, remoteConnections,
-  ...(process.env.UNITY_ARCHIVE_ORIGIN ? { archiveOrigin: process.env.UNITY_ARCHIVE_ORIGIN } : {}) });
+  ...(process.env.UNITY_ARCHIVE_ORIGIN ? { archiveOrigin: process.env.UNITY_ARCHIVE_ORIGIN } : {}),
+  // The native Archive (scraped cards): its loopback address and the admin token it was started with.
+  ...(process.env.UNITY_ARCHIVE_NATIVE_ORIGIN ? { nativeArchive: { origin: process.env.UNITY_ARCHIVE_NATIVE_ORIGIN,
+    ...(process.env.UNITY_ARCHIVE_ADMIN_TOKEN ? { adminToken: process.env.UNITY_ARCHIVE_ADMIN_TOKEN } : {}) } } : {}) });
 const app = profile === 'hub'
   ? createAccountApi({ origin: publicOrigin!, accounts: services.accounts, store: services.store, forSession: services.forSession, ...(syncEnabled ? { sync: createSyncApi({ writes: syncWritesEnabled, origin: publicOrigin!, hub: services.hub, sync: services.sync }) } : {}) })
   : createLocalApi(services, { origin: () => origin });

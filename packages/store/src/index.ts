@@ -275,6 +275,19 @@ export function createStore(driver: StoreDriver) {
             ON CONFLICT(workspace_id, creator_key) DO NOTHING`, params: [workspaceId, fold(name), name, new Date().toISOString()] }
         : { sql: 'DELETE FROM unity_followed_creators WHERE workspace_id = ? AND creator_key = ?', params: [workspaceId, fold(name)] }]);
     },
+    /** Library cards imported from the given Archive cards (provenance kind 'archive'), oldest import first wins. */
+    async archiveLinks(workspaceId: string, archiveCardIds: readonly string[]): Promise<Record<string, string>> {
+      const ids = [...new Set(archiveCardIds.map((id) => validate.text(id, 'archive card id')))];
+      if (ids.length > 200) throw new StoreError('INVALID_INPUT', 'At most 200 Archive cards per lookup');
+      if (!ids.length) return {};
+      const rows = await driver.query<{ archiveCardId: string; cardId: string }>({
+        sql: `SELECT json_extract(s.provenance_json, '$.cardId') AS archiveCardId, c.id AS cardId
+          FROM unity_card_sources s JOIN unity_cards c ON c.id = s.card_id
+          WHERE s.workspace_id = ? AND c.head_revision_id IS NOT NULL AND ${notDeleted} AND json_extract(s.provenance_json, '$.kind') = 'archive'
+            AND json_extract(s.provenance_json, '$.cardId') IN (${ids.map(() => '?').join(', ')})
+          ORDER BY c.created_at DESC, c.id DESC`, params: [workspaceId, ...ids] });
+      return Object.fromEntries(rows.map((row) => [row.archiveCardId, row.cardId]));
+    },
     async listFollowedCreators(workspaceId: string): Promise<string[]> {
       const rows = await driver.query<{ creator: string }>({ sql: 'SELECT creator FROM unity_followed_creators WHERE workspace_id = ? ORDER BY creator_key LIMIT 5000', params: [workspaceId] });
       return rows.map((row) => row.creator);

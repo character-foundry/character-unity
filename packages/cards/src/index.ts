@@ -70,6 +70,11 @@ export function createCardService(store: UnityStore, assets: AssetService) {
       await authorize(actor, workspaceId);
       await store.followCreator(workspaceId, creator, follow);
     },
+    /** Which of these Archive cards are already in the library (Archive card id → library card id). */
+    async archiveLinks(actor: Actor, workspaceId: string, archiveCardIds: readonly string[]) {
+      await authorize(actor, workspaceId);
+      return store.archiveLinks(workspaceId, archiveCardIds);
+    },
     async followed(actor: Actor, workspaceId: string) {
       await authorize(actor, workspaceId);
       return store.listFollowedCreators(workspaceId);

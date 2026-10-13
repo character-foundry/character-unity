@@ -11,7 +11,8 @@
     "./remote": "./src/remote.ts",
     "./remote-outbox": "./src/remote-outbox.ts",
     "./connections": "./src/connections.ts",
-    "./chat": "./src/chat.ts"
+    "./chat": "./src/chat.ts",
+    "./native-archive": "./src/native-archive.ts"
   },
   "scripts": {
     "type-check": "tsc -p tsconfig.json"

@@ -6,9 +6,12 @@ import { createNodeBlobStore } from '@character-unity/blob-store/node';
 import { createArchiveClient } from '@character-unity/archive-client';
 import type { SessionProof } from '@character-unity/store/accounts';
 import { composeServices } from './compose.js';
+import { createNativeArchiveService } from '@character-unity/cards/native-archive';
 
 /** Local composition root. No Archive paths or remote bindings are inferred here. */
-export async function openLocalServices(options: { databasePath: string; blobDirectory: string; archiveOrigin?: string; remoteConnections?: readonly ConfiguredRemote[] }) {
+export async function openLocalServices(options: { databasePath: string; blobDirectory: string; archiveOrigin?: string; remoteConnections?: readonly ConfiguredRemote[];
+  /** The native Archive service (scraped cards) and its admin token. */
+  nativeArchive?: { origin: string; adminToken?: string } }) {
   if (options.databasePath !== ':memory:') await mkdir(dirname(options.databasePath), { recursive: true });
   const database = await openNodeStore(options.databasePath);
   try {
@@ -17,7 +20,9 @@ export async function openLocalServices(options: { databasePath: string; blobDir
     function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'> & { chat?: typeof database.chat }) {
       return composeServices(storage, blobs, archiveClient, options.remoteConnections);
     }
-    return { ...compose(database), accounts: database.accounts, sync: database.sync,
+    const local = compose(database);
+    const nativeArchive = options.nativeArchive ? createNativeArchiveService(local.cards, options.nativeArchive) : undefined;
+    return { ...local, ...(nativeArchive ? { nativeArchive } : {}), accounts: database.accounts, sync: database.sync,
       forSession: (proof: SessionProof) => compose(database.forSession(proof)), close: database.close };
   } catch (error) {
     database.close();

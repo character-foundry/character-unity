@@ -15,9 +15,12 @@ import { chatRoutes } from './chat.js';
 import type { ChatService } from '@character-unity/cards/chat';
 import { ChatAppError } from '@character-unity/cards/chat';
 import { SyncCommandError, SyncReadError } from '@character-foundry/character-foundry/sync';
+import type { NativeArchiveService } from '@character-unity/cards/native-archive';
+import { NativeArchiveUnavailable } from '@character-unity/cards/native-archive';
+import { nativeArchiveRoutes } from './archive-native.js';
 
 /** Shared Architect/hub API. Hosts supply storage, card operations and authentication. */
-export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; hub?: HubService; remotes?: RemoteConnectionsService; chat?: ChatService; authenticate?: Authenticate } = {}) {
+export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; nativeArchive?: NativeArchiveService; hub?: HubService; remotes?: RemoteConnectionsService; chat?: ChatService; authenticate?: Authenticate } = {}) {
   const app = new Hono();
   app.onError((error, c) => {
     if (error instanceof SyncCommandError || error instanceof SyncReadError) {
@@ -28,6 +31,11 @@ export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; card
     if (error instanceof ChatAppError) {
       const status = error.code === 'NOT_FOUND' ? 404 : 502;
       return c.json({ error: { code: `CHAT_${error.code}`, message: error.message } }, status);
+    }
+    if (error instanceof NativeArchiveUnavailable) {
+      // The Archive's own answer (404 for an unknown card, 409 for a running source, 400 for a bad setting) passes through.
+      const status = [400, 404, 409].includes(error.status) ? error.status as 400 | 404 | 409 : 503;
+      return c.json({ error: { code: error.code, message: error.message } }, status);
     }
     if (error instanceof ArchiveError) {
       const status = error.code === 'SNAPSHOT_CHANGED' ? 409 : error.code === 'NOT_FOUND' ? 404 : error.code === 'TOO_LARGE' ? 413 : error.code === 'INVALID_INPUT' ? 400 : 503;
@@ -44,6 +52,7 @@ export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; card
     return c.json({ error: { code: 'UNAVAILABLE', message: 'Card service unavailable' } }, 503);
   });
   if (options.chat) app.route('/api/workspaces', chatRoutes(options));
+  if (options.nativeArchive) app.route('/api/workspaces', nativeArchiveRoutes(options));
   app.route('/api/workspaces', cardRoutes(options));
   app.route('/api/hub', hubRoutes(options));
   app.route('/api/remotes', remoteRoutes(options));

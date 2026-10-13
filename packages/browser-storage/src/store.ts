@@ -216,6 +216,17 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         else yield* request(tx.objectStore('follows').delete([workspaceId, fold(name)]));
       });
     },
+    async archiveLinks(workspaceId, archiveCardIds) {
+      const ids = new Set(archiveCardIds);
+      if (ids.size > 200) throw new StoreError('INVALID_INPUT', 'At most 200 Archive cards per lookup');
+      const links: Record<string, string> = {};
+      const rows = (await headRows(workspaceId)).sort((a, b) => a.card.createdAt < b.card.createdAt ? 1 : a.card.createdAt > b.card.createdAt ? -1 : a.card.id < b.card.id ? 1 : -1);
+      for (const { card, source } of rows) {
+        const provenance = source?.provenance as { kind?: unknown; cardId?: unknown } | undefined;
+        if (provenance?.kind === 'archive' && typeof provenance.cardId === 'string' && ids.has(provenance.cardId)) links[provenance.cardId] = card.id;
+      }
+      return links;
+    },
     async listFollowedCreators(workspaceId) {
       return (await transaction(db, ['follows'], 'readonly', function* (tx) {
         return yield* request<{ creator: string }[]>(tx.objectStore('follows').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []]), 5000));
