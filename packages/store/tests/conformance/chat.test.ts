@@ -11,7 +11,7 @@ import { migrate } from '../../src/migrations.js';
 import type { StoreDriver } from '../../src/driver.js';
 
 const lineage = (revisionHash: string) => ({ data: { name: 'Aster', extensions: { foundry: { lineage: { revisionHash } } } } });
-for (const adapter of ['sqlite', 'd1']) describe(`chat placements contract / ${adapter}`, () => {
+for (const adapter of ['sqlite', 'd1']) describe(`chat contract / ${adapter}`, () => {
   let close: () => void | Promise<void>;
   let driver: StoreDriver;
   let store: UnityStore;
