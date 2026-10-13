@@ -1,5 +1,5 @@
 /** Additive bookkeeping in the original Archive database; legacy tables and IDs stay intact. */
-export const existingSchemaVersion = 1;
+export const existingSchemaVersion = 2;
 export const existingSchema = `
 CREATE TABLE IF NOT EXISTS unity_archive_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS unity_archive_objects (
@@ -12,6 +12,13 @@ CREATE TABLE IF NOT EXISTS unity_archive_versions (
 CREATE TABLE IF NOT EXISTS unity_archive_version_objects (
   version_id TEXT NOT NULL REFERENCES unity_archive_versions(id), role TEXT NOT NULL, name TEXT NOT NULL,
   sha256 TEXT NOT NULL REFERENCES unity_archive_objects(sha256), PRIMARY KEY(version_id, role, name));
+CREATE INDEX IF NOT EXISTS unity_archive_version_objects_identity ON unity_archive_version_objects(role,sha256,version_id);
+CREATE TABLE IF NOT EXISTS unity_archive_identities (
+  version_id TEXT PRIMARY KEY, card_id INTEGER NOT NULL REFERENCES cards(id), file_hash TEXT NOT NULL,
+  content_hash TEXT, content_name TEXT, unavailable_reason TEXT, legacy_stamp TEXT);
+CREATE INDEX IF NOT EXISTS unity_archive_identities_file ON unity_archive_identities(file_hash,card_id,version_id);
+CREATE INDEX IF NOT EXISTS unity_archive_identities_content ON unity_archive_identities(content_hash,card_id,version_id);
+CREATE INDEX IF NOT EXISTS unity_archive_identities_card ON unity_archive_identities(card_id,legacy_stamp);
 CREATE TABLE IF NOT EXISTS unity_archive_state (
   card_id INTEGER PRIMARY KEY REFERENCES cards(id), current_version TEXT NOT NULL,
   spec TEXT NOT NULL, alt_greetings INTEGER NOT NULL, lorebook_entries INTEGER NOT NULL,

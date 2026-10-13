@@ -96,11 +96,11 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
       if (session.signal.aborted || session.selection() !== selection) return;
       setSavedAt(new Date().toLocaleTimeString());
       const created = session.cards.getState().currentCard?.meta.id;
-      if (isDraft && created) onCreated?.(created);
+      if (created && created !== cardId) onCreated?.(created);
     } catch (failure) {
       if (!session.signal.aborted && session.selection() === selection) setError(failure instanceof Error ? failure.message : 'Save failed');
     }
-  }, [session, isDraft, onCreated, loading, matchesSelection, isRestoring]);
+  }, [session, cardId, onCreated, loading, matchesSelection, isRestoring]);
 
   useEffect(() => {
     const keys = (event: KeyboardEvent) => {
@@ -166,7 +166,7 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
     onExit?.();
   }
 
-  const status = loading ? 'Loading card…' : !matchesSelection ? 'Card unavailable' : isRestoring ? 'Restoring saved revision…' : isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? 'Unsaved changes — Save creates a revision' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
+  const status = loading ? 'Loading card…' : !matchesSelection ? 'Card unavailable' : isRestoring ? 'Restoring saved revision…' : isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? (currentCard?.meta.archiveReference ? 'Unsaved changes — Save creates your fork' : 'Unsaved changes — Save creates a revision') : currentCard?.meta.archiveReference ? 'Archive original — changes stay local until you save a fork' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
 
   return (
     <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 7rem)' }}>

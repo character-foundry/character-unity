@@ -48,7 +48,8 @@ export function CardHero({ card, tokenStatus, onDownload, onOriginal, downloadin
             <CardFormatBadge format={card.sourceFormat} specVersion={card.specVersion} />
             <FavoriteButton key={`${card.id}:${card.isFavorited}`} cardId={card.id} initial={card.isFavorited} className="p-1" iconClassName="h-5 w-5" />
             {card.isFork && <span className="rounded bg-nebula px-2 py-0.5 text-xs font-semibold text-white">FORK</span>}
-            <span className="text-xs text-starlight/60" title="Saved revisions">Revision {card.revisionCount}</span>
+            {card.reference && <span className="rounded bg-emerald-900/50 px-2 py-0.5 text-xs font-semibold text-emerald-200">ARCHIVE LINK</span>}
+            <span className="text-xs text-starlight/60" title={card.reference ? 'Exact archived version' : 'Saved revisions'}>{card.reference ? 'Archive version' : 'Revision'} {card.revisionCount}</span>
             <MetadataBadge type="greetings" count={card.totalGreetingsCount} variant="full" />
             <MetadataBadge type="lorebook" count={card.lorebookEntriesCount} variant="full" />
             <MetadataBadge type="assets" count={card.assetsCount} variant="full" />
@@ -62,8 +63,10 @@ export function CardHero({ card, tokenStatus, onDownload, onOriginal, downloadin
             <Button variant="secondary" size="sm" disabled={downloading} onClick={() => onDownload('json')}>Export JSON</Button>
             <Button variant="secondary" size="sm" disabled={downloading} onClick={() => onDownload('charx')}>Export CharX</Button>
             {card.imagePath && <Button variant="ghost" size="sm" disabled={downloading} onClick={() => onDownload('sillytavern-png')}>SillyTavern PNG</Button>}
-            <DeleteCardButton cardId={card.id} name={card.name} onDeleted={() => navigate('/')} />
+            <DeleteCardButton cardId={card.id} name={card.name} reference={Boolean(card.reference)} onDeleted={() => navigate('/')} />
           </div>
+          {card.reference && <p className="mt-3 text-xs text-starlight/60">Linked to Archive version <span className="break-all font-mono">{card.reference.versionId}</span>. The original stays read-only; saving changed edits creates your fork. Removing this link does not delete the original.</p>}
+          {card.archiveSource && <p className="mt-3 text-xs text-starlight/60">Your fork of Archive card <span className="font-mono">{card.archiveSource.cardId}</span>, version <span className="break-all font-mono">{card.archiveSource.versionId}</span>. Unchanged files remain referenced from that version.</p>}
         </div>
         <div className="w-full shrink-0 xl:w-56" data-card-tokens-container>
           <div className="glass rounded-lg border border-nebula/20 p-4" data-card-tokens>

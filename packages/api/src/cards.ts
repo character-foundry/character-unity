@@ -114,7 +114,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
       catch { throw new CardError('INVALID_INPUT', 'Invalid file name encoding'); }
     }
     if (filename.length > 512) throw new CardError('INVALID_INPUT', 'File name is too long');
-    return c.json(await cards.import(actor, c.req.param('workspaceId'), await bytes(c, uploadLimit), { kind: 'file', filename }), 201);
+    return c.json(await cards.importFile(actor, c.req.param('workspaceId'), await bytes(c, uploadLimit), filename), 201);
   });
   routes.get('/:workspaceId/archive/status', async (c) => {
     const { actor } = await required(c);
@@ -165,7 +165,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   });
   routes.get('/:workspaceId/cards/:cardId', async (c) => {
     const { cards, actor } = await required(c);
-    return c.json(await cards.open(actor, c.req.param('workspaceId'), c.req.param('cardId')));
+    return c.json(await cards.open(actor, c.req.param('workspaceId'), c.req.param('cardId'), c.req.raw.signal));
   });
   routes.post('/:workspaceId/cards', async (c) => {
     const { cards, actor } = await required(c);
@@ -217,7 +217,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   routes.get('/:workspaceId/cards/:cardId/revisions/:revisionId', async (c) => {
     const { cards, actor } = await required(c);
     if (new URL(c.req.url).search || c.req.param('revisionId').length > 200) throw new CardError('INVALID_INPUT', 'Expected an explicit saved revision');
-    return c.json(await cards.revision(actor, c.req.param('workspaceId'), c.req.param('cardId'), c.req.param('revisionId')));
+    return c.json(await cards.revision(actor, c.req.param('workspaceId'), c.req.param('cardId'), c.req.param('revisionId'), c.req.raw.signal));
   });
   routes.post('/:workspaceId/cards/:cardId/asset-revisions', async (c) => {
     const { cards, actor } = await required(c);
@@ -231,15 +231,15 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
     const revisionId = params.get('revisionId'), path = params.get('path');
     if (!revisionId || revisionId.length > 200 || [...params.keys()].some((key) => !(action === 'asset' ? ['revisionId', 'path'] : ['revisionId']).includes(key) || params.getAll(key).length !== 1)
       || (action === 'asset' && (!path || !/^(portrait|module\.risum|declared\/(0|[1-9][0-9]{0,3}))$/.test(path) || (path.startsWith('declared/') && Number(path.slice(9)) >= 8191)))) throw new CardError('INVALID_INPUT', 'Expected an explicit revision and asset path');
-    if (action === 'assets') return c.json(await cards.assetList(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId));
-    const value = await cards.asset(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId, path!);
+    if (action === 'assets') return c.json(await cards.assetList(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId, c.req.raw.signal));
+    const value = await cards.asset(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId, path!, c.req.raw.signal);
     return new Response(value.body, { headers: { 'content-type': value.mediaType, 'content-length': String(value.byteLength),
       'content-disposition': 'attachment; filename="asset"', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store',
       'content-security-policy': "default-src 'none'; sandbox", etag: `"${value.hash}"` } });
   });
   routes.get('/:workspaceId/cards/:cardId/original', async (c) => {
     const { cards, actor } = await required(c);
-    const original = await cards.original(actor, c.req.param('workspaceId'), c.req.param('cardId'));
+    const original = await cards.original(actor, c.req.param('workspaceId'), c.req.param('cardId'), c.req.raw.signal);
     return new Response(original.body, { headers: { 'content-type': original.mediaType, 'content-length': String(original.byteLength),
       'content-disposition': 'attachment; filename="original"', 'x-content-type-options': 'nosniff', 'cache-control': 'no-store', etag: `"${original.hash}"` } });
   });

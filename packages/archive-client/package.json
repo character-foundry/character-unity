@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./contract": "./src/contract.ts" },
+  "exports": { ".": "./src/index.ts", "./contract": "./src/contract.ts", "./native": "./src/native.ts" },
   "scripts": {
     "type-check": "tsc -p tsconfig.json",
     "build": "esbuild src/index.ts --bundle --platform=browser --target=es2022 --format=esm --outfile=dist/index.js"

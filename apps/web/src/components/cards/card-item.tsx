@@ -74,6 +74,7 @@ export function CardItem({ card, size = 'medium', onQuickView, placements }: Car
         </div>
         <div className="flex flex-wrap justify-end gap-1">
           {card.isFork && <span className="rounded bg-nebula px-1 py-0.5 text-[10px] font-semibold text-white" title="Your edited fork">FORK</span>}
+          {card.reference && <span className="rounded bg-emerald-900/90 px-1 py-0.5 text-[10px] font-semibold text-emerald-200" title="Linked to an exact Archive version; files stay in Archive">ARCHIVE</span>}
           {card.forksCount !== null && card.forksCount > 0 && !small && <span className={badge} title={`${card.forksCount} fork${card.forksCount === 1 ? '' : 's'}`}>⑂ {card.forksCount}</span>}
           <PlacementChips placements={placements} className="px-1 py-0.5 text-[10px] font-semibold" />
           <span className={badge}>{formatLabel(card.sourceFormat, card.specVersion)}</span>

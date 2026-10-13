@@ -47,7 +47,9 @@ export function toListItem(workspace: string, summary: CardSummary): CardListIte
     hasLorebook: summary.lorebookEntriesCount > 0, lorebookEntriesCount: summary.lorebookEntriesCount,
     hasEmbeddedImages: false, embeddedImagesCount: 0,
     tags: tagsOf(summary.tags), createdAt: seconds(summary.createdAt), updatedAt: seconds(summary.updatedAt),
-    headRevisionId: summary.headRevisionId, revisionCount: summary.revisionCount, isFork: summary.forkedFromRevisionId !== null,
+    headRevisionId: summary.headRevisionId, revisionCount: summary.revisionCount, isFork: summary.forkedFromRevisionId !== null || Boolean(summary.archiveSource),
+    ...(summary.reference ? { reference: summary.reference } : {}),
+    ...(summary.archiveSource ? { archiveSource: summary.archiveSource } : {}),
   };
 }
 
@@ -81,8 +83,11 @@ export function toDetail(workspace: string, opened: OpenedCard, tokens: TokenBre
     totalGreetingsCount: (data.first_mes.trim() ? 1 : 0) + alternates + data.group_only_greetings.length,
     hasLorebook: entries > 0, lorebookEntriesCount: entries, hasEmbeddedImages: false, embeddedImagesCount: 0,
     tags: tagsOf(data.tags), createdAt: seconds(opened.card.createdAt), updatedAt: seconds(opened.revision.createdAt),
-    headRevisionId: opened.revision.id, revisionCount: opened.revision.sequence, isFork: opened.card.forkedFromRevisionId !== null,
+    headRevisionId: opened.revision.id, revisionCount: opened.revision.sequence, isFork: opened.card.forkedFromRevisionId !== null || Boolean(opened.archiveSource),
     tokens, cardData, rawDocument: opened.revision.document, savedAssets,
-    originalFilename: opened.source && opened.source.provenance.kind !== 'new' ? text(opened.source.provenance.filename) || `original.${sourceFormat(opened.source.provenance.format, opened.source.mediaType) ?? 'bin'}` : null,
+    ...(opened.reference ? { reference: opened.reference } : {}),
+    ...(opened.archiveSource ? { archiveSource: opened.archiveSource } : {}),
+    originalFilename: opened.source && opened.source.provenance.kind !== 'new' ? text(opened.source.provenance.filename) || `original.${sourceFormat(opened.source.provenance.format, opened.source.mediaType) ?? 'bin'}`
+      : opened.archiveSource ? 'archived-original.bin' : null,
   };
 }

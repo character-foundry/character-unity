@@ -17,5 +17,11 @@
   "S16": "A populated v1 schema upgrades without changing existing revisions or inventing source bytes.",
   "S17": "Library summaries list head revisions newest-touched first with text/tag filters, totals, fork counts and offsets.",
   "S18": "Library search shares one meaning across drivers: words, quoted phrases, OR/NOT/-/parentheses, name:/creator:/description:/tag: fields, include-all/any and exclude tags, Archive content flags (gallery, embedded images, expressions, system prompt, example dialogues, followed creators), fork filter, favorites, source, minimum tokens, allowlisted sorts including tokens, case-insensitive tag counts, and tombstone deletes that hide a card from every read while its forks remain.",
-  "S19": "Editor forks with an expected source head reject concurrent source changes atomically without creating a card or revision."
+  "S19": "Editor forks with an expected source head reject concurrent source changes atomically without creating a card or revision.",
+  "S20": "Archive favorites create one lightweight workspace membership per exact source version, preserve distinct upstream provenance and pinned historical versions, and unfavorite or unlink without creating or deleting originals.",
+  "S21": "Archive-derived forks atomically record exact external ancestry and immutable ready-only metadata asset references; shared unchanged bytes remain external and are never eligible for blob retirement.",
+  "S22": "Import matching checks accepted file bytes first, then current content plus opaque module and exact lineage identity; concurrent imports have one atomic library winner without collapsing distinct edited forks.",
+  "S23": "Local cards and Archive references share one globally filtered, ordered and paginated library with correct totals, tags, favorites, source, content flags, counts and external fork classification.",
+  "S24": "Opt-in import staging reuses one durable workspace/digest/size/media asset claim across concurrent uploads and restarts, without changing ordinary staging or reviving retired assets.",
+  "S25": "Owned revision and delete writes atomically enqueue bounded durable search jobs; exact-generation acknowledgments/failures cannot erase newer work, and acknowledgments preserve the monotonic counter without polling or document copies."
 }

@@ -1,5 +1,6 @@
 {
   "C01": "Chat targets are workspace-scoped, unique per kind and URL, reject credentialed URLs and never return stored credentials from listings.",
   "C02": "Placements report current/behind against the card head, edited/missing from scans; failed scans keep known copies; removing a target removes its placements.",
-  "C03": "Exported copies resolve to library revisions by lineage revision hash first, then content hash, within the workspace only."
+  "C03": "Exported copies resolve to library revisions by lineage revision hash first, then content hash, within the workspace only.",
+  "C04": "Archive reference placements retain exact external versions and bounded identity receipts without owned cards or revisions; scans, forgetting, unlinking and target removal remain workspace scoped."
 }

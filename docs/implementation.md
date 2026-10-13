@@ -1,5 +1,55 @@
 # Implementation status and acceptance gates
 
+## Archive references and native shared search, 2026-10-13
+
+`cu-1o2.27` and `cu-1o2.9.1` are implemented together. Favorites/adds create
+exact-version library membership, not owned original copies. Unfavoriting keeps
+the link; Remove only unlinks it. Viewer/editor/export/chat resolve pinned content
+through Archive. An unchanged Save creates nothing; a changed Save creates one
+owned fork with immutable external ancestry and inherited asset locators. Only
+new uploads enter Unity blobs. Representation/opaque-field changes are edits even
+when Foundry portable content identity remains equal.
+
+Standalone imports check exact bytes before parsing, then Foundry content/asset
+identity plus opaque module and lineage distinctions. Atomic claims/shared upload
+keys deduplicate concurrent imports. Different upstream records retain provenance;
+old/new version pins remain distinct. An incomplete Archive identity miss refuses
+the import without storing a duplicate. Legacy metadata indexing is an explicit,
+bounded, resumable writer command in the same database—not work triggered by
+connecting, browsing or importing. It has not been run against the live corpus.
+
+The native Archive shell exposes lexical/Boolean/semantic/hybrid/typed-filter modes,
+supported ordering, provider/model/coverage disclosure, explicit failures and
+snapshot-bound paging. No embedding occurs while drafting a query and no requested
+mode silently falls back. Quick View and library actions share the selected exact
+version. Mixed library filters/tags/order include references, including live chat
+placements. Browser-only chat remains unsupported rather than fabricated.
+
+Saved Unity edits/new cards have a durable outbox, with bounded event-driven delivery
+to an explicitly enabled Archive-owned projection table in the existing LanceDB.
+Missing/failed providers remain retryable; deletes have persistent sequence fences.
+Reads/favorites enqueue nothing, startup is bounded, and idle delivery does not poll.
+Native search scopes owned hits through the authenticated host, hides deleted hits
+while delivery is pending, and preserves raw paging/excerpt alignment. Status and
+Refresh/Retry are visible in the Archive page. JSON-sidecar reads fetch only the
+requested verified object; canceled requests cancel upstream work.
+
+Unity schema 13 and IndexedDB schema 3 preserve existing data. The in-place Archive
+index additions are opt-in; no live migration, identity indexing, library search
+writer activation, corpus copy or service restart has occurred. Actual provider
+connection/model-quality checks and coordinated takeover stay open in `cu-1o2.9.7`.
+Foundry publishing remains held in `cu-1o2.25`. See
+[configuration and operational gates](archive-existing-storage.md).
+
+Verification: all 747 tests across 87 files and every conformance report pass,
+including native SQLite, D1/workerd and IndexedDB. Full package/E2E type-check,
+lint, workspace builds, built Node smoke and the SQLite/Lance install/reopen
+rehearsal pass. All 38 production unified browser workflows pass, alongside all
+45 earlier scaffold/account/browser regressions. Independent Standards/Spec
+reviews found and closed version, retry, deletion and revocation gaps; regression
+tests and inspected desktop/mobile screenshots cover the fixes. These are
+synthetic/local checks, not live provider/corpus acceptance.
+
 ## Editor lifecycle checkpoint, 2026-10-13
 
 `cu-1o2.5.12` is implemented after the native viewer: each explicit editor session
@@ -28,8 +78,9 @@ Standards/Spec review pass. All 45 earlier scaffold/account/browser workflows
 also pass; those are regressions, not a claim of unified publication UI parity.
 
 Native viewer and editor isolation beads are closed. Wizard QA stays low priority.
-Archive reference/deduplication, optional native tools and scaffold retirement
-remain separate work. Live Archive takeover and Foundry publishing stay on hold.
+Archive reference/deduplication was separate work at this checkpoint and is now
+implemented above. Optional native tools and scaffold retirement remain open.
+Live Archive takeover and Foundry publishing stay on hold.
 
 ## Native viewer checkpoint, 2026-10-13
 

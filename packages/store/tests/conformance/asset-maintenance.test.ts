@@ -140,7 +140,7 @@ for (const adapter of ['sqlite', 'd1']) describe(`asset-maintenance contract / $
     const faulty: StoreDriver = { query: (query) => driver.query(query), batch: (statements) => driver.batch(statements.length > 1 ? [...statements, { sql: 'INSERT INTO nonexistent_table VALUES (1)' }] : statements) };
     await expect(migrate(faulty)).rejects.toThrow(); expect(await inspectSchema(driver)).toBe(8);
     expect(await driver.query({ sql: "SELECT name FROM sqlite_master WHERE name IN ('unity_asset_lifetimes', 'unity_asset_retirements')" })).toEqual([]);
-    const started = new Date().toISOString(); await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(12);
+    const started = new Date().toISOString(); await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(13);
     expect(await driver.query({ sql: 'SELECT * FROM unity_migrations WHERE version <= 8 ORDER BY version' })).toEqual(history);
     expect(await createStore(driver).getAsset(workspaceId, staged.id)).toEqual(staged);
     expect((await maintenance().preview(cutoff))[0]!.createdAt >= started).toBe(true);

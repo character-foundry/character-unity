@@ -5,11 +5,15 @@ import type { Statement, StoreDriver } from './driver.js';
 import { inspectSchema, schemaVersion } from './migrations.js';
 import { StoreError } from './types.js';
 import { fold, libraryFilterSql, librarySortSql, librarySourceSql, libraryTokensSql } from './library-query.js';
+import { archiveForkStatement, createArchiveOperations, importClaimStatements } from './archive.js';
+import { createLibraryOperations } from './library.js';
+import { createSearchOutbox } from './search-outbox.js';
 
 const notDeleted = 'NOT EXISTS (SELECT 1 FROM unity_card_deletions d WHERE d.card_id = c.id)';
-import type { Asset, Card, CardSource, CardSourceInput, CardSummaryPage, CardSummaryQuery, ContentIdentity, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
+import type { ArchivePin, Asset, Card, CardSource, CardSourceInput, CardSummaryPage, CardSummaryQuery, ContentIdentity, ImportCardResult, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
 import * as validate from './validation.js';
 export * from './types.js';
+export type { SearchJob } from './search-outbox.js';
 export { isLibraryFlag, isLibrarySort, libraryFlags, librarySorts, librarySources, parseLibraryQuery } from './library-query.js';
 export type { LibraryFilter, LibraryFlag, LibrarySort, LibrarySource, QueryNode } from './library-query.js';
 
@@ -119,6 +123,48 @@ export function createStore(driver: StoreDriver) {
     ]);
     return { card: await insertedCard(workspaceId, id), revision: await getRevision(workspaceId, revision.id) };
   }
+  const archive = createArchiveOperations(driver, batch);
+  async function createArchiveFork(input: RevisionInput & { workspaceId: string; pin: ArchivePin; referenceId?: string; originalHash?: string; sourceProvider?: string; source?: CardSourceInput }) {
+    const workspaceId = validate.text(input.workspaceId, 'workspaceId'), pin = validate.archivePin(input.pin);
+    const referenceId = input.referenceId === undefined ? undefined : validate.text(input.referenceId, 'referenceId');
+    const originalHash = input.originalHash === undefined ? null : validate.hash(input.originalHash), id = crypto.randomUUID();
+    let sourceProvider = input.sourceProvider === undefined ? 'file' : validate.text(input.sourceProvider, 'sourceProvider', 80);
+    const revision = revisionStatements(workspaceId, id, null, input);
+    const source = sourceStatements(workspaceId, id, input.source);
+    await workspace(workspaceId);
+    if (referenceId) {
+      const reference = await archive.getArchiveReference(workspaceId, referenceId);
+      if (JSON.stringify(reference.pin) !== JSON.stringify(pin)) throw new StoreError('INTEGRITY', 'The fork must retain its exact Archive ancestor');
+      sourceProvider = reference.summary.source;
+    }
+    await batch([
+      { sql: 'INSERT INTO unity_cards(id,workspace_id,original_hash,created_at) VALUES (?,?,?,?)', params: [id, workspaceId, originalHash, new Date().toISOString()] },
+      ...source, archiveForkStatement(workspaceId, id, pin, sourceProvider, referenceId), ...revision.statements,
+    ]);
+    return { card: await insertedCard(workspaceId, id), revision: await getRevision(workspaceId, revision.id) };
+  }
+  async function createImportedCard(input: RevisionInput & { workspaceId: string; fileHash: string; originalHash?: string; source?: CardSourceInput; moduleHash?: string | null; lineageHash?: string | null }): Promise<ImportCardResult> {
+    const workspaceId = validate.text(input.workspaceId, 'workspaceId');
+    const identities = { ...validate.importIdentity(input), fileHash: validate.hash(input.fileHash), identity: validate.contentIdentity(input.identity) };
+    const originalHash = input.originalHash === undefined ? identities.fileHash : validate.hash(input.originalHash);
+    const id = crypto.randomUUID(), revision = revisionStatements(workspaceId, id, null, input);
+    const source = sourceStatements(workspaceId, id, input.source);
+    await workspace(workspaceId);
+    const known = await archive.findImportMatch(workspaceId, identities);
+    if (known) return { created: false, existing: known };
+    try {
+      await batch([
+        { sql: 'INSERT INTO unity_cards(id,workspace_id,original_hash,created_at) VALUES (?,?,?,?)',
+          params: [id, workspaceId, originalHash, new Date().toISOString()] },
+        ...source, ...revision.statements, ...importClaimStatements(workspaceId, id, revision.id, identities),
+      ]);
+    } catch (error) {
+      const raced = await archive.findImportMatch(workspaceId, identities);
+      if (raced) return { created: false, existing: raced };
+      throw error;
+    }
+    return { created: true, card: await insertedCard(workspaceId, id), revision: await getRevision(workspaceId, revision.id) };
+  }
   async function saveRevision(input: RevisionInput & { workspaceId: string; cardId: string; expectedHead: string }) {
     const { workspaceId, cardId, expectedHead } = input;
     validate.text(expectedHead, 'expectedHead');
@@ -209,6 +255,9 @@ export function createStore(driver: StoreDriver) {
       return driver.query<Workspace>({ sql: 'SELECT id, owner_id AS ownerId, name, created_at AS createdAt FROM unity_workspaces WHERE owner_id = ? ORDER BY created_at, id LIMIT 100', params: [ownerId] });
     },
     getCard, getRevision, getAsset, getSource, createCard, saveRevision, forkCard,
+    ...archive, createArchiveFork, createImportedCard,
+    ...createLibraryOperations(driver, { revision: getRevision, reference: archive.getArchiveReference }),
+    ...createSearchOutbox(driver, batch),
     async listCards(workspaceId: string, options: { limit?: number; afterId?: string } = {}) {
       return driver.query<Card>({ sql: `SELECT ${cardColumns} FROM unity_cards WHERE workspace_id = ? AND id > ?
         AND NOT EXISTS (SELECT 1 FROM unity_card_deletions d WHERE d.card_id = unity_cards.id) ORDER BY id LIMIT ?`,
@@ -252,10 +301,12 @@ export function createStore(driver: StoreDriver) {
     async listCardTags(workspaceId: string, options: { limit?: number } = {}): Promise<{ tag: string; count: number }[]> {
       const limit = options.limit ?? 1000;
       if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError('INVALID_INPUT', 'Tag list size must be between 1 and 5000');
-      const rows = await driver.query<{ tag: string; count: number }>({ sql: `SELECT max(t.value) AS tag, count(DISTINCT c.id) AS count
-        FROM unity_cards c JOIN unity_revisions r ON r.id = c.head_revision_id, json_each(r.document_json, '$.data.tags') t
+      const rows = await driver.query<{ tag: string; count: number }>({ sql: `SELECT max(tag) AS tag,count(DISTINCT cardId) AS count FROM (
+        SELECT c.id AS cardId,t.value AS tag FROM unity_cards c JOIN unity_revisions r ON r.id = c.head_revision_id, json_each(r.document_json, '$.data.tags') t
         WHERE c.workspace_id = ? AND t.type = 'text' AND trim(t.value) <> '' AND ${notDeleted}
-        GROUP BY lower(t.value) ORDER BY count DESC, lower(t.value) LIMIT ?`, params: [validate.text(workspaceId, 'workspaceId'), limit] });
+        UNION ALL SELECT c.id AS cardId,t.value AS tag FROM unity_archive_references c,json_each(c.summary_json,'$.tags') t
+        WHERE c.workspace_id = ? AND t.type = 'text' AND trim(t.value) <> '')
+        GROUP BY lower(tag) ORDER BY count DESC,lower(tag) LIMIT ?`, params: [validate.text(workspaceId, 'workspaceId'), workspaceId, limit] });
       return rows.map((row) => ({ tag: row.tag, count: Number(row.count) }));
     },
     /**
@@ -302,7 +353,10 @@ export function createStore(driver: StoreDriver) {
           WHERE s.workspace_id = ? AND c.head_revision_id IS NOT NULL AND ${notDeleted} AND json_extract(s.provenance_json, '$.kind') = 'archive'
             AND json_extract(s.provenance_json, '$.cardId') IN (${ids.map(() => '?').join(', ')})
           ORDER BY c.created_at DESC, c.id DESC`, params: [workspaceId, ...ids] });
-      return Object.fromEntries(rows.map((row) => [row.archiveCardId, row.cardId]));
+      const references = await driver.query<{ archiveCardId: string; id: string }>({ sql: `SELECT archive_card_id AS archiveCardId,id
+        FROM unity_archive_references WHERE workspace_id = ? AND archive_card_id IN (${ids.map(() => '?').join(',')})
+        ORDER BY created_at DESC,id DESC`, params: [workspaceId, ...ids] });
+      return Object.fromEntries([...rows.map((row) => [row.archiveCardId, row.cardId]), ...references.map((row) => [row.archiveCardId, row.id])]);
     },
     async listFollowedCreators(workspaceId: string): Promise<string[]> {
       const rows = await driver.query<{ creator: string }>({ sql: 'SELECT creator FROM unity_followed_creators WHERE workspace_id = ? ORDER BY creator_key LIMIT 5000', params: [workspaceId] });
@@ -340,6 +394,27 @@ export function createStore(driver: StoreDriver) {
       await workspace(asset.workspaceId);
       await batch([{ sql: `INSERT INTO unity_assets(id, workspace_id, content_hash, byte_length, media_type, storage_key, state)
         VALUES (?, ?, ?, ?, ?, ?, 'staged')`, params: [id, asset.workspaceId, asset.hash, asset.byteLength, asset.mediaType, asset.storageKey] }]);
+      return asset;
+    },
+    /** Import-only content reuse. Retirement releases the claim, never its permanent fence. */
+    async stageSharedAsset(input: { workspaceId: string; hash: string; byteLength: number; mediaType: string }): Promise<Asset> {
+      const id = crypto.randomUUID(), asset: Asset = { id, workspaceId: validate.text(input.workspaceId, 'workspaceId'), hash: validate.hash(input.hash),
+        byteLength: validate.count(input.byteLength, 'byteLength'), mediaType: validate.text(input.mediaType, 'mediaType'), storageKey: `assets/${id}`, state: 'staged' };
+      const params = [asset.workspaceId, asset.hash, asset.byteLength, asset.mediaType];
+      async function existing() {
+        const [row] = await driver.query<Asset>({ sql: `SELECT a.id,a.workspace_id AS workspaceId,a.content_hash AS hash,a.byte_length AS byteLength,
+          a.media_type AS mediaType,a.storage_key AS storageKey,a.state FROM unity_shared_assets s JOIN unity_assets a ON a.id = s.asset_id
+          WHERE s.workspace_id = ? AND s.content_hash = ? AND s.byte_length = ? AND s.media_type = ?
+          AND NOT EXISTS (SELECT 1 FROM unity_asset_retirements r WHERE r.asset_id = a.id)`, params });
+        return row;
+      }
+      const known = await existing(); if (known) return known;
+      await workspace(asset.workspaceId);
+      try { await batch([
+        { sql: `INSERT INTO unity_assets(id,workspace_id,content_hash,byte_length,media_type,storage_key,state) VALUES (?,?,?,?,?,?,'staged')`,
+          params: [id, asset.workspaceId, asset.hash, asset.byteLength, asset.mediaType, asset.storageKey] },
+        { sql: 'INSERT INTO unity_shared_assets(workspace_id,content_hash,byte_length,media_type,asset_id) VALUES (?,?,?,?,?)', params: [...params, id] },
+      ]); } catch (error) { const raced = await existing(); if (raced) return raced; throw error; }
       return asset;
     },
     /** Only a trusted blob service may provide measured bytes/hash after writing the staged object. */

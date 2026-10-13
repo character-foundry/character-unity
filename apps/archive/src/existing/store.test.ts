@@ -7,6 +7,14 @@ import type { ScrapedCard } from '@character-unity/scraper-kit';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openExistingArchive } from './store.js';
 import type { ExistingSearch } from './search.js';
+import { openExistingSearch } from './search.js';
+import { connect, Index, makeArrowTable } from '@lancedb/lancedb';
+import { Field, FixedSizeList, Float32, Schema, Utf8 } from 'apache-arrow';
+import { buildSearchDocument, searchDocumentSchema } from '../search-document.js';
+import { createNativeArchiveApp, nativeReadPrefix } from '../native/app.js';
+import { createScheduler } from '../native/scheduler.js';
+import { openLibraryIndex } from '../library-index.js';
+import type { LibraryIndex } from '../library-index.js';
 
 const encoder = new TextEncoder();
 const image = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
@@ -25,7 +33,8 @@ function scraped(recordId: string, description = 'The updated map keeper.', extr
 }
 function fakeSearch(overrides: Partial<ExistingSearch>): ExistingSearch {
   const unused = () => { throw new Error('Unexpected search operation in store fixture'); };
-  return { tableName: 'cards', vectorTableName: null, semantic: false, search: unused,
+  return { tableName: 'cards', vectorTableName: null, semantic: false, search: unused, browse: unused,
+    snapshot: async () => 'fixture-generation', filterFields: [], sorts: [], embedding: undefined,
     upsertDocuments: unused, deleteDocuments: unused, upsertVectorDocuments: unused, indexVectorDocuments: unused,
     deleteVectorDocuments: unused, close() {}, ...overrides };
 }
@@ -109,9 +118,10 @@ describe('Archive using the existing database and files', () => {
     await writeFile(path, bytes);
     return path;
   }
-  async function open(readOnly = false, search?: ExistingSearch) {
+  async function open(readOnly = false, search?: ExistingSearch, libraryIndex?: LibraryIndex) {
     archive = await openExistingArchive({ databasePath, filesDirectory, objectsDirectory, readOnly,
       ...(search ? { search } : {}),
+      ...(libraryIndex ? { libraryIndex } : {}),
       now: () => new Date(Date.UTC(2026, 9, 13, 12, 0, clock++)).toISOString() });
     return archive;
   }
@@ -160,6 +170,18 @@ describe('Archive using the existing database and files', () => {
     expect(await fileInventory(objectsDirectory)).toEqual(objectsBefore);
   });
 
+  it('keeps the read-only instance identity when the first writer creates bookkeeping', async () => {
+    seed(1234); await original(1234);
+    const reader = await open(true), archiveId = reader.archiveId;
+    const pinned = await reader.card('1234');
+    reader.close(); archive = undefined;
+    const writer = await open();
+    expect(writer.archiveId).toBe(archiveId);
+    expect((await writer.card('1234', pinned.versionId)).archiveId).toBe(archiveId);
+    writer.close(); archive = undefined;
+    expect((await open(true)).archiveId).toBe(archiveId);
+  });
+
   it('updates one numeric identity and keeps its original bytes, versions, favorite and first download date', async () => {
     seed(1234);
     const bytes = json();
@@ -182,6 +204,50 @@ describe('Archive using the existing database and files', () => {
     expect((await reopened.card('1234')).versionList).toHaveLength(2);
     // All bookkeeping shares cards.db; there is no rebuilt metadata database alongside it.
     expect((await readdir(directory)).filter((name) => /\.(?:db|sqlite)$/.test(name))).toEqual(['cards.db']);
+  });
+
+  it('lazily checks bounded legacy candidates, indexes explicitly without copying files, and pins source versions', async () => {
+    seed(1234); seed(5678, { source: 'ct', sourceId: 'same-content' });
+    await original(1234); await original(5678);
+    const store = await open();
+    const first = await store.card('1234');
+    const file = first.versionList[0]!.objects.find((ref) => ref.role === 'card')!;
+    const lazy = await store.identity({ fileHash: file.sha256, name: 'Aster' });
+    expect(lazy).toMatchObject({ complete: false });
+    expect(lazy.matches.map((match) => match.cardId)).toEqual(['1234', '5678']);
+    const batch = await store.indexIdentities({ limit: 1 });
+    expect(batch).toMatchObject({ processed: 1, nextAfter: expect.any(String), complete: false });
+    expect(await store.indexIdentities({ limit: 1, after: batch.nextAfter! })).toMatchObject({ processed: 1, nextAfter: null, complete: true });
+    expect(await fileInventory(objectsDirectory)).toEqual({});
+    const indexed = await store.identity({ fileHash: file.sha256, contentHash: lazy.matches[0]!.contentHash! });
+    expect(indexed.complete).toBe(true);
+    await store.put(scraped('1234', undefined, { objects: [{ role: 'card', bytes: json('Latest title', 'Changed text'), mediaType: 'application/json' }] }));
+    const pinned = await store.card('1234', first.versionId);
+    expect(pinned.document).toEqual(document());
+    expect(pinned).toMatchObject({ name: 'Aster', tags: ['Fantasy'], changedAt: first.versionList[0]!.fetchedAt, remoteUpdatedAt: first.versionList[0]!.remoteUpdatedAt });
+    await expect(store.card('5678', first.versionId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    store.close(); archive = undefined;
+    const reopened = await open(true);
+    expect((await reopened.identity({ fileHash: file.sha256 })).matches.map((match) => match.cardId)).toEqual(['1234', '5678']);
+    expect((await reopened.card('1234', first.versionId)).document).toEqual(document());
+  });
+
+  it('indexes actual document names, reports unresolved matching content, and never substitutes a changed legacy file', async () => {
+    seed(1234, { name: 'Stale listing name' });
+    const card = { ...document('Actual document name'), data: { ...document('Actual document name').data,
+      assets: [{ type: 'icon', name: 'missing', ext: 'png', uri: 'https://images.test/missing.png' }] } };
+    await original(1234, 'json', encoder.encode(JSON.stringify(card)));
+    const store = await open();
+    const before = await store.card('1234');
+    expect(await store.identity({ contentHash: 'b'.repeat(64), name: 'Unrelated card' })).toMatchObject({ complete: false, unresolved: 1 });
+    expect(await store.indexIdentities({ limit: 1 })).toMatchObject({ processed: 1, unavailable: 1, complete: true });
+    expect(await store.identity({ contentHash: 'b'.repeat(64), name: 'Unrelated card' })).toMatchObject({ complete: true, unresolved: 0 });
+    expect(await store.identity({ contentHash: 'b'.repeat(64), name: 'Actual document name' })).toMatchObject({ complete: false, unresolved: 1 });
+    await original(1234, 'json', json('Changed document'));
+    await expect(store.card('1234', before.versionId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(store.files('1234', before.versionId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(store.indexIdentities({ limit: 101 })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await expect(store.indexIdentities({ after: 'not-a-cursor' })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
 
   it('keeps an identical baseline as one version across repeated scrapes with different container filenames', async () => {
@@ -502,16 +568,135 @@ describe('Archive using the existing database and files', () => {
     const modes: (string | undefined)[] = [];
     const store = await open(false, fakeSearch({ semantic: true, async search(_text, query) {
       modes.push(query?.mode);
-      return { ids: ['5678', '1234'], scores: new Map([['5678', 0.9], ['1234', 0.5]]), matches: new Map(), complete: false };
+      return { ids: ['5678', '1234'], scores: new Map([['5678', 0.9], ['1234', 0.5]]),
+        matches: new Map([['5678', { section: 'description', text: 'A semantic map keeper match', score: 0.9 }]]), complete: false };
     } }));
     const ranked = await store.list({ q: 'map keeper', mode: 'semantic' });
     expect(ranked.cards.map((card) => card.id)).toEqual(['5678', '1234']);
-    expect(ranked).toMatchObject({ total: 2, complete: false });
-    expect((await store.list({ q: 'map keeper', mode: 'semantic', limit: 1, offset: 1 })).cards[0]!.id).toBe('1234');
-    expect((await store.list({ q: 'map keeper', mode: 'semantic', sort: 'name' })).cards.map((card) => card.id))
-      .toEqual(['1234', '5678']);
+    expect(ranked).toMatchObject({ total: 2, complete: false, scores: [0.9, 0.5],
+      matches: [{ section: 'description', text: 'A semantic map keeper match', score: 0.9 }, null] });
+    expect((await store.list({ q: 'map keeper', mode: 'semantic', limit: 1, offset: 1, snapshot: ranked.snapshot })).cards[0]!.id).toBe('1234');
+    const sorted = await store.list({ q: 'map keeper', mode: 'semantic', sort: 'name' });
+    expect(sorted.cards.map((card) => card.id)).toEqual(['1234', '5678']);
+    expect(sorted.scores).toEqual([0.5, 0.9]);
+    expect(sorted.matches).toEqual([null, { section: 'description', text: 'A semantic map keeper match', score: 0.9 }]);
     expect(modes).toEqual(['semantic', 'semantic', 'semantic']);
     expect(store.status().capabilities.semantic).toBe(true);
+  });
+
+  it('binds offset paging to the query, current SQLite data, Lance generation and full ranking', async () => {
+    seed(1234); seed(5678);
+    let generation = 'one', order = ['1234', '5678'];
+    const store = await open(false, fakeSearch({ snapshot: async () => generation, async search() {
+      return { ids: order, scores: new Map(order.map((id, index) => [id, 1 / (index + 1)])), matches: new Map(), complete: false };
+    } }));
+    const first = await store.list({ q: 'map keeper', mode: 'semantic', limit: 1 });
+    const next = { q: 'map keeper', mode: 'semantic' as const, limit: 1, offset: 1, snapshot: first.snapshot };
+    expect((await store.list(next)).cards[0]!.id).toBe('5678');
+    await expect(store.list({ ...next, q: 'different' })).rejects.toMatchObject({ code: 'SNAPSHOT_CHANGED' });
+    generation = 'two';
+    await expect(store.list(next)).rejects.toMatchObject({ code: 'SNAPSHOT_CHANGED' });
+    generation = 'one'; order = ['5678', '1234'];
+    await expect(store.list(next)).rejects.toMatchObject({ code: 'SNAPSHOT_CHANGED' });
+    order = ['1234', '5678'];
+    sql((db) => db.prepare('UPDATE cards SET name = ? WHERE id = ?').run('Changed by the Archive owner', 1234));
+    await expect(store.list(next)).rejects.toMatchObject({ code: 'SNAPSHOT_CHANGED' });
+  });
+
+  it('rejects a search whose source or Lance generation changes during the request', async () => {
+    seed(1234);
+    let generation = 'before';
+    const store = await open(false, fakeSearch({ snapshot: async () => generation, async search() {
+      generation = 'after';
+      return { ids: ['1234'], scores: new Map([['1234', 1]]), matches: new Map(), complete: true };
+    } }));
+    await expect(store.list({ q: 'map keeper' })).rejects.toMatchObject({ code: 'SNAPSHOT_CHANGED' });
+  });
+
+  it('passes typed browse filters to Lance and reads only the returned ordered page', async () => {
+    seed(1234, { name: 'Alpha' }); seed(5678, { name: 'Zeta' });
+    const calls: unknown[] = [];
+    const store = await open(false, fakeSearch({ filterFields: [{ name: 'tokenCount', type: 'number' }], async browse(query) {
+      calls.push(query);
+      return { ids: ['5678'], total: 30_000 };
+    } }));
+    const page = await store.list({ mode: 'browse', filter: 'tokenCount >= 100 OR tokenCount = 0', sort: 'name_desc', offset: 20_000, limit: 1 });
+    expect(page).toMatchObject({ cards: [{ id: '5678' }], total: 30_000, complete: true });
+    expect(calls).toEqual([{ filter: '(tokenCount >= 100 OR tokenCount = 0)', sort: 'name_desc', offset: 20_000, limit: 1 }]);
+    expect(store.status().capabilities).toMatchObject({ browse: true, filterFields: [{ name: 'tokenCount', type: 'number' }] });
+  });
+
+  it('serves existing Lance lexical, semantic, hybrid and typed browse through the native v2 HTTP contract', async () => {
+    seed(1234, { name: 'Silver forest', description: 'A woodland map keeper.' });
+    seed(5678, { name: 'Ocean', description: 'A blue ocean diver.', source: 'ct' });
+    const rows = sql((db) => db.prepare('SELECT * FROM cards ORDER BY id').all()) as Record<string, unknown>[];
+    const documents = rows.map((row) => buildSearchDocument(row, Date.UTC(2026, 9, 13)));
+    const lanceDirectory = join(directory, 'search.lance'), connection = await connect(lanceDirectory);
+    const lexical = await connection.createTable('cards', makeArrowTable(documents, { schema: searchDocumentSchema }));
+    await lexical.createIndex('searchText', { config: Index.fts({ withPosition: true }) }); lexical.close();
+    const schema = new Schema([new Field('card_id', new Utf8(), false), new Field('section', new Utf8(), false), new Field('matchText', new Utf8(), false),
+      ...searchDocumentSchema.fields, new Field('vector', new FixedSizeList(2, new Field('item', new Float32(), false)), false)]);
+    const vectors = await connection.createTable('card_vectors', makeArrowTable(documents.map((doc, index) => ({ ...doc,
+      card_id: doc.id, section: 'description', matchText: doc.description, vector: index ? [0, 1] : [1, 0] })), { schema }));
+    vectors.close(); connection.close();
+    sql((db) => {
+      db.exec('CREATE TABLE card_embedding_meta(model_name TEXT,dims INTEGER)');
+      db.prepare('INSERT INTO card_embedding_meta VALUES (?,?)').run('http-fixture', 2);
+    });
+    let embeddings = 0;
+    const search = await openExistingSearch({ lanceDirectory, databasePath, embedder: {
+      space: { model: 'http-fixture', dimensions: 2, sourceDimensions: 2, queryInstruction: '' },
+      async embed() { embeddings++; return [1, 0]; },
+    } });
+    const libraryIndex = await openLibraryIndex({ lanceDirectory, space: { model: 'http-fixture', dimensions: 2 },
+      queryEmbedder: { space: { model: 'http-fixture', dimensions: 2, sourceDimensions: 2, queryInstruction: '' }, embed: async () => [1, 0] },
+      documentEmbedder: { space: { model: 'http-fixture', dimensions: 2, sourceDimensions: 2, queryInstruction: '' }, embed: async () => [[1, 0]] },
+    });
+    const store = await open(true, search, libraryIndex), app = createNativeArchiveApp(store, createScheduler(store, []), [], { adminToken: 'integration-admin', libraryIndex });
+    const status = await (await app.request(`${nativeReadPrefix}/status`)).json();
+    expect(status).toMatchObject({ capabilities: { lexical: true, semantic: true, browse: true,
+      embedding: { model: 'http-fixture', dimensions: 2, indexedCards: null, indexedRows: null } } });
+    expect(await (await app.request(`${nativeReadPrefix}/cards?mode=lexical&q=forest`)).json()).toMatchObject({ total: 1, cards: [{ id: '1234' }] });
+    const browse = await (await app.request(`${nativeReadPrefix}/cards?mode=browse&filter=source%20%3D%20ct&sort=name`)).json();
+    expect(browse).toMatchObject({ total: 1, cards: [{ id: '5678' }], complete: true });
+    expect(embeddings).toBe(0);
+    const first = await (await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland&limit=1`)).json() as { snapshot: string };
+    expect(first).toMatchObject({ complete: false, cards: [{ id: '1234' }], scores: [1], matches: [{ section: 'description', text: 'A woodland map keeper.' }] });
+    const next = await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland&limit=1&offset=1&snapshot=${first.snapshot}`);
+    expect(next.status).toBe(200);
+    expect(await next.json()).toMatchObject({ cards: [{ id: '5678' }], matches: [{ section: 'description', text: 'A blue ocean diver.' }] });
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=hybrid&q=forest`)).status).toBe(200);
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=browse&filter=unknown%20%3D%20ct`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=different&offset=1&snapshot=${first.snapshot}`)).status).toBe(409);
+    const mutation = { workspaceId: 'owner-a', cardId: 'owned-fork', revisionId: 'own-revision', eventSequence: 1, operation: 'upsert', projection: {
+      name: 'My changed woodland', creator: 'owner', tags: ['Fantasy'], description: 'A newly changed woodland glass oracle.', personality: '', scenario: '',
+      first_mes: 'Hello.', mes_example: '', system_prompt: '', post_history_instructions: '', alternate_greetings: [], tokens: 40,
+      createdAt: '2026-10-13T01:00:00.000Z', updatedAt: '2026-10-13T02:00:00.000Z', spec: 'v3',
+    } };
+    const deliver = (event: unknown) => app.request('/api/archive/admin/v1/library-index', { method: 'POST',
+      headers: { authorization: 'Bearer integration-admin', 'content-type': 'application/json' }, body: JSON.stringify(event) });
+    expect((await deliver(mutation)).status).toBe(200);
+    const headers = { authorization: 'Bearer integration-admin', 'x-unity-library-workspace': 'owner-a' };
+    const own = await (await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland&limit=1`, { headers })).json() as { snapshot: string };
+    expect(own).toMatchObject({ cards: [{ id: 'unity:owned-fork', libraryOwned: true, libraryCardId: 'owned-fork', versionId: 'own-revision' }], total: 3,
+      matches: [{ section: 'card', score: 1 }] });
+    const continuation = await (await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland&limit=1&offset=1&snapshot=${own.snapshot}`, { headers })).json();
+    expect(continuation).toMatchObject({ cards: [{ id: '1234' }], total: 3 });
+    expect(await (await app.request(`${nativeReadPrefix}/cards?mode=lexical&q=woodland`, { headers })).json()).toMatchObject({ total: 2 });
+    expect(await (await app.request(`${nativeReadPrefix}/cards?mode=lexical&q=woodland`)).json()).toMatchObject({ total: 1 });
+    expect((await app.request(`${nativeReadPrefix}/cards`, { headers: { 'x-unity-library-workspace': 'owner-a' } })).status).toBe(401);
+    expect((await app.request(`${nativeReadPrefix}/cards?libraryWorkspaceId=owner-a`, { headers })).status).toBe(400);
+    const names: string[] = [];
+    let receipt: string | undefined;
+    for (let offset = 0; offset < 3; offset++) {
+      const page = await (await app.request(`${nativeReadPrefix}/cards?sort=name&limit=1&offset=${offset}${receipt ? `&snapshot=${receipt}` : ''}`, { headers })).json() as { cards: { name: string }[]; snapshot: string };
+      receipt = page.snapshot; names.push(page.cards[0]!.name);
+    }
+    expect(names).toEqual(['My changed woodland', 'Ocean', 'Silver forest']);
+    expect((await deliver({ workspaceId: 'owner-a', cardId: 'owned-fork', revisionId: 'own-revision', eventSequence: 2, operation: 'delete' })).status).toBe(200);
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland&limit=1&offset=1&snapshot=${own.snapshot}`, { headers })).status).toBe(409);
+    expect(await (await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland`, { headers })).json()).toMatchObject({ total: 2 });
+    await libraryIndex.close();
   });
 
   it('rejects writes in read-only mode and detects a legacy file changed after its object was registered', async () => {

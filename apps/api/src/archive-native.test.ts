@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApi } from '@character-unity/api';
 import { createNativeArchiveService } from '@character-unity/cards/native-archive';
+import { createNativeArchiveReader } from '@character-unity/cards/native-reader';
+import { createCardService } from '@character-unity/cards';
 import type { ScraperPlugin } from '@character-unity/scraper-kit';
 import { openNativeArchive } from '../../archive/src/native/store.js';
 import type { NativeArchive } from '../../archive/src/native/store.js';
@@ -42,8 +44,10 @@ describe('native Archive through the API', () => {
   function setup() {
     const scheduler = createScheduler(archive, [demo]);
     const archiveApp = createNativeArchiveApp(archive, scheduler, [demo], { adminToken: token });
-    const nativeArchive = createNativeArchiveService(services.cards, { origin: 'http://archive.test', adminToken: token,
-      fetch: async (url, init) => archiveApp.fetch(new Request(url, init)) });
+    const connection = { origin: 'http://archive.test', adminToken: token,
+      fetch: async (url: string, init?: RequestInit) => archiveApp.fetch(new Request(url, init)) };
+    services.cards = createCardService(services.store, services.assets, { archive: createNativeArchiveReader(connection) });
+    const nativeArchive = createNativeArchiveService(services.cards, connection);
     const api = createApi({ cards: services.cards, nativeArchive, authenticate: () => actor });
     const call = (path: string, init?: RequestInit) => api.request(`/api/workspaces/${workspace}/archive/v2${path}`, init);
     return { scheduler, call };
@@ -74,14 +78,14 @@ describe('native Archive through the API', () => {
     const after = await (await call('/cards?sort=name')).json() as { cards: { id: string; libraryCardId: string | null }[] };
     expect(after.cards[0]!.libraryCardId).toBe(cardId);
 
-    // In the library: source chub, the portrait came along, provenance names the Archive version.
+    // In the library: source chub and portrait metadata, without copying bytes.
     const summary = (await services.cards.summaries(actor, workspace, {})).cards.find((item) => item.id === cardId)!;
     expect(summary).toMatchObject({ name: 'Card 101', source: 'chub', hasPortrait: true });
     const opened = await services.cards.open(actor, workspace, cardId);
-    expect(opened.source?.provenance).toMatchObject({ kind: 'archive', contract: 'unity.archive.native.v1', cardId: 'chub:101',
+    expect(opened.source?.provenance).toMatchObject({ kind: 'archive', contract: 'unity.archive.native.v2', cardId: 'chub:101',
       source: { provider: 'chub', recordId: '101', url: 'https://chub.ai/characters/ash/101' } });
 
-    // Deleting the library copy makes the Archive card addable again.
+    // Removing membership makes the Archive card addable again.
     await services.cards.delete(actor, workspace, cardId);
     expect((await (await call('/cards?sort=name')).json() as { cards: { libraryCardId: string | null }[] }).cards[0]!.libraryCardId).toBeNull();
   });
@@ -100,7 +104,7 @@ describe('native Archive through the API', () => {
     expect((await (await call('/cards')).json() as { total: number }).total).toBe(1);
   });
 
-  it('adds large cards (past the old 32 MB limit) and refuses ones over the library limit before downloading', async () => {
+  it('adds references to large cards without downloading or duplicating their original files', async () => {
     const { scheduler, call } = setup();
     await call('/sources/chub/runs', { method: 'POST' });
     await scheduler.settled('chub');
@@ -111,15 +115,18 @@ describe('native Archive through the API', () => {
     const added = await call('/cards/chub:103/import', { method: 'POST' });
     expect(await added.json()).toMatchObject({ created: true });
 
-    // Over the limit: refused from the card's file list, so nothing is downloaded.
+    // Even an uneditable very large card can have a metadata-only library link.
     const downloads: string[] = [];
-    const detail = { id: 'risuai:huge', provider: 'risuai', recordId: 'huge', url: 'https://realm.risuai.net/character/huge', versionId: 'v1',
+    const detail = { archiveId: archive.archiveId, id: 'risuai:huge', provider: 'risuai', recordId: 'huge', url: 'https://realm.risuai.net/character/huge', versionId: 'v1',
       versionList: [{ id: 'v1', objects: [{ role: 'card', name: 'card.charx', sha256: 'a'.repeat(64), mediaType: 'application/zip', byteLength: 600 * 1024 * 1024 }] }] };
-    const huge = createNativeArchiveService(services.cards, { origin: 'http://archive.test', fetch: async (url) => {
+    const hugeOptions = { origin: 'http://archive.test', fetch: async (url: string) => {
       if (url.includes('/objects/')) downloads.push(url);
       return Response.json(detail);
-    } });
-    await expect(huge.import(actor, workspace, 'risuai:huge')).rejects.toMatchObject({ code: 'TOO_LARGE', message: expect.stringContaining('stays in the Archive only') });
+    } };
+    const hugeCards = createCardService(services.store, services.assets, { archive: createNativeArchiveReader(hugeOptions) });
+    const huge = createNativeArchiveService(hugeCards, hugeOptions);
+    await expect(huge.import(actor, workspace, 'risuai:huge')).resolves.toMatchObject({ created: true });
+    expect(await services.store.listCards(workspace)).toEqual([]);
     expect(downloads).toEqual([]);
   });
 

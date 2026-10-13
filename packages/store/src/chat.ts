@@ -14,18 +14,22 @@ export interface ChatTargetWithCredentials extends ChatTarget { credentials: Cha
 export type RemoteState = 'matched' | 'edited' | 'missing';
 /** `current` and `behind` compare the copy's revision with the card's head at read time. */
 export type PlacementStatus = 'current' | 'behind' | 'edited' | 'missing';
+/** Identity metadata for a sent external version; never an owned revision. */
+export interface ReferencePlacementIdentity { sequence: number; contentHash: string; revisionHash: string | null }
 export interface ChatPlacement {
   targetId: string; targetName: string; kind: ChatKind; remoteId: string; remoteName: string;
   cardId: string; revisionId: string | null; revisionSequence: number | null; headSequence: number;
   status: PlacementStatus; sentAt: string | null; seenAt: string | null;
   /** The copy's fingerprint when it was sent or first seen, for apps that rebuild cards on export. */
   fingerprint: string | null;
+  reference?: ReferencePlacementIdentity;
 }
 /** One copy found during a scan (or created by a send), already resolved to a library card. */
 export interface ObservedPlacement {
   remoteId: string; remoteName: string; cardId: string; revisionId: string | null; edited: boolean; sent?: boolean;
   /** Baseline fingerprint to keep for this copy; null leaves the stored one unchanged. */
   fingerprint?: string | null;
+  reference?: ReferencePlacementIdentity;
 }
 
 interface TargetRow extends ChatTarget { credentials: string }
@@ -93,6 +97,7 @@ export function createChatStore(driver: StoreDriver) {
       await target(workspaceId, id);
       await driver.batch([
         { sql: 'DELETE FROM unity_chat_placements WHERE target_id = ?', params: [id] },
+        { sql: 'DELETE FROM unity_archive_chat_placements WHERE target_id = ?', params: [id] },
         { sql: 'DELETE FROM unity_chat_targets WHERE id = ? AND workspace_id = ?', params: [id, workspaceId] },
       ]);
     },
@@ -106,8 +111,37 @@ export function createChatStore(driver: StoreDriver) {
       const statements: Statement[] = [];
       if (options.complete) {
         statements.push({ sql: `UPDATE unity_chat_placements SET remote_state = 'missing' WHERE target_id = ?`, params: [targetId] });
+        statements.push({ sql: `UPDATE unity_archive_chat_placements SET remote_state = 'missing' WHERE target_id = ?`, params: [targetId] });
       }
       for (const item of observed) {
+        if (item.reference) {
+          const identity = item.reference;
+          if (!Number.isSafeInteger(identity.sequence) || identity.sequence < 1) validate.invalid('Invalid reference revision sequence');
+          validate.hash(identity.contentHash);
+          if (identity.revisionHash !== null) validate.hash(identity.revisionHash);
+          // Keep the bounded identity receipt when a placement is forgotten, so
+          // a later scan can rediscover an unchanged copy under any remote name.
+          statements.push({ sql: `INSERT INTO unity_archive_chat_identities(reference_id,workspace_id,revision_id,revision_sequence,content_hash,lineage_hash)
+            SELECT id,workspace_id,archive_version_id,?,?,? FROM unity_archive_references
+            WHERE id = ? AND workspace_id = ? AND archive_version_id = ?
+            ON CONFLICT(reference_id) DO UPDATE SET revision_sequence = excluded.revision_sequence,
+              content_hash = excluded.content_hash,lineage_hash = excluded.lineage_hash`,
+          params: [identity.sequence, identity.contentHash, identity.revisionHash, item.cardId, workspaceId, item.revisionId] });
+          statements.push({ sql: 'DELETE FROM unity_chat_placements WHERE target_id = ? AND remote_id = ?', params: [targetId, item.remoteId] });
+          statements.push({ sql: `INSERT INTO unity_archive_chat_placements(target_id,remote_id,remote_name,reference_id,workspace_id,revision_id,
+              revision_sequence,content_hash,lineage_hash,remote_state,sent_at,seen_at,remote_fingerprint)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(target_id,remote_id) DO UPDATE SET remote_name = excluded.remote_name,reference_id = excluded.reference_id,
+              revision_id = excluded.revision_id,revision_sequence = excluded.revision_sequence,content_hash = excluded.content_hash,
+              lineage_hash = excluded.lineage_hash,remote_state = excluded.remote_state,seen_at = excluded.seen_at,
+              sent_at = COALESCE(excluded.sent_at,unity_archive_chat_placements.sent_at),
+              remote_fingerprint = COALESCE(excluded.remote_fingerprint,unity_archive_chat_placements.remote_fingerprint)`,
+          params: [targetId, validate.text(item.remoteId, 'remoteId', 500), item.remoteName.slice(0, 200) || item.remoteId, item.cardId,
+            workspaceId, validate.text(item.revisionId ?? '', 'revisionId'), identity.sequence, identity.contentHash, identity.revisionHash,
+            item.edited ? 'edited' : 'matched', item.sent ? now : null, now, item.fingerprint ?? null] });
+          continue;
+        }
+        statements.push({ sql: 'DELETE FROM unity_archive_chat_placements WHERE target_id = ? AND remote_id = ?', params: [targetId, item.remoteId] });
         statements.push({ sql: `INSERT INTO unity_chat_placements(target_id, remote_id, remote_name, card_id, workspace_id, revision_id, remote_state, sent_at, seen_at, remote_fingerprint)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(target_id, remote_id) DO UPDATE SET remote_name = excluded.remote_name, card_id = excluded.card_id,
@@ -124,7 +158,10 @@ export function createChatStore(driver: StoreDriver) {
     },
     async forgetPlacement(workspaceId: string, targetId: string, remoteId: string) {
       await target(workspaceId, targetId);
-      await driver.batch([{ sql: 'DELETE FROM unity_chat_placements WHERE target_id = ? AND remote_id = ?', params: [targetId, remoteId] }]);
+      await driver.batch([
+        { sql: 'DELETE FROM unity_chat_placements WHERE target_id = ? AND remote_id = ?', params: [targetId, remoteId] },
+        { sql: 'DELETE FROM unity_archive_chat_placements WHERE target_id = ? AND remote_id = ?', params: [targetId, remoteId] },
+      ]);
     },
     /** Every known copy of the given cards (or of the whole workspace), with head comparison. */
     async placements(workspaceId: string, cardIds?: readonly string[]): Promise<ChatPlacement[]> {
@@ -142,19 +179,48 @@ export function createChatStore(driver: StoreDriver) {
           ORDER BY t.created_at, p.remote_state = 'missing', p.remote_name, p.remote_id`,
         params: [workspaceId, ...(cardIds ?? [])],
       });
-      return rows.map(({ remoteState, headRevisionId, ...row }) => ({ ...row,
+      const local = rows.map(({ remoteState, headRevisionId, ...row }): ChatPlacement => ({ ...row,
         status: remoteState === 'missing' ? 'missing' : remoteState === 'edited' ? 'edited' : row.revisionId === headRevisionId ? 'current' : 'behind' }));
+      type ReferenceRow = Omit<ChatPlacement, 'status' | 'reference'> & { remoteState: RemoteState; contentHash: string; revisionHash: string | null };
+      const references = await driver.query<ReferenceRow>({
+        sql: `SELECT p.target_id AS targetId,t.name AS targetName,t.kind,p.remote_id AS remoteId,p.remote_name AS remoteName,
+          p.reference_id AS cardId,p.revision_id AS revisionId,p.revision_sequence AS revisionSequence,p.revision_sequence AS headSequence,
+          p.remote_state AS remoteState,p.sent_at AS sentAt,p.seen_at AS seenAt,p.remote_fingerprint AS fingerprint,
+          p.content_hash AS contentHash,p.lineage_hash AS revisionHash
+          FROM unity_archive_chat_placements p JOIN unity_chat_targets t ON t.id = p.target_id
+          JOIN unity_archive_references r ON r.id = p.reference_id AND r.workspace_id = p.workspace_id
+          WHERE p.workspace_id = ? ${cardIds ? `AND p.reference_id IN (${cardIds.map(() => '?').join(', ')})` : ''}`,
+        params: [workspaceId, ...(cardIds ?? [])],
+      });
+      const external = references.map(({ remoteState, contentHash, revisionHash, ...row }): ChatPlacement => ({ ...row,
+        status: remoteState === 'missing' ? 'missing' : remoteState === 'edited' ? 'edited' : 'current',
+        reference: { sequence: row.revisionSequence!, contentHash, revisionHash } }));
+      // Keep missing copies last across both sources, not just within each table.
+      const targets = await driver.query<{ id: string }>({ sql: 'SELECT id FROM unity_chat_targets WHERE workspace_id = ? ORDER BY created_at,id', params: [workspaceId] });
+      const order = new Map(targets.map((item, index) => [item.id, index]));
+      return [...local, ...external].sort((a, b) => (order.get(a.targetId)! - order.get(b.targetId)!)
+        || Number(a.status === 'missing') - Number(b.status === 'missing') || a.remoteName.localeCompare(b.remoteName) || a.remoteId.localeCompare(b.remoteId));
     },
     /** Resolves an exported revision back to the library: exact lineage revision hash first, then content hash. */
     async resolveRevision(workspaceId: string, match: { revisionHash: string | null; contentHash: string; preferCardId?: string }) {
-      type Hit = { id: string; cardId: string };
+      type Hit = { id: string; cardId: string; reference?: ReferencePlacementIdentity };
+      type ReferenceHit = { id: string; cardId: string; sequence: number; contentHash: string; revisionHash: string | null };
+      async function referenceHits(column: 'lineage_hash' | 'content_hash', value: string): Promise<Hit[]> {
+        const rows = await driver.query<ReferenceHit>({ sql: `SELECT DISTINCT p.revision_id AS id,p.reference_id AS cardId,
+          p.revision_sequence AS sequence,p.content_hash AS contentHash,p.lineage_hash AS revisionHash
+          FROM unity_archive_chat_identities p JOIN unity_archive_references r ON r.id = p.reference_id AND r.workspace_id = p.workspace_id
+          WHERE p.workspace_id = ? AND p.${column} = ?`, params: [workspaceId, value] });
+        return rows.map(({ sequence, contentHash, revisionHash, ...row }) => ({ ...row, reference: { sequence, contentHash, revisionHash } }));
+      }
       if (match.revisionHash) {
         const hits = await driver.query<Hit>({ sql: `SELECT id, card_id AS cardId FROM unity_revisions WHERE workspace_id = ?
           AND json_extract(document_json, '$.data.extensions.foundry.lineage.revisionHash') = ?`, params: [workspaceId, match.revisionHash] });
+        hits.push(...await referenceHits('lineage_hash', match.revisionHash));
         if (hits[0]) return hits.find((hit) => hit.cardId === match.preferCardId) ?? hits[0];
       }
       const hits = await driver.query<Hit>({ sql: `SELECT id, card_id AS cardId FROM unity_revisions WHERE workspace_id = ? AND content_hash = ?
         ORDER BY sequence DESC, created_at DESC`, params: [workspaceId, match.contentHash] });
+      hits.push(...await referenceHits('content_hash', match.contentHash));
       return hits.find((hit) => hit.cardId === match.preferCardId) ?? hits[0] ?? null;
     },
   };

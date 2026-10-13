@@ -1,8 +1,8 @@
 # Store contract coverage
 
-Specification: internal store contract v0.1 in `requirements.json` (S01–S19).
+Specification: internal store contract v0.1 in `requirements.json` (S01–S25).
 Every listed clause is a MUST, tested against both native SQLite and local D1.
-The shared suite is `store.test.ts`. These are specification-derived tests, not
+The shared suites are `store.test.ts` and `archive.test.ts`. These are specification-derived tests, not
 outputs captured from the unsafe predecessor implementation.
 
 Run `pnpm test` at the repository root. It writes a Vitest JSON report and then
@@ -15,10 +15,15 @@ driver case fails coverage accounting. CI runs this same command via `pnpm check
 | Revisions and provenance | 9 (S03–S07, S09, S13, S15, S19) | 18 | Snapshot, failure injection, CAS races, immutable forks/revisions and atomic expected-source-head guard |
 | Isolation, assets and bounds | 4 (S08, S10–S12) | 8 | Workspace scoping, completion measurements, input limits, pagination |
 | Library summaries and search | 2 (S17, S18) | 4 | Head summaries, filters, ordering, totals and consistent search semantics |
+| Archive membership and ancestry | 2 (S20, S21) | 4 | Exact-version lightweight references, distinct source provenance, immutable external assets and atomic fork history |
+| Import identity and asset reuse | 2 (S22, S24) | 4 | Concurrent claims, current content/module/lineage identity, shared upload keys and retirement fences |
+| Mixed library and search jobs | 2 (S23, S25) | 4 | Global filtered pagination/tags/counts, external fork classification and durable generation-guarded indexing work |
 
 The generated report records actual passing counts; this file defines expected
 coverage. SQLite additionally has a separate on-disk reopen/two-connection test.
 The API has readiness tests and the built Node HTTP smoke checks the real schema.
+IndexedDB separately runs the same S20–S25 semantic cases, plus populated v1/v2
+upgrade, reopen and foreign-marker checks. Neither adapter copies Archive bytes.
 
 Failure injection inserts a NOT NULL constraint violation after every statement
 of create/save/fork batches, including the final seal, so it tests runtime rollback

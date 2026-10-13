@@ -3,11 +3,15 @@ import type { CardDocument } from '@character-unity/store';
 
 export type { CardSummary };
 export type ExportFormat = 'json' | 'png' | 'charx' | 'sillytavern-json' | 'sillytavern-png';
+export interface ArchiveReference { archiveId: string; cardId: string; versionId: string }
 export interface OpenedCard {
   card: { id: string; headRevisionId: string; originalHash: string | null; forkedFromRevisionId: string | null; createdAt: string };
   revision: { id: string; sequence: number; document: CardDocument; createdAt: string; assets: { path: string; assetId: string }[] };
   source: { provenance: { kind?: string; format?: string; filename?: string }; mediaType?: string; byteLength?: number; hash?: string } | null;
   favorite: boolean;
+  reference?: ArchiveReference;
+  /** Owned fork whose exact original remains in Archive. */
+  archiveSource?: ArchiveReference;
 }
 
 export class UnityError extends Error {
@@ -106,9 +110,20 @@ export async function openCard(id: string, options: { signal?: AbortSignal } = {
 }
 
 export async function importFile(file: File) {
-  return call<{ card: { id: string } }>(`/api/workspaces/${encodeURIComponent(await libraryId())}/imports`, {
+  return call<{ card: { id: string }; import: { created: boolean; match: 'file' | 'content' | 'archive' | null } }>(`/api/workspaces/${encodeURIComponent(await libraryId())}/imports`, {
     method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name), 'x-file-name-encoding': 'uri' }, body: file,
   });
+}
+
+export interface LibraryIndexStatus {
+  enabled: boolean; running: boolean; pending: number; failed: number; bounded: boolean;
+  reason: string | null; lastError: string | null; semantic: boolean | null;
+}
+export async function libraryIndexStatus(signal?: AbortSignal): Promise<LibraryIndexStatus> {
+  return call(`/api/workspaces/${encodeURIComponent(await libraryId())}/search-index`, signal ? { signal } : {});
+}
+export async function retryLibraryIndex(signal?: AbortSignal): Promise<LibraryIndexStatus> {
+  return call(`/api/workspaces/${encodeURIComponent(await libraryId())}/search-index/retry`, { method: 'POST', ...(signal ? { signal } : {}) });
 }
 
 export function assetUrl(workspace: string, cardId: string, revisionId: string, path: string) {

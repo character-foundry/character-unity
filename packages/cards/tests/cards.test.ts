@@ -18,14 +18,14 @@ import type { CCv3Data } from '@character-foundry/character-foundry/schemas';
 const alice = { id: 'alice', uri: 'urn:unity:user:alice' };
 const bob = { id: 'bob', uri: 'urn:unity:user:bob' };
 const encoder = new TextEncoder();
-function document(): CardDocument {
+function document(name = 'Aster'): CardDocument {
   return { spec: 'chara_card_v3', spec_version: '3.0', opaque_envelope: { value: 7 }, data: {
-    name: 'Aster', description: 'A map keeper.', personality: '', scenario: '', first_mes: 'Hello.', mes_example: '',
+    name, description: 'A map keeper.', personality: '', scenario: '', first_mes: 'Hello.', mes_example: '',
     tags: ['forest'], creator: 'Fixture', character_version: '1', group_only_greetings: [],
     unknown_inner: [null, true], extensions: { foreign: { note: 'keep' } },
   } };
 }
-const encoded = () => encoder.encode(JSON.stringify(document(), null, 2) + '\n');
+const encoded = (name?: string) => encoder.encode(JSON.stringify(document(name), null, 2) + '\n');
 async function receive(value: { body: ReadableStream<Uint8Array> }) { return new Uint8Array(await new Response(value.body).arrayBuffer()); }
 
 for (const adapter of ['native', 'indexeddb']) describe(`card service with Foundry and ${adapter} storage`, () => {
@@ -50,6 +50,10 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     workspaceId = (await service.createWorkspace(alice, 'Desk')).id;
   });
   afterEach(async () => { database?.close(); if (directory) await rm(directory, { recursive: true, force: true }); directory = undefined; vi.unstubAllGlobals(); });
+  async function importInFreshWorkspace(bytes: Uint8Array) {
+    const target = await service.createWorkspace(alice, 'Container roundtrip');
+    return service.import(alice, target.id, bytes);
+  }
 
   it('reads scoped immutable history with a stable pagination boundary while new revisions are saved', async () => {
     const bytes = encoded();
@@ -70,7 +74,7 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     expect(read).toEqual(original.revision);
     (read.document.data as CardDocument).description = 'Caller changed its copy';
     expect(await service.revision(alice, workspaceId, original.card.id, original.revision.id)).toEqual(original.revision);
-    const other = await service.import(alice, workspaceId, bytes);
+    const other = await service.import(alice, workspaceId, encoded('Other history card'));
     await expect(service.revision(alice, workspaceId, other.card.id, second.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(service.history(bob, workspaceId, original.card.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(service.revision(bob, workspaceId, original.card.id, second.id)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -171,12 +175,13 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     const charx = writeCharX(card, [{ type: 'icon', name: 'main', ext: 'png', data: image }]).buffer;
     const identities = [];
     for (const bytes of [png, charx]) {
-      const imported = await service.import(alice, workspaceId, bytes);
+      const imported = await importInFreshWorkspace(bytes);
+      const containerWorkspace = imported.card.workspaceId;
       identities.push(imported.revision.identity);
       expect(imported.revision.assets.map((asset) => asset.path)).toEqual(['declared/0', 'portrait']);
-      expect(await receive(await service.original(alice, workspaceId, imported.card.id))).toEqual(bytes);
+      expect(await receive(await service.original(alice, containerWorkspace, imported.card.id))).toEqual(bytes);
       const draft = structuredClone(imported.revision.document); (draft.data as CardDocument).description = 'Edited';
-      const saved = await service.save(alice, workspaceId, imported.card.id, imported.revision.id, draft);
+      const saved = await service.save(alice, containerWorkspace, imported.card.id, imported.revision.id, draft);
       expect(saved.assets).toEqual(imported.revision.assets);
       expect(await verifyCardLineage(saved.document, { assets: [{ pointer: '/assets/0/uri', hash: await hashBytes(image) }], portraitHash: await hashBytes(image) })).toBe(true);
     }
@@ -196,11 +201,12 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     expect(oldCard.data.description).toBe('A map keeper.');
     expect(oldCard.data.extensions.foundry?.local).toBeUndefined();
     const output = await service.export(alice, workspaceId, imported.card.id, saved.id, 'json');
-    const importedAgain = await service.import(alice, workspaceId, output.bytes);
+    const importedAgain = await importInFreshWorkspace(output.bytes);
     expect(importedAgain.revision.identity).toEqual(saved.identity);
     expect(readCardLineage(importedAgain.revision.document)).toEqual(readCardLineage(saved.document));
     expect(importedAgain.card.originalHash).toEqual(imported.card.originalHash);
-    await expect(service.export(alice, workspaceId, importedAgain.card.id, saved.id, 'json')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(await receive(await service.original(alice, importedAgain.card.workspaceId, importedAgain.card.id))).toEqual(output.bytes);
+    await expect(service.export(alice, importedAgain.card.workspaceId, importedAgain.card.id, saved.id, 'json')).rejects.toMatchObject({ code: 'NOT_FOUND' });
     await expect(service.export(alice, workspaceId, imported.card.id, saved.id, 'png')).rejects.toMatchObject({ code: 'EXPORT_LOSS' });
     const abort = new AbortController(); abort.abort();
     await expect(service.export(alice, workspaceId, imported.card.id, saved.id, 'json', abort.signal)).rejects.toMatchObject({ name: 'AbortError' });
@@ -242,11 +248,12 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
       await expect(service.export(alice, workspaceId, imported.card.id, saved.id, 'json')).rejects.toMatchObject({ code: 'EXPORT_LOSS' });
       for (const format of ['png', 'charx'] as const) {
         const exported = await service.export(alice, workspaceId, imported.card.id, saved.id, format);
-        const reopened = await service.import(alice, workspaceId, exported.bytes);
+        const reopened = await importInFreshWorkspace(exported.bytes);
         expect(reopened.revision.identity).toEqual(saved.identity);
         expect(readCardLineage(reopened.revision.document)).toEqual(readCardLineage(saved.document));
         expect(reopened.revision.assets.map((asset) => asset.path)).toEqual(['declared/0', 'portrait']);
         if (opaque) expect((reopened.revision.document.data as CardDocument).assets).toMatchObject([{ custom: { license: 'keep me' } }]);
+        expect(await receive(await service.original(alice, reopened.card.workspaceId, reopened.card.id))).toEqual(exported.bytes);
       }
       expect(await database.store.listRevisions(workspaceId, imported.card.id)).toHaveLength(2);
       expect(await receive(await service.original(alice, workspaceId, imported.card.id))).toEqual(original);
@@ -268,7 +275,7 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     const draft = structuredClone(imported.revision.document); (draft.data as CardDocument).description = 'Before CharX transport';
     const saved = await service.save(alice, workspaceId, imported.card.id, imported.revision.id, draft);
     const exported = await service.export(alice, workspaceId, imported.card.id, saved.id, 'charx');
-    const restored = await service.import(alice, workspaceId, exported.bytes);
+    const restored = await importInFreshWorkspace(exported.bytes);
     expect(restored.revision.identity).toEqual(saved.identity);
     expect(readCardLineage(restored.revision.document)).toEqual(readCardLineage(saved.document));
     const descriptors = (restored.revision.document.data as CardDocument).assets as CardDocument[];
@@ -276,7 +283,7 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     expect(new Set(descriptors.map((entry) => entry.uri)).size).toBe(3);
     for (const [index, text] of [[1, 'first distinct asset'], [2, 'second distinct asset']] as const) {
       const asset = restored.revision.assets.find((entry) => entry.path === `declared/${index}`)!;
-      expect(new TextDecoder().decode(await receive(await assetService.download(workspaceId, asset.assetId)))).toBe(text);
+      expect(new TextDecoder().decode(await receive(await assetService.download(restored.card.workspaceId, asset.assetId)))).toBe(text);
     }
     expect(await receive(await service.original(alice, workspaceId, imported.card.id))).toEqual(source);
   });
@@ -291,15 +298,16 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     returned.name = returned.data.name; returned.description = returned.data.description;
     returned.fav = false; returned.data.extensions.fav = false; returned.create_date = '2026-10-11T01:02:03.000Z';
     const bytes = encoder.encode(JSON.stringify(returned));
-    const restored = await service.import(alice, workspaceId, bytes);
+    const restored = await importInFreshWorkspace(bytes);
     expect(restored.revision.identity).toEqual(saved.identity);
     expect(readCardLineage(restored.revision.document)).toEqual(readCardLineage(saved.document));
     expect(restored.revision.document.name).toBeUndefined();
     expect((restored.revision.document.data as CardDocument).extensions).not.toHaveProperty('foundry.local');
-    expect(await receive(await service.original(alice, workspaceId, restored.card.id))).toEqual(bytes);
+    expect(await receive(await service.original(alice, restored.card.workspaceId, restored.card.id))).toEqual(bytes);
     returned.description = returned.data.description = 'External edit';
     await expect(service.import(alice, workspaceId, encoder.encode(JSON.stringify(returned)))).rejects.toMatchObject({ code: 'LOSSY_FORMAT' });
-    expect(await service.list(alice, workspaceId)).toHaveLength(2);
+    expect(await service.list(alice, workspaceId)).toHaveLength(1);
+    expect(await service.list(alice, restored.card.workspaceId)).toHaveLength(1);
     expect(await database.store.listRevisions(workspaceId, imported.card.id)).toHaveLength(2);
   });
 

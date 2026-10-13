@@ -30,8 +30,8 @@ time. Original files remain at their existing paths. The main API connects throu
 Read-only object locations are a bounded in-memory cache. Request the card/page
 again if an old object location has expired. Derived card JSON from legacy metadata
 wrappers is bounded separately; it is not persisted by reads. An unadopted Archive
-has a provisional path-derived instance ID; writer setup records the permanent
-instance ID before persistent Unity reference adoption.
+uses a path-derived instance ID until writer setup persists that same ID. The first
+writer does not invalidate references created through the earlier read-only attachment.
 
 ## Writer handoff
 
@@ -61,7 +61,112 @@ path aliases and Chub's upstream IDs. Accepted baseline files are registered
 lazily when first updated. Same file content creates no additional version or
 binary copy. Version file references are retained in the same database.
 
+## Reference identity index
+
+`GET /api/archive/v2/cards/:id?version=VERSION_ID` resolves that exact version,
+never silently the latest. Unregistered legacy versions are checked by their
+file fingerprint; if another writer changes the accepted files before history is
+registered, the old pin is explicitly unavailable.
+
+`GET /api/archive/v2/identity?fileHash=SHA256&contentHash=SHA256&name=NAME`
+checks exact container bytes before Foundry content identity, including verified
+asset digests and the extracted portrait. Equal content does not merge upstream
+source records. New and changed scrapes maintain these small metadata indexes in
+the same Archive database. Reading never initializes or fills the index.
+
+The old corpus has no existing file/content hash index. Read-only attachment can
+inspect at most 32 matching-name legacy candidates, but a partial miss is not
+proof of absence: `complete:false` and `unresolved` report that limitation. Unity
+must not silently create another card on an incomplete miss. A separately
+approved, coordinated writer can build only this metadata index, one bounded
+batch at a time, without copying the corpus or changing originals:
+
+```sh
+UNITY_ARCHIVE_MODE=existing \
+UNITY_ARCHIVE_DATABASE_PATH=/path/to/existing/cards.db \
+UNITY_ARCHIVE_FILES_DIR=/path/to/existing/static \
+UNITY_ARCHIVE_OBJECT_DIR=/path/to/existing/unity-objects \
+pnpm --filter @character-unity/archive identity --limit 16
+```
+
+The JSON result gives `processed`, `unavailable`, `nextAfter` and `complete`.
+Pass `--after CURSOR` with the same configuration to resume; a batch accepts at
+most 100 versions (default 16), then exits. A completed pass can be restarted to
+pick up metadata changes. This command is an explicit Archive writer operation:
+the existing optimizer/worker takeover safeguards apply, and it cannot run
+alongside the already-open Unity writer. It does not start ingestion, scheduling,
+embedding or LanceDB work. No live corpus indexing has been authorized or run.
+
+Versions with unsupported/missing assets retain a null content hash and an
+explicit reason; no placeholder identity is invented. Their actual parsed card
+name is indexed too. Because names are part of Foundry content identity, an
+unresolved differently named card does not block an unrelated import after the
+index has been fully attempted. An unresolved same-name candidate still makes a
+content miss incomplete. Exact byte matches remain usable independently.
+
+## Saved library cards in the same search index
+
+Saved Unity-owned cards and Archive forks have a durable search outbox in the
+Unity database. References, favorites and reads enqueue nothing. Each committed
+head change records its exact revision and a monotonic event sequence atomically;
+deletions enqueue a fenced tombstone. No original card or asset bytes are sent to
+the search writer—only a bounded text/metadata projection.
+
+Delivery is explicitly opt-in: set `UNITY_ARCHIVE_LIBRARY_INDEX=1` on both the
+local Unity API and Archive processes, provide the matching Archive admin token,
+and configure the matching document/query embedding provider. The Archive owns
+the writes in its existing Lance directory, not another index directory or corpus
+database. A missing/incompatible document provider leaves upserts pending rather
+than acknowledging an unembedded saved card. Deletes remain deliverable without
+embedding calls. Existing writer-ownership/takeover requirements still apply;
+enabling this against the live installation is not part of the synthetic checks.
+
+Save does not await embedding. Successful committed mutations wake bounded
+16-entry delivery batches; fresh bursts continue through clean queued work without
+an idle timer. Startup attempts one bounded batch only. A failure is retained with
+its message and is not retried by polling or by browsing/favoriting a card.
+
+Authenticated owners can inspect
+`GET /api/workspaces/:workspaceId/search-index` and explicitly retry through
+`POST /api/workspaces/:workspaceId/search-index/retry`. Status includes enabled/
+running/pending/failed, configuration reason and the last pending error. Counts
+are a bounded sample of up to 100 jobs (`bounded:true` signals that cap). Retry
+drains that owner's workspace in bounded batches until clean or a failure; it
+does not obtain another account's mutation authority. Disabling delivery never
+discards pending jobs. Native Archive search combines the original corpus with
+workspace-scoped owned-card projections, and later saves replace their old head.
+
+The supplementary table is `unity_library_search_v1` in that same Lance directory.
+Its model/dimensions are validated on every successful open; incompatible tables
+are never silently reused or rebuilt. Durable delete rows prevent older deliveries
+from restoring deleted results, including across multiple hosts and restarts.
+The native proxy filters deleted library hits while delivery is pending and
+preserves upstream offsets and excerpt/score alignment. Such pages report
+candidate counts, not a complete count of live library entries.
+
+The native Archive page shows indexing configuration, pending/failed counts and
+explicit Refresh/Retry controls. It does not poll. Successful startup delivery is
+limited to 16 entries; use Retry for a larger persisted backlog. The browser never
+chooses a workspace scope or receives the admin credential: the authenticated Unity
+host supplies that scope to Archive. Uncredentialed read-only attachment continues
+to browse original Archive cards without private Unity projections.
+
 ## Search and idle behavior
+
+The unified `/archive` page has explicit Lexical, Boolean, Semantic, Hybrid and
+Filters-only modes. Provider/model/dimension availability and known or unknown
+vector coverage are shown before submission. Missing/incompatible capabilities
+and provider errors remain visible; the UI never substitutes lexical results for
+a requested semantic query. Typing makes no embedding request. Search, Refresh
+and Load more are explicit actions.
+
+Typed filters and supported ordering use the existing indexed fields. A blank
+query with a typed filter requires Filters-only mode; it cannot silently ignore
+the filter. Mode, query and filters survive URL navigation/reload. Paging carries
+a snapshot receipt covering query, index generation and ranking; changed inputs,
+generations or candidates require a fresh first page. Match excerpts/scores stay
+aligned with their result card. Semantic/hybrid totals are bounded candidate
+counts, not estimates of the full Archive match count.
 
 `/api/archive/v2/cards` retains metadata filters and explicit ordering. Queries
 use the existing lexical table (`UNITY_ARCHIVE_LANCE_TABLE`, default `cards`) and

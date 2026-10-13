@@ -39,10 +39,14 @@ The original expected head stays pinned so restoring stale text cannot overwrite
 a newer revision. This is text recovery, not durable recovery of staged files or
 unsaved New/Fork drafts. Browser-local preference contents are intentionally shared.
 
-The viewer and
-shell now use native React Router/HTML without Next shims (`cu-1o2.26`). General
-import deduplication and Archive-reference favorites/forks are separate remaining
-work (`cu-1o2.27`), not capabilities of this editor integration.
+The viewer and shell use native React Router/HTML without Next shims (`cu-1o2.26`).
+Archive references open in this same editor without creating owned documents or
+asset rows. An unchanged Save retains the reference; a changed Save creates one
+owned fork pinned to its exact Archive source, retaining inherited asset locators
+and storing only newly uploaded bytes. Route promotion keeps the current editor
+session and pending edits. Native imports report existing file/content matches
+instead of storing another card. References retain exact-original downloads,
+revision exports and Send-to-chat; a missing source remains explicitly unavailable.
 
 Native viewer/Next-shim removal (`cu-1o2.26`) and editor isolation (`cu-1o2.5.12`)
 are complete. Wizard workflow QA (`cu-1o2.5.5`) remains low priority.

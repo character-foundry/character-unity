@@ -30,3 +30,36 @@ export const chatSchema = [
  * marker, so a send records a fingerprint of the copy as the app stores it; a later mismatch means it was edited there.
  */
 export const chatFingerprintSchema = ['ALTER TABLE unity_chat_placements ADD COLUMN remote_fingerprint TEXT'];
+
+/** Reference placements contain only observations and identity digests. External
+ * Archive versions never become Unity cards or revisions merely by being sent. */
+export const chatReferenceSchema = [
+  `CREATE TABLE unity_archive_chat_identities (
+    reference_id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision_id TEXT NOT NULL,
+    revision_sequence INTEGER NOT NULL CHECK(revision_sequence > 0),content_hash TEXT NOT NULL,lineage_hash TEXT,
+    PRIMARY KEY(reference_id),
+    FOREIGN KEY(reference_id,workspace_id) REFERENCES unity_archive_references(id,workspace_id) ON DELETE CASCADE
+  )`,
+  'CREATE INDEX unity_archive_chat_identity_content ON unity_archive_chat_identities(workspace_id,content_hash)',
+  'CREATE INDEX unity_archive_chat_identity_lineage ON unity_archive_chat_identities(workspace_id,lineage_hash)',
+  `CREATE TABLE unity_archive_chat_placements (
+    target_id TEXT NOT NULL REFERENCES unity_chat_targets(id) ON DELETE CASCADE,
+    remote_id TEXT NOT NULL, remote_name TEXT NOT NULL,
+    reference_id TEXT NOT NULL, workspace_id TEXT NOT NULL, revision_id TEXT NOT NULL,
+    revision_sequence INTEGER NOT NULL CHECK(revision_sequence > 0),
+    content_hash TEXT NOT NULL, lineage_hash TEXT,
+    remote_state TEXT NOT NULL CHECK(remote_state IN ('matched', 'edited', 'missing')),
+    sent_at TEXT, seen_at TEXT, remote_fingerprint TEXT,
+    PRIMARY KEY(target_id,remote_id),
+    FOREIGN KEY(reference_id,workspace_id) REFERENCES unity_archive_references(id,workspace_id) ON DELETE CASCADE
+  )`,
+  'CREATE INDEX unity_archive_chat_placements_card ON unity_archive_chat_placements(workspace_id,reference_id)',
+  `CREATE TRIGGER unity_archive_chat_placement_pin_insert BEFORE INSERT ON unity_archive_chat_placements
+    WHEN NOT EXISTS (SELECT 1 FROM unity_archive_references r WHERE r.id = NEW.reference_id
+      AND r.workspace_id = NEW.workspace_id AND r.archive_version_id = NEW.revision_id)
+    BEGIN SELECT RAISE(ABORT, 'UNITY_INVALID_REFERENCE'); END`,
+  `CREATE TRIGGER unity_archive_chat_placement_pin_update BEFORE UPDATE ON unity_archive_chat_placements
+    WHEN NOT EXISTS (SELECT 1 FROM unity_archive_references r WHERE r.id = NEW.reference_id
+      AND r.workspace_id = NEW.workspace_id AND r.archive_version_id = NEW.revision_id)
+    BEGIN SELECT RAISE(ABORT, 'UNITY_INVALID_REFERENCE'); END`,
+] as const;

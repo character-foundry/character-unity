@@ -44,6 +44,18 @@ describe('native viewer read contracts', () => {
     await expect(api.listAssets('card', 'head')).rejects.toMatchObject({ status: 503, code: 'ASSET_UNAVAILABLE' });
   });
 
+  it('returns the existing library entry and deduplication outcome from a regular file import', async () => {
+    const { api, fetcher } = await client();
+    await api.libraryId();
+    const file = new File(['exact accepted bytes'], 'already-have.png', { type: 'image/png' });
+    fetcher.mockImplementationOnce(async (path, options) => {
+      expect(String(path)).toContain('/imports');
+      expect(options?.body).toBe(file);
+      return Response.json({ card: { id: 'existing-reference' }, import: { created: false, match: 'archive' }, reference: { archiveId: 'archive', cardId: 'source', versionId: 'exact-version' } });
+    });
+    expect(await api.importFile(file)).toMatchObject({ card: { id: 'existing-reference' }, import: { created: false, match: 'archive' } });
+  });
+
   it.each(['call', 'fetchWithSession'] as const)('cancels %s during 401 reconnect without retrying a superseded read', async (method) => {
     const { api, fetcher } = await client();
     const controller = new AbortController();

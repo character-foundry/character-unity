@@ -45,7 +45,7 @@ for (const [app, service, archiveMode] of [['api', 'unity-api', 'off'], ['archiv
     if (app === 'api') {
       const ready = await fetch(`http://127.0.0.1:${address.port}/api/ready`, { signal: AbortSignal.timeout(5_000) });
       assert.equal(ready.status, 200);
-      assert.deepEqual(await ready.json(), { status: 'ready', storage: { schemaVersion: 12 } });
+      assert.deepEqual(await ready.json(), { status: 'ready', storage: { schemaVersion: 13 } });
       const apiOrigin = `http://127.0.0.1:${address.port}`;
       for (const path of ['/', '/new', '/card/example/edit', '/card/example/fork', '/archive']) {
         const page = await fetch(`${apiOrigin}${path}`, { signal: AbortSignal.timeout(5_000) });

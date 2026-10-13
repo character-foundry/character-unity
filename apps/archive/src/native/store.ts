@@ -8,11 +8,15 @@ import { isPlaceholderImage } from '@character-unity/scraper-kit';
 import type { RunCounts, RunResult, ScrapedCard, ScrapedObject, ScrapeSink, SourceStats } from '@character-unity/scraper-kit';
 import { createObjectStore, sha256 } from './objects.js';
 import { nativeSchema, nativeSchemaVersion } from './schema.js';
-import { archiveFilterSql, archiveSortSql } from './query.js';
-import type { ArchiveQuery } from './query.js';
+import { archiveFilterSql, archiveFlags, archiveSorts, archiveSortSql } from './query.js';
+import type { ArchiveCapabilities, ArchiveQuery } from './query.js';
+import { searchSnapshot } from './search-snapshot.js';
+import { validateIdentityQuery } from '@character-unity/archive-client/native';
+import type { ArchiveIdentityQuery, ArchiveIdentityResult } from '@character-unity/archive-client';
+import { archiveContentHash } from '../identity.js';
 
 export class NativeArchiveError extends Error {
-  constructor(public readonly code: 'NOT_FOUND' | 'INVALID_INPUT' | 'UNSUPPORTED_FORMAT', message: string) {
+  constructor(public readonly code: 'NOT_FOUND' | 'INVALID_INPUT' | 'UNSUPPORTED_FORMAT' | 'SNAPSHOT_CHANGED', message: string) {
     super(message);
     this.name = 'NativeArchiveError';
   }
@@ -113,6 +117,16 @@ export function describe(card: ScrapedCard, container: ScrapedObject) {
   };
 }
 
+/** Historic projections must describe the pinned document, not today's listing metadata. */
+export function pinnedSummary(current: ArchiveCardSummary, described: ReturnType<typeof describe>, version: ArchiveVersion): ArchiveCardSummary {
+  const container = version.objects.find((ref) => ref.role === 'card');
+  return { ...current, name: described.name, creator: described.creator, tagline: '', tags: described.tags, spec: described.spec === 'v3' ? 'v3' : 'v2',
+    tokens: described.tokens, altGreetings: described.altGreetings, lorebookEntries: described.lorebookEntries,
+    flags: { gallery: described.gallery, expressions: described.expressions, embeddedImages: described.embeddedImages, systemPrompt: described.systemPrompt, exampleDialogues: described.examples },
+    stats: {}, portrait: version.objects.find((ref) => ref.role === 'portrait')?.sha256 ?? (container?.mediaType === 'image/png' ? container.sha256 : null),
+    remoteCreatedAt: null, remoteUpdatedAt: version.remoteUpdatedAt, changedAt: version.fetchedAt, versionId: version.id };
+}
+
 /**
  * The native Archive: its own SQLite database and object files under one directory. Scrapes append
  * versions; fetched bytes are never rewritten or removed. Everything else in the app reads it.
@@ -131,6 +145,10 @@ export async function openNativeArchive(directory: string, options: { now?: () =
   db.prepare('INSERT OR REPLACE INTO archive_meta (key, value) VALUES (?, ?)').run('schema_version', String(nativeSchemaVersion));
   if (!meta('archive_id')) db.prepare('INSERT INTO archive_meta (key, value) VALUES (?, ?)').run('archive_id', `archive-${randomUUID()}`);
   const archiveId = meta('archive_id')!;
+  const readInstance = randomUUID();
+  const readGeneration = () => JSON.stringify([readInstance, db.pragma('data_version', { simple: true }), db.prepare('SELECT total_changes() AS n').get()]);
+  const capabilities: ArchiveCapabilities = { lexical: true, semantic: false, browse: true, filterFields: [], sorts: [...archiveSorts], browseSorts: [...archiveSorts], has: [...archiveFlags],
+    libraryIndex: { enabled: false, semantic: false, reason: 'Library projection indexing requires the existing Archive LanceDB backend' } };
   // A run still marked running belonged to a process that stopped.
   db.prepare("UPDATE runs SET status = 'failed', finished_at = ?, error = coalesce(error, 'The Archive stopped during this run') WHERE status = 'running'").run(now());
 
@@ -150,7 +168,11 @@ export async function openNativeArchive(directory: string, options: { now?: () =
       .run(seenAt, count(stats?.stars), count(stats?.favorites), count(stats?.chats), count(stats?.messages), count(stats?.downloads), count(stats?.rating), id);
   }
 
-  async function put(card: ScrapedCard): Promise<'added' | 'updated' | 'unchanged'> {
+  let writes: Promise<unknown> = Promise.resolve();
+  function put(card: ScrapedCard): Promise<'added' | 'updated' | 'unchanged'> {
+    const operation = writes.then(() => putSerial(card)); writes = operation.catch(() => undefined); return operation;
+  }
+  async function putSerial(card: ScrapedCard): Promise<'added' | 'updated' | 'unchanged'> {
     if (!/^[a-z0-9-]{1,32}$/.test(card.provider) || !card.recordId || card.recordId.length > 200 || /[\s/]/.test(card.recordId)) {
       throw new NativeArchiveError('INVALID_INPUT', 'A scraped card needs a provider and a record ID without spaces or slashes');
     }
@@ -181,9 +203,12 @@ export async function openNativeArchive(directory: string, options: { now?: () =
     const fingerprint = sha256(JSON.stringify(refs.filter((ref) => ref.role !== 'raw').map((ref) => [ref.role, ref.name, ref.sha256]).sort()));
     const at = now();
     const remoteUpdated = iso(card.updatedAt);
+    const identity = await archiveContentHash(containers[0]!.bytes, described.document, refs,
+      async (hash) => ({ bytes: await objects.get(hash), mediaType: refs.find((ref) => ref.sha256 === hash)!.mediaType }));
     return db.transaction((): 'added' | 'updated' | 'unchanged' => {
       for (const ref of refs) db.prepare('INSERT OR IGNORE INTO objects (sha256, byte_length, media_type, created_at) VALUES (?, ?, ?, ?)').run(ref.sha256, ref.byteLength, ref.mediaType, at);
       if (existing && (statements.fingerprint.get(existing.version_id) as { fingerprint: string }).fingerprint === fingerprint) {
+        db.prepare('INSERT OR REPLACE INTO version_identities(version_id,content_hash,content_name,unavailable_reason) VALUES (?,?,?,?)').run(existing.version_id, identity.hash, identity.name, identity.reason);
         statsUpdate(existing.id, card.stats, at);
         // Same files, but the source's own metadata (tags, tagline, creator, page) may have moved on.
         db.prepare(`UPDATE cards SET name = ?, creator = ?, tagline = ?, tags = ?, tags_json = ?, url = ?, remote_updated_at = coalesce(?, remote_updated_at)
@@ -225,6 +250,7 @@ export async function openNativeArchive(directory: string, options: { now?: () =
       }
       db.prepare('INSERT INTO versions (id, card_id, sequence, fingerprint, remote_updated_at, fetched_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(versionId, id, sequence, fingerprint, remoteUpdated, at);
+      db.prepare('INSERT INTO version_identities(version_id,content_hash,content_name,unavailable_reason) VALUES (?,?,?,?)').run(versionId, identity.hash, identity.name, identity.reason);
       const tag = db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag, folded) VALUES (?, ?, ?)');
       for (const value of described.tags) tag.run(id, value, value.toLowerCase());
       const object = db.prepare('INSERT INTO version_objects (version_id, role, name, sha256, media_type) VALUES (?, ?, ?, ?, ?)');
@@ -271,27 +297,74 @@ export async function openNativeArchive(directory: string, options: { now?: () =
     sink,
     put,
     list(query: ArchiveQuery = {}) {
-      if (query.mode && query.mode !== 'lexical') throw new NativeArchiveError('INVALID_INPUT', 'Semantic search requires the existing Archive LanceDB backend');
+      if (query.mode && !['lexical', 'browse'].includes(query.mode)) throw new NativeArchiveError('INVALID_INPUT', 'Semantic search requires the existing Archive LanceDB backend');
+      if (query.filter) throw new NativeArchiveError('INVALID_INPUT', 'Typed filters require the existing Archive LanceDB backend');
+      if (query.mode === 'browse' && query.q?.trim()) throw new NativeArchiveError('INVALID_INPUT', 'Browse mode does not accept query text');
+      const snapshot = searchSnapshot(query, readGeneration());
+      if (query.snapshot && query.snapshot !== snapshot) throw new NativeArchiveError('SNAPSHOT_CHANGED', 'The Archive or query changed; start from the first page');
       const { where, params } = archiveFilterSql(query);
       const limit = Math.min(Math.max(query.limit ?? 48, 1), 100), offset = Math.max(query.offset ?? 0, 0);
       const clause = where.join(' AND ');
       const total = (db.prepare(`SELECT count(*) AS total FROM cards c WHERE ${clause}`).get(...params) as { total: number }).total;
       const rows = db.prepare(`SELECT c.* FROM cards c WHERE ${clause} ORDER BY ${archiveSortSql[query.sort ?? 'updated']}, c.seq DESC LIMIT ? OFFSET ?`)
         .all(...params, limit, offset) as Row[];
-      return { cards: rows.map(summary), total };
+      return { cards: rows.map(summary), total, complete: true, snapshot };
     },
     /** Summary, every version's files, and the current card document as its file holds it (parsed, never rewritten). */
-    async card(id: string): Promise<ArchiveCardDetail> {
+    async card(id: string, versionId?: string): Promise<ArchiveCardDetail & { archiveId: string }> {
       const row = getRow(id);
       const versionList = (db.prepare('SELECT id, sequence, fetched_at AS fetchedAt, remote_updated_at AS remoteUpdatedAt FROM versions WHERE card_id = ? ORDER BY sequence DESC').all(id) as Omit<ArchiveVersion, 'objects'>[])
         .map((version) => ({ ...version, objects: objectsOf(version.id) }));
-      const container = objectsOf(row.version_id).find((ref) => ref.role === 'card')!;
-      const document = describe({ provider: row.provider, recordId: row.record_id, url: row.url, objects: [] },
-        { role: 'card', bytes: await objects.get(container.sha256), mediaType: container.mediaType }).document;
-      return { ...summary(row), document, versionList };
+      const version = versionList.find((item) => item.id === (versionId ?? row.version_id));
+      if (!version) throw new NativeArchiveError('NOT_FOUND', 'This Archive version is unavailable');
+      const container = version.objects.find((ref) => ref.role === 'card')!;
+      const described = describe({ provider: row.provider, recordId: row.record_id, url: row.url, objects: [] },
+        { role: 'card', bytes: await objects.get(container.sha256), mediaType: container.mediaType });
+      return { ...(versionId === undefined ? summary(row) : pinnedSummary(summary(row), described, version)), archiveId, versionId: version.id,
+        portrait: version.objects.find((ref) => ref.role === 'portrait')?.sha256 ?? (container.mediaType === 'image/png' ? container.sha256 : null), document: described.document, versionList };
     },
     /** Files of the current version (for importing into the library). */
-    files(id: string) { return objectsOf(getRow(id).version_id); },
+    files(id: string, versionId?: string) {
+      const row = getRow(id), selected = versionId ?? row.version_id;
+      if (!db.prepare('SELECT 1 FROM versions WHERE id = ? AND card_id = ?').get(selected, id)) throw new NativeArchiveError('NOT_FOUND', 'This Archive version is unavailable');
+      return objectsOf(selected);
+    },
+    async identity(query: ArchiveIdentityQuery): Promise<ArchiveIdentityResult> {
+      try { validateIdentityQuery(query); } catch { throw new NativeArchiveError('INVALID_INPUT', 'Invalid Archive identity lookup'); }
+      const visible = 'NOT EXISTS (SELECT 1 FROM blocked b WHERE b.provider = c.provider AND b.record_id = c.record_id)';
+      const select = `SELECT c.id AS cardId,v.id AS versionId,vo.sha256 AS fileHash,i.content_hash AS contentHash,c.provider,c.record_id AS recordId,c.url
+        FROM versions v JOIN cards c ON c.id = v.card_id JOIN version_objects vo ON vo.version_id = v.id AND vo.role = 'card'
+        LEFT JOIN version_identities i ON i.version_id = v.id WHERE ${visible}`;
+      let matchedBy: 'bytes' | 'content' = 'bytes';
+      let rows = query.fileHash ? db.prepare(`${select} AND vo.sha256 = ? ORDER BY c.id,v.sequence LIMIT 101`).all(query.fileHash) : [];
+      if (!rows.length && query.contentHash) { matchedBy = 'content'; rows = db.prepare(`${select} AND i.content_hash = ? ORDER BY c.id,v.sequence LIMIT 101`).all(query.contentHash); }
+      const unresolved = (db.prepare(`SELECT count(*) AS n FROM versions v JOIN cards c ON c.id = v.card_id LEFT JOIN version_identities i ON i.version_id = v.id
+        WHERE ${visible} AND (i.version_id IS NULL${query.contentHash ? ` OR (i.content_hash IS NULL${query.name === undefined ? '' : ' AND (i.content_name IS NULL OR i.content_name = ?)'} )` : ''})`).get(...(query.contentHash && query.name !== undefined ? [query.name] : [])) as { n: number }).n;
+      return { archiveId, matches: (rows.slice(0, 100) as Omit<ArchiveIdentityResult['matches'][number], 'matchedBy'>[]).map((row) => ({ ...row, matchedBy })), complete: !unresolved && rows.length <= 100, unresolved };
+    },
+    async indexIdentities(options: { limit?: number; after?: string } = {}): Promise<{ processed: number; unavailable: number; nextAfter: string | null; complete: boolean }> {
+      options = { ...options };
+      const operation = writes.then(async () => {
+      const limit = options.limit ?? 16;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || (options.after !== undefined && !/^[1-9][0-9]{0,15}$/.test(options.after))) throw new NativeArchiveError('INVALID_INPUT', 'Invalid identity index batch or cursor');
+      const rows = db.prepare(`SELECT v.rowid AS cursor,v.id FROM versions v JOIN cards c ON c.id = v.card_id
+        LEFT JOIN version_identities i ON i.version_id = v.id WHERE i.version_id IS NULL AND v.rowid > ?
+        AND NOT EXISTS (SELECT 1 FROM blocked b WHERE b.provider = c.provider AND b.record_id = c.record_id) ORDER BY v.rowid LIMIT ?`)
+        .all(Number(options.after ?? 0), limit + 1) as { cursor: number; id: string }[];
+      let unavailable = 0;
+      for (const row of rows.slice(0, limit)) {
+        const refs = objectsOf(row.id), container = refs.find((ref) => ref.role === 'card');
+        if (!container) throw new NativeArchiveError('UNSUPPORTED_FORMAT', 'This Archive version has no card file');
+        const identity = await archiveContentHash(await objects.get(container.sha256), undefined, refs,
+          async (hash) => ({ bytes: await objects.get(hash), mediaType: refs.find((ref) => ref.sha256 === hash)!.mediaType }));
+        db.prepare('INSERT OR REPLACE INTO version_identities(version_id,content_hash,content_name,unavailable_reason) VALUES (?,?,?,?)').run(row.id, identity.hash, identity.name, identity.reason);
+        unavailable += +!identity.hash;
+      }
+      return { processed: Math.min(rows.length, limit), unavailable, nextAfter: rows.length > limit ? String(rows[limit - 1]!.cursor) : null, complete: rows.length <= limit };
+      });
+      writes = operation.catch(() => undefined);
+      return operation;
+    },
     async object(hash: string) {
       const ref = statements.object.get(hash) as { sha256: string; byteLength: number; mediaType: string } | undefined;
       if (!ref) throw new NativeArchiveError('NOT_FOUND', 'No such Archive object');
@@ -307,7 +380,8 @@ export async function openNativeArchive(directory: string, options: { now?: () =
       const providers = Object.fromEntries((db.prepare(`SELECT provider, count(*) AS n FROM cards c WHERE ${visible} GROUP BY provider`).all() as { provider: string; n: number }[]).map((row) => [row.provider, row.n]));
       const blocked = (db.prepare('SELECT count(*) AS n FROM blocked').get() as { n: number }).n;
       const changed = (db.prepare('SELECT max(changed_at) AS at FROM cards').get() as { at: string | null }).at;
-      return { archiveId, cards: Object.values(providers).reduce((sum, value) => sum + value, 0), providers, blocked, lastChangedAt: changed };
+      return { archiveId, cards: Object.values(providers).reduce((sum, value) => sum + value, 0), providers, blocked, lastChangedAt: changed,
+        capabilities };
     },
     block(provider: string, recordId: string, reason = 'Removed from the Archive') {
       db.prepare('INSERT OR REPLACE INTO blocked (provider, record_id, reason, blocked_at) VALUES (?, ?, ?, ?)').run(provider, recordId, reason.slice(0, 500), now());

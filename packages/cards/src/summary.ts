@@ -1,4 +1,4 @@
-import type { CardSummaryItem } from '@character-unity/store';
+import type { ArchivePin, ArchiveReference, CardSummaryItem } from '@character-unity/store';
 
 /** What a library tile, quick-view modal and filters need without opening the full document. */
 export interface CardSummary {
@@ -25,19 +25,35 @@ export interface CardSummary {
   createdAt: string;
   /** Last time this card was touched: its newest saved revision. */
   updatedAt: string;
+  /** Exact Archive version linked into this library; no owned document or assets. */
+  reference?: ArchivePin;
+  /** Owned fork retaining an exact external Archive ancestor. */
+  archiveSource?: ArchivePin;
 }
 export interface CardSummaryList { cards: CardSummary[]; total: number }
+
+export function summarizeReference(reference: ArchiveReference, forkCount: number): CardSummary {
+  const value = reference.summary;
+  return { id: reference.id, headRevisionId: reference.pin.versionId, reference: reference.pin,
+    name: value.name, creator: value.creator, tags: value.tags, spec: value.spec === 'v2' ? 'v2' : 'v3',
+    sourceFormat: value.format === 'png' || value.format === 'charx' || value.format === 'json' ? value.format : null,
+    creatorNotes: '', greetingsCount: value.greetingCount ?? 0, lorebookEntriesCount: value.lorebookEntryCount ?? 0,
+    assetsCount: value.assetCount ?? 0, hasPortrait: value.portrait, revisionCount: 1, forkedFromRevisionId: null,
+    forkCount, favorite: reference.favorite, tokensTotal: value.tokensTotal, source: value.source,
+    createdAt: reference.createdAt, updatedAt: value.changedAt };
+}
 
 const text = (value: unknown) => (typeof value === 'string' ? value : '');
 const count = (value: unknown) => (Array.isArray(value) ? value.length : 0);
 
-export function summarizeCard({ card, revision, sourceFormat, forkCount, favorite, tokensTotal, source }: CardSummaryItem): CardSummary {
+export function summarizeCard({ card, revision, sourceFormat, forkCount, favorite, tokensTotal, source, archiveSource }: CardSummaryItem): CardSummary {
   const document = revision.document as { spec?: unknown; data?: Record<string, unknown> };
   const data = document.data ?? {};
   const book = data.character_book as { entries?: unknown } | null | undefined;
   const format = sourceFormat?.split('_')[0];
   return {
     id: card.id,
+    ...(archiveSource ? { archiveSource } : {}),
     headRevisionId: revision.id,
     name: text(data.name) || 'Untitled',
     creator: text(data.creator),

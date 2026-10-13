@@ -1,5 +1,5 @@
 /** The native Archive's own database. Only the Archive service writes it. */
-export const nativeSchemaVersion = 1;
+export const nativeSchemaVersion = 2;
 
 export const nativeSchema = `
 CREATE TABLE IF NOT EXISTS archive_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS versions (
 CREATE TABLE IF NOT EXISTS version_objects (
   version_id TEXT NOT NULL REFERENCES versions (id), role TEXT NOT NULL, name TEXT NOT NULL,
   sha256 TEXT NOT NULL REFERENCES objects (sha256), media_type TEXT NOT NULL, PRIMARY KEY (version_id, role, name));
+CREATE INDEX IF NOT EXISTS version_objects_identity ON version_objects (role,sha256,version_id);
+CREATE TABLE IF NOT EXISTS version_identities (
+  version_id TEXT PRIMARY KEY REFERENCES versions(id), content_hash TEXT, content_name TEXT, unavailable_reason TEXT);
+CREATE INDEX IF NOT EXISTS version_identities_content ON version_identities(content_hash,version_id);
 CREATE TABLE IF NOT EXISTS blocked (
   provider TEXT NOT NULL, record_id TEXT NOT NULL, reason TEXT NOT NULL, blocked_at TEXT NOT NULL, PRIMARY KEY (provider, record_id));
 CREATE TABLE IF NOT EXISTS sources (

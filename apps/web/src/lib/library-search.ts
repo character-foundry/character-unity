@@ -20,8 +20,11 @@ export interface LibrarySearch {
   minTokens: string;
   /** '' = the page's default order (library: recently edited; Archive: recently updated). */
   sort: string;
+  /** Native Archive-only state. Keep it in shared URL writes so the header cannot discard it. */
+  archiveMode: string;
+  archiveFilter: string;
 }
-export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', favorite: '', source: '', minTokens: '', sort: '' };
+export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', favorite: '', source: '', minTokens: '', sort: '', archiveMode: '', archiveFilter: '' };
 
 export const sortOptions = [
   { value: 'edited', label: 'Recently edited' },
@@ -87,9 +90,12 @@ export function readSearch(params: URLSearchParams): LibrarySearch {
     has: list(params.get('has')),
     fork: fork === 'only' || fork === 'none' ? fork : '',
     favorite: favorite === 'fav' || favorite === 'not_fav' ? favorite : '',
-    source: sourceOptions.some((option) => option.value && option.value === params.get('source')) ? params.get('source')! : '',
-    minTokens: /^[1-9][0-9]{0,6}$/.test(tokens) ? tokens : '',
-    sort: [...sortOptions, ...archiveSortOptions].some((option) => option.value === params.get('sort')) ? params.get('sort')! : '',
+    source: params.has('archiveMode') ? params.get('source') ?? '' : sourceOptions.some((option) => option.value && option.value === params.get('source')) ? params.get('source')! : '',
+    minTokens: params.has('archiveMode') ? tokens : /^[1-9][0-9]{0,7}$/.test(tokens) && Number(tokens) <= 10_000_000 ? tokens : '',
+    // Preserve unavailable Archive options so capability changes never quietly execute another order.
+    sort: params.has('archiveMode') ? params.get('sort') ?? '' : [...sortOptions, ...archiveSortOptions].some((option) => option.value === params.get('sort')) ? params.get('sort')! : '',
+    archiveMode: params.get('archiveMode') ?? '',
+    archiveFilter: params.get('archiveFilter') ?? '',
   };
 }
 export function writeSearch(search: LibrarySearch): URLSearchParams {
@@ -105,21 +111,23 @@ export function writeSearch(search: LibrarySearch): URLSearchParams {
   if (search.source) params.set('source', search.source);
   if (search.minTokens) params.set('minTokens', search.minTokens);
   if (search.sort) params.set('sort', search.sort);
+  if (search.archiveMode) params.set('archiveMode', search.archiveMode);
+  if (search.archiveFilter.trim()) params.set('archiveFilter', search.archiveFilter.trim());
   return params;
 }
 /**
  * Search state backed by the URL. Writes build on the last write, not the last render: router updates can
  * land a render later, and two quick changes (a tag, then a sort) must not drop the first.
  */
-export function useSearchState() {
+export function useSearchState(history: 'replace' | 'push' = 'replace') {
   const [params, setParams] = useSearchParams();
   const latest = useRef(params), seen = useRef(params);
   if (params !== seen.current) { seen.current = params; latest.current = params; }
   const replace = useCallback((next: LibrarySearch) => {
     const written = writeSearch(next);
     latest.current = written;
-    setParams(written, { replace: true });
-  }, [setParams]);
+    setParams(written, { replace: history === 'replace' });
+  }, [setParams, history]);
   const update = useCallback((changes: Partial<LibrarySearch>) => replace({ ...readSearch(latest.current), ...changes }), [replace]);
   return { search: readSearch(params), update, replace };
 }
@@ -135,7 +143,7 @@ let tagVersion = 0;
 const tagListeners = new Set<() => void>();
 /** Call after imports, edits or deletes so tag counts reload. */
 export function libraryChanged() { tagVersion++; for (const listener of tagListeners) listener(); }
-function useLibraryVersion() {
+export function useLibraryVersion() {
   return useSyncExternalStore((listener) => { tagListeners.add(listener); return () => tagListeners.delete(listener); }, () => tagVersion);
 }
 let lastTags: { tag: string; count: number }[] = [];

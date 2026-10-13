@@ -1,4 +1,5 @@
 import { StoreError } from './types.js';
+import type { ArchiveReference, ArchiveReferenceSummary } from './types.js';
 
 /**
  * Library search shared by every store driver. A query is parsed once into a small tree, then compiled to
@@ -150,6 +151,12 @@ export const librarySourceSql = `(CASE
   ELSE 'file' END)`;
 export const libraryTokensSql = '(SELECT m.tokens_total FROM unity_revision_metrics m WHERE m.revision_id = r.id)';
 const greetings = `((CASE WHEN trim(${str('$.data.first_mes')},${blank}) <> '' THEN 1 ELSE 0 END) + ${arrayLength('$.data.alternate_greetings')} + ${arrayLength('$.data.group_only_greetings')})`;
+export const libraryInChatSql = `EXISTS (SELECT 1 FROM unity_chat_placements p WHERE p.card_id = c.id
+  AND p.workspace_id = c.workspace_id AND p.remote_state <> 'missing')`;
+export const archiveReferenceInChatSql = `EXISTS (SELECT 1 FROM unity_archive_chat_placements p
+  JOIN unity_chat_targets t ON t.id = p.target_id AND t.workspace_id = c.workspace_id
+  WHERE p.reference_id = c.id AND p.workspace_id = c.workspace_id
+  AND p.revision_id = c.archive_version_id AND p.remote_state <> 'missing')`;
 
 function termSql(node: Extract<QueryNode, { kind: 'term' }>, params: (string | number)[]): string {
   const value = fold(node.value);
@@ -187,7 +194,7 @@ function cleanTags(tags: readonly string[] | undefined): string[] {
 }
 
 /** WHERE fragments over `c` (unity_cards) joined to `r` (its head revision). */
-export function libraryFilterSql(filter: LibraryFilter): { where: string[]; params: (string | number)[] } {
+export function libraryFilterSql(filter: LibraryFilter, options: { externalForks?: boolean; sourceExpression?: string } = {}): { where: string[]; params: (string | number)[] } {
   const where: string[] = [], params: (string | number)[] = [];
   const query = parseLibraryQuery(filter.q ?? '');
   if (query) where.push(nodeSql(query, params));
@@ -204,19 +211,20 @@ export function libraryFilterSql(filter: LibraryFilter): { where: string[]; para
     gallery: assetTypes(`${assetType} NOT IN ('icon', 'emotion', 'expression')`),
     embeddedImages: `(instr(${imageText}, '![') > 0 OR instr(${imageText}, '<img') > 0)`,
     expressions: `(${assetTypes(`${assetType} IN ('emotion', 'expression')`)} OR ${nonEmptyObject('$.data.extensions.chub.expressions')} OR ${nonEmptyObject('$.data.extensions.expressions')})`,
-    chat: `EXISTS (SELECT 1 FROM unity_chat_placements p WHERE p.card_id = c.id AND p.workspace_id = c.workspace_id AND p.remote_state <> 'missing')`,
+    chat: libraryInChatSql,
     followed: `EXISTS (SELECT 1 FROM unity_followed_creators f WHERE f.workspace_id = c.workspace_id AND f.creator_key = ${creatorKey} AND ${creatorKey} <> '')`,
     portrait: `EXISTS (SELECT 1 FROM unity_revision_assets a WHERE a.revision_id = r.id AND a.path = 'portrait')`,
     systemPrompt: `trim(${str('$.data.system_prompt')},${blank}) <> ''`,
     exampleDialogues: `trim(${str('$.data.mes_example')},${blank}) <> ''`,
   };
   for (const flag of new Set(filter.has ?? [])) where.push(flagSql[flag]);
-  if (filter.fork === 'only') where.push('c.forked_from_revision_id IS NOT NULL');
-  else if (filter.fork === 'none') where.push('c.forked_from_revision_id IS NULL');
+  const isFork = options.externalForks ? `(c.forked_from_revision_id IS NOT NULL OR EXISTS (SELECT 1 FROM unity_archive_fork_sources af WHERE af.card_id = c.id))` : 'c.forked_from_revision_id IS NOT NULL';
+  if (filter.fork === 'only') where.push(isFork);
+  else if (filter.fork === 'none') where.push(`NOT (${isFork})`);
   const favorite = 'EXISTS (SELECT 1 FROM unity_card_favorites v WHERE v.card_id = c.id)';
   if (filter.favorite === 'fav') where.push(favorite);
   else if (filter.favorite === 'not_fav') where.push(`NOT ${favorite}`);
-  if (filter.source) { where.push(`${librarySourceSql} = ?`); params.push(filter.source); }
+  if (filter.source) { where.push(`${options.sourceExpression ?? librarySourceSql} = ?`); params.push(filter.source); }
   if (filter.minTokens) { where.push(`${libraryTokensSql} >= ?`); params.push(filter.minTokens); }
   return { where, params };
 }
@@ -235,6 +243,31 @@ export const librarySortSql: Record<LibrarySort, string> = {
   greetings: `${greetings} DESC, r.created_at DESC, c.id`,
   lorebook: `${arrayLength('$.data.character_book.entries')} DESC, r.created_at DESC, c.id`,
 };
+/** Shared ordering projections for globally paging local cards and Archive links in SQL. */
+export const libraryOrderProjectionSql = { name: str('$.data.name'), greetings, lorebook: arrayLength('$.data.character_book.entries') };
+const referenceDocumentSql = `json_object('data',json_object('name',json_extract(c.summary_json,'$.name'),
+  'creator',json_extract(c.summary_json,'$.creator'),'description',json_extract(c.summary_json,'$.description'),
+  'tags',json(json_extract(c.summary_json,'$.tags'))))`;
+/** Same query language over the intentionally bounded Archive library projection. */
+export function archiveReferenceFilterSql(filter: LibraryFilter): { where: string[]; params: (string | number)[] } {
+  const base = libraryFilterSql({ q: filter.q, tags: filter.tags, tagMode: filter.tagMode, excludeTags: filter.excludeTags });
+  const where = base.where.map((sql) => sql.replaceAll(doc, referenceDocumentSql)), params = [...base.params];
+  for (const flag of new Set(filter.has ?? [])) {
+    if (flag === 'chat') where.push(archiveReferenceInChatSql);
+    else if (flag === 'greetings') where.push(`coalesce(json_extract(c.summary_json,'$.alternateGreetingCount'),json_extract(c.summary_json,'$.greetingCount'),0) > 0`);
+    else if (flag === 'lorebook') where.push(`coalesce(json_extract(c.summary_json,'$.lorebookEntryCount'),0) > 0`);
+    else if (flag === 'followed') where.push(`EXISTS (SELECT 1 FROM unity_followed_creators f WHERE f.workspace_id = c.workspace_id
+      AND f.creator_key = lower(trim(json_extract(c.summary_json,'$.creator'))) AND f.creator_key <> '')`);
+    else if (flag === 'portrait') where.push(`json_extract(c.summary_json,'$.portrait') = 1`);
+    else { where.push(`EXISTS (SELECT 1 FROM json_each(c.summary_json,'$.flags') f WHERE f.value = ?)`); params.push(flag); }
+  }
+  if (filter.fork === 'only') where.push('0');
+  if (filter.favorite === 'fav') where.push('c.favorite = 1');
+  else if (filter.favorite === 'not_fav') where.push('c.favorite = 0');
+  if (filter.source) { where.push(`lower(json_extract(c.summary_json,'$.source')) = ?`); params.push(filter.source); }
+  if (filter.minTokens) { where.push(`json_extract(c.summary_json,'$.tokensTotal') >= ?`); params.push(filter.minTokens); }
+  return { where, params };
+}
 
 // ---- JS (IndexedDB) ----------------------------------------------------------------------------------
 
@@ -252,6 +285,17 @@ export interface LibraryRow {
   /** Live copies in connected chat apps (always false where chat apps do not exist). */
   inChat: boolean;
   tokens: number | null;
+  /** Archive links carry derived counts/flags instead of copying their full document. */
+  summary?: ArchiveReferenceSummary;
+}
+export function archiveReferenceLibraryRow(reference: ArchiveReference, forkCount: number, inChat = false): LibraryRow {
+  const summary = reference.summary;
+  return { cardId: reference.id, cardCreatedAt: reference.createdAt, forkedFromRevisionId: null,
+    revisionCreatedAt: summary.changedAt || reference.createdAt, sequence: summary.versionCount ?? 1,
+    document: { data: { name: summary.name, creator: summary.creator, description: summary.description, tags: summary.tags } },
+    assetPaths: summary.portrait ? ['portrait'] : [], forkCount,
+    provenance: { kind: 'archive', source: { provider: summary.source } }, favorite: reference.favorite, inChat,
+    tokens: summary.tokensTotal, summary };
 }
 
 function data(document: unknown): Record<string, unknown> {
@@ -302,25 +346,25 @@ export function libraryMatcher(filter: LibraryFilter, followed: ReadonlySet<stri
     if (include.length && !(filter.tagMode === 'any' ? include.some((tag) => tags.includes(tag)) : include.every((tag) => tags.includes(tag)))) return false;
     if (exclude.some((tag) => tags.includes(tag))) return false;
     const book = fields.character_book as { entries?: unknown } | null | undefined;
-    if (flags.has('lorebook') && !(length(book?.entries) > 0)) return false;
-    if (flags.has('greetings') && !(length(fields.alternate_greetings) > 0)) return false;
+    if (flags.has('lorebook') && !(row.summary ? (row.summary.lorebookEntryCount ?? 0) > 0 : length(book?.entries) > 0)) return false;
+    if (flags.has('greetings') && !(row.summary ? (row.summary.alternateGreetingCount ?? row.summary.greetingCount ?? 0) > 0 : length(fields.alternate_greetings) > 0)) return false;
     if (flags.has('portrait') && !row.assetPaths.includes('portrait')) return false;
     const assets = Array.isArray(fields.assets) ? fields.assets.filter((asset): asset is Record<string, unknown> => !!asset && typeof asset === 'object' && !Array.isArray(asset)) : [];
     const types = assets.map((asset) => text(asset.type));
-    if (flags.has('gallery') && !types.some((type) => !['icon', 'emotion', 'expression'].includes(type))) return false;
+    if (flags.has('gallery') && !(row.summary ? row.summary.flags.includes('gallery') : types.some((type) => !['icon', 'emotion', 'expression'].includes(type)))) return false;
     if (flags.has('expressions')) {
       const extensions = (fields.extensions ?? {}) as { chub?: { expressions?: unknown }; expressions?: unknown };
-      if (!types.some((type) => type === 'emotion' || type === 'expression') && !nonEmpty(extensions.chub?.expressions) && !nonEmpty(extensions.expressions)) return false;
+      if (row.summary ? !row.summary.flags.includes('expressions') : !types.some((type) => type === 'emotion' || type === 'expression') && !nonEmpty(extensions.chub?.expressions) && !nonEmpty(extensions.expressions)) return false;
     }
     if (flags.has('embeddedImages')) {
       const images = [...['description', 'first_mes', 'creator_notes', 'scenario', 'personality', 'mes_example'].map((key) => text(fields[key])),
         ...(Array.isArray(fields.alternate_greetings) ? fields.alternate_greetings.filter((item): item is string => typeof item === 'string').map(fold) : [])].join('\n');
-      if (!images.includes('![') && !images.includes('<img')) return false;
+      if (row.summary ? !row.summary.flags.includes('embeddedImages') : !images.includes('![') && !images.includes('<img')) return false;
     }
     if (flags.has('chat') && !row.inChat) return false;
     if (flags.has('followed')) { const key = trimSpaces(text(fields.creator)); if (!key || !followed.has(key)) return false; }
-    if (flags.has('systemPrompt') && !trimBlank(text(fields.system_prompt))) return false;
-    if (flags.has('exampleDialogues') && !trimBlank(text(fields.mes_example))) return false;
+    if (flags.has('systemPrompt') && !(row.summary ? row.summary.flags.includes('systemPrompt') : trimBlank(text(fields.system_prompt)))) return false;
+    if (flags.has('exampleDialogues') && !(row.summary ? row.summary.flags.includes('exampleDialogues') : trimBlank(text(fields.mes_example)))) return false;
     if (filter.fork === 'only' && row.forkedFromRevisionId === null) return false;
     if (filter.fork === 'none' && row.forkedFromRevisionId !== null) return false;
     if (filter.favorite === 'fav' && !row.favorite) return false;
@@ -338,10 +382,11 @@ export function libraryComparator(sort: LibrarySort): (a: LibraryRow, b: Library
   const id = (a: LibraryRow, b: LibraryRow) => compare(a.cardId, b.cardId);
   const name = (row: LibraryRow) => text(data(row.document).name);
   const greetingCount = (row: LibraryRow) => {
+    if (row.summary) return row.summary.greetingCount ?? 0;
     const fields = data(row.document);
     return (trimBlank(text(fields.first_mes)) ? 1 : 0) + length(fields.alternate_greetings) + length(fields.group_only_greetings);
   };
-  const entries = (row: LibraryRow) => length((data(row.document).character_book as { entries?: unknown } | null | undefined)?.entries);
+  const entries = (row: LibraryRow) => row.summary ? row.summary.lorebookEntryCount ?? 0 : length((data(row.document).character_book as { entries?: unknown } | null | undefined)?.entries);
   const numeric = (value: (row: LibraryRow) => number) => (a: LibraryRow, b: LibraryRow) => value(b) - value(a) || edited(a, b) || id(a, b);
   switch (sort) {
     case 'added': return (a, b) => compare(b.cardCreatedAt, a.cardCreatedAt) || id(a, b);

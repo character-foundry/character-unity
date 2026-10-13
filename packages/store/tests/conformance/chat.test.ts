@@ -72,4 +72,36 @@ for (const adapter of ['sqlite', 'd1']) describe(`chat contract / ${adapter}`, (
     expect(await chat.resolveRevision(ws, { revisionHash: '9'.repeat(64), contentHash: 'e'.repeat(64) })).toBeNull();
     expect(await chat.resolveRevision('elsewhere', { revisionHash: '3'.repeat(64), contentHash: 'd'.repeat(64) })).toBeNull();
   });
+
+  it('[C04] tracks reference placements without owned copies, retains rediscovery receipts and cascades unlinking', async () => {
+    const target = await chat.addTarget({ workspaceId: ws, kind: 'sillytavern', name: 'ST', baseUrl: 'http://st.lan:9000', credentials: {} });
+    const reference = await store.addArchiveReference({ workspaceId: ws, pin: { archiveId: 'archive', cardId: 'original', versionId: 'version-3' },
+      summary: { name: 'Aster', creator: 'Maker', description: '', tags: [], source: 'chub', format: 'json', changedAt: '2026-10-13', portrait: false, tokensTotal: null, flags: [] } });
+    const identity = { sequence: 3, contentHash: 'a'.repeat(64), revisionHash: 'b'.repeat(64) };
+    const observed = { remoteId: 'Aster.png', remoteName: 'Aster', cardId: reference.id, revisionId: 'version-3', edited: false, sent: true, reference: identity };
+    await chat.recordPlacements(ws, target.id, [observed], { complete: false });
+    expect((await chat.placements(ws, [reference.id]))[0]).toMatchObject({ cardId: reference.id, status: 'current', revisionId: 'version-3', revisionSequence: 3, headSequence: 3, reference: identity });
+    expect(await store.listCards(ws)).toEqual([]);
+    expect(await driver.query({ sql: 'SELECT id FROM unity_revisions' })).toEqual([]);
+    expect(await chat.placements('elsewhere')).toEqual([]);
+    const match = { revisionHash: identity.revisionHash, contentHash: identity.contentHash };
+    expect(await chat.resolveRevision(ws, match)).toEqual({ id: 'version-3', cardId: reference.id, reference: identity });
+    expect(await chat.resolveRevision('elsewhere', match)).toBeNull();
+
+    await chat.recordPlacements(ws, target.id, [{ ...observed, remoteId: 'renamed.png', edited: true }], { complete: true });
+    expect((await chat.placements(ws)).map((item) => [item.remoteId, item.status])).toEqual([['renamed.png', 'edited'], ['Aster.png', 'missing']]);
+    await chat.recordPlacements(ws, target.id, [], { complete: false, error: 'offline' });
+    expect((await chat.placements(ws)).map((item) => item.status)).toEqual(['edited', 'missing']);
+    await chat.forgetPlacement(ws, target.id, 'renamed.png');
+    await chat.forgetPlacement(ws, target.id, 'Aster.png');
+    expect(await chat.placements(ws)).toEqual([]);
+    expect(await chat.resolveRevision(ws, match)).toMatchObject({ cardId: reference.id });
+    await chat.recordPlacements(ws, target.id, [observed], { complete: false });
+    await expect(chat.recordPlacements(ws, target.id, [{ ...observed, revisionId: 'wrong-version' }], { complete: false })).rejects.toThrow();
+    expect((await chat.placements(ws))[0]).toMatchObject({ revisionId: 'version-3' });
+    await store.removeArchiveReference(ws, reference.id);
+    expect(await chat.placements(ws)).toEqual([]);
+    expect(await chat.resolveRevision(ws, match)).toBeNull();
+    await chat.removeTarget(ws, target.id);
+  });
 });

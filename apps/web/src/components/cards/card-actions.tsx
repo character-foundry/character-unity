@@ -64,14 +64,14 @@ export function FollowButton({ creator }: { creator: string }) {
 }
 
 /** Deletes a card from the library after confirmation. */
-export function DeleteCardButton({ cardId, name, onDeleted, className }: { cardId: string; name: string; onDeleted: () => void; className?: string }) {
+export function DeleteCardButton({ cardId, name, reference = false, onDeleted, className }: { cardId: string; name: string; reference?: boolean; onDeleted: () => void; className?: string }) {
   const [busy, setBusy] = useState(false);
   const request = useRef(0);
   useEffect(() => { request.current++; setBusy(false); return () => { request.current++; }; }, [cardId]);
   return (
     <button type="button" disabled={busy}
       onClick={async () => {
-        if (!window.confirm(`Delete “${name}” from the library? Copies already sent to chat apps stay there.`)) return;
+        if (!window.confirm(reference ? `Remove the library link to “${name}”? Its archived original and files stay in Archive.` : `Delete “${name}” from the library? Copies already sent to chat apps stay there.`)) return;
         setBusy(true);
         const generation = ++request.current;
         try { await deleteCard(cardId); libraryChanged(); if (request.current === generation) onDeleted(); }
@@ -81,7 +81,7 @@ export function DeleteCardButton({ cardId, name, onDeleted, className }: { cardI
       <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
       </svg>
-      {busy ? 'Deleting…' : 'Delete'}
+      {busy ? (reference ? 'Removing…' : 'Deleting…') : reference ? 'Remove from library' : 'Delete'}
     </button>
   );
 }

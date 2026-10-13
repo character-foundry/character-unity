@@ -10,6 +10,8 @@ import type { ChatKind } from '@character-unity/chat-apps';
 import type { CardDocument } from '@character-unity/store';
 import { createCardService } from '../src/index.js';
 import { createChatService } from '../src/chat.js';
+import { createNativeArchiveReader } from '../src/native-reader.js';
+import { hashBytes } from '@character-foundry/character-foundry/identity';
 
 const alice = { id: 'alice', uri: 'urn:unity:user:alice' };
 const card = (name: string, description: string): CardDocument => ({ spec: 'chara_card_v2', spec_version: '2.0', data: {
@@ -97,13 +99,14 @@ describe.each<{ kind: ChatKind; credentials: Record<string, string> }>([
   let directory: string;
   let database: Awaited<ReturnType<typeof openNodeStore>>;
   let cards: ReturnType<typeof createCardService>;
+  let assets: ReturnType<typeof createAssetService>;
   let chat: ReturnType<typeof createChatService>;
   let lumi: ReturnType<typeof fakeLumiverse>, marinara: ReturnType<typeof fakeMarinara>;
   let workspaceId: string;
   beforeEach(async () => {
     directory = await mkdtemp(join(tmpdir(), 'unity-chat-'));
     database = await openNodeStore(':memory:');
-    const assets = createAssetService(database.store, await createNodeBlobStore(directory));
+    assets = createAssetService(database.store, await createNodeBlobStore(directory));
     cards = createCardService(database.store, assets);
     lumi = fakeLumiverse({ auth: true }); marinara = fakeMarinara();
     chat = createChatService(database.store, database.chat, assets, (connection) => createChatApp(connection, kind === 'lumiverse' ? lumi.fetcher : marinara.fetcher));
@@ -166,6 +169,37 @@ describe.each<{ kind: ChatKind; credentials: Record<string, string> }>([
     expect(await chat.placements(alice, workspaceId, [imported.card.id])).toEqual([]);
     expect(await chat.scan(alice, workspaceId, target.id)).toEqual({ found: 1 });
     expect((await chat.placements(alice, workspaceId, [imported.card.id]))[0]).toMatchObject({ remoteId: sent.remoteId, status: 'current' });
+  });
+
+  it('sends and checks Archive references through the field-app fingerprint path without creating owned revisions', async () => {
+    const bytes = new TextEncoder().encode(JSON.stringify(card('Archived Aster', 'Kept only in Archive.'))), hash = await hashBytes(bytes);
+    const archive = createNativeArchiveReader({ origin: 'http://archive.test', async fetch(input) {
+      const url = new URL(input);
+      if (url.pathname === '/api/archive/v2/cards/source' && url.searchParams.get('version') === 'pinned') {
+        return Response.json({ archiveId: 'archive', id: 'source', provider: 'chub', recordId: 'source', url: 'https://chub.test/source',
+          name: 'Archived Aster', versionId: 'pinned', versionList: [{ id: 'pinned', sequence: 2,
+            objects: [{ role: 'card', name: 'card.json', sha256: hash, byteLength: bytes.length, mediaType: 'application/json' }] }] });
+      }
+      if (url.pathname === `/api/archive/v2/objects/${hash}`) return new Response(new Uint8Array(bytes));
+      return new Response('', { status: 404 });
+    } });
+    cards = createCardService(database.store, assets, { archive });
+    chat = createChatService(database.store, database.chat, assets, (connection) => createChatApp(connection, kind === 'lumiverse' ? lumi.fetcher : marinara.fetcher), { archive });
+    const reference = await cards.addArchiveReference(alice, workspaceId, 'source', 'pinned');
+    const target = await chat.addTarget(alice, workspaceId, { kind, baseUrl: `http://${kind}.test:7000`, credentials });
+    const sent = await chat.send(alice, workspaceId, reference.id, target.id);
+    expect(sent).toMatchObject({ cardId: reference.id, revisionId: 'pinned', status: 'current', reference: { sequence: 2 } });
+    expect(sent.fingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(await chat.scan(alice, workspaceId, target.id)).toEqual({ found: 1 });
+    expect((await chat.placements(alice, workspaceId, [reference.id]))[0]).toMatchObject({ status: 'current' });
+    await chat.forget(alice, workspaceId, target.id, sent.remoteId);
+    expect(await chat.scan(alice, workspaceId, target.id)).toEqual({ found: 1 });
+    editInApp(sent.remoteId);
+    await chat.scan(alice, workspaceId, target.id);
+    expect((await chat.placements(alice, workspaceId, [reference.id]))[0]).toMatchObject({ status: 'edited' });
+    await expect(chat.send(alice, workspaceId, reference.id, target.id)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    expect(await chat.send(alice, workspaceId, reference.id, target.id, { overwriteEdited: true })).toMatchObject({ remoteId: sent.remoteId, status: 'current' });
+    expect(await database.store.listCards(workspaceId)).toEqual([]);
   });
 });
 

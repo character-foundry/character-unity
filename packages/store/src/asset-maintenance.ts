@@ -9,7 +9,8 @@ const columns = `a.id, a.workspace_id AS workspaceId, a.content_hash AS hash, a.
   a.media_type AS mediaType, a.storage_key AS storageKey, a.state, l.created_at AS createdAt`;
 const unused = `NOT EXISTS (SELECT 1 FROM unity_revision_assets WHERE asset_id = a.id)
   AND NOT EXISTS (SELECT 1 FROM unity_card_sources WHERE asset_id = a.id)
-  AND NOT EXISTS (SELECT 1 FROM unity_sync_outbox WHERE asset_id = a.id)`;
+  AND NOT EXISTS (SELECT 1 FROM unity_sync_outbox WHERE asset_id = a.id)
+  AND NOT EXISTS (SELECT 1 FROM unity_archive_assets WHERE asset_id = a.id)`;
 function date(value: string) {
   if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) {
     throw new StoreError('INVALID_INPUT', 'Use a canonical UTC timestamp, for example 2026-10-01T00:00:00.000Z');

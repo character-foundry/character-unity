@@ -100,7 +100,7 @@ for (const adapter of ['sqlite', 'worker']) describe(`signed publication sync / 
   afterEach(async () => { await close?.(); if (root) await rm(root, { recursive: true, force: true }); });
 
   async function publish(visibility: 'public' | 'private' | 'members' = 'public', attachment = false) {
-    const document = { spec: 'chara_card_v3', spec_version: '3.0', data: { name: 'Signed Aster', description: 'Verified', extensions: { opaque: [0, false] } } };
+    const document = { spec: 'chara_card_v3', spec_version: '3.0', data: { name: 'Signed Aster', description: `Verified ${visibility} ${attachment ? 'with notes' : 'plain'}`, extensions: { opaque: [0, false] } } };
     const imported = await json<{ card: { id: string }; revision: { id: string } }>(await browser(`workspaces/${workspaceId}/imports`, alice, 'POST', document), 201);
     let revisionId = imported.revision.id;
     const bytes = 'Signed publication attachment\n';

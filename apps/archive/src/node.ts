@@ -9,7 +9,8 @@ import { createScheduler } from './native/scheduler.js';
 import { createNativeArchiveApp } from './native/app.js';
 import { sources } from './sources/index.js';
 import { openExistingArchive } from './existing/store.js';
-import { openExistingSearch } from './existing/search.js';
+import { openExistingSearch, readExistingVectorMetadata } from './existing/search.js';
+import { openLibraryIndex } from './library-index.js';
 
 const port = Number(process.env.PORT ?? 9313);
 if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -38,7 +39,11 @@ const lanceDirectory = process.env.UNITY_ARCHIVE_LANCE_DIR;
 const readOnly = process.env.UNITY_ARCHIVE_READ_ONLY === '1';
 if (process.env.UNITY_ARCHIVE_READ_ONLY !== undefined && !['0', '1'].includes(process.env.UNITY_ARCHIVE_READ_ONLY)) throw new Error('UNITY_ARCHIVE_READ_ONLY must be 0 or 1');
 if (readOnly && mode !== 'existing') throw new Error('UNITY_ARCHIVE_READ_ONLY=1 requires existing Archive mode');
-const documentEmbedder = mode === 'existing' && !readOnly && embeddingConfig ? createDocumentEmbedder(embeddingOptions, process.env.UNITY_ARCHIVE_EMBEDDING_KEY ?? '') : undefined;
+const libraryIndexEnabled = process.env.UNITY_ARCHIVE_LIBRARY_INDEX === '1';
+if (process.env.UNITY_ARCHIVE_LIBRARY_INDEX !== undefined && !['0', '1'].includes(process.env.UNITY_ARCHIVE_LIBRARY_INDEX)) throw new Error('UNITY_ARCHIVE_LIBRARY_INDEX must be 0 or 1');
+if (libraryIndexEnabled && mode !== 'existing') throw new Error('Library indexing requires existing Archive mode and its shared LanceDB');
+if (libraryIndexEnabled && (!lanceDirectory || !adminToken)) throw new Error('Library indexing requires UNITY_ARCHIVE_LANCE_DIR and UNITY_ARCHIVE_ADMIN_TOKEN');
+const documentEmbedder = mode === 'existing' && (!readOnly || libraryIndexEnabled) && embeddingConfig ? createDocumentEmbedder(embeddingOptions, process.env.UNITY_ARCHIVE_EMBEDDING_KEY ?? '') : undefined;
 if (mode === 'existing' && (!databasePath || !filesDirectory || (!readOnly && !objectsDirectory))) {
   throw new Error('Existing Archive mode requires UNITY_ARCHIVE_DATABASE_PATH, UNITY_ARCHIVE_FILES_DIR and, for writes, UNITY_ARCHIVE_OBJECT_DIR');
 }
@@ -48,6 +53,9 @@ const search = mode === 'existing' && lanceDirectory ? await openExistingSearch(
   ...(process.env.UNITY_ARCHIVE_VECTOR_TABLE ? { vectorTableName: process.env.UNITY_ARCHIVE_VECTOR_TABLE } : {}),
   ...(embedder ? { embedder } : {}),
 }) : undefined;
+const libraryIndex = libraryIndexEnabled ? await openLibraryIndex({ lanceDirectory: lanceDirectory!, space: readExistingVectorMetadata(databasePath!),
+  ...(embedder ? { queryEmbedder: embedder } : {}), ...(documentEmbedder ? { documentEmbedder } : {}),
+}) : undefined;
 let native;
 try {
   native = mode === 'native' ? await openNativeArchive(dataDirectory!) : mode === 'existing' ? await openExistingArchive({
@@ -55,9 +63,10 @@ try {
     ...(objectsDirectory ? { objectsDirectory } : {}), readOnly,
     ...(search ? { search } : {}),
     ...(documentEmbedder ? { documentEmbedder } : {}),
+    ...(libraryIndex ? { libraryIndex } : {}),
     ...(process.env.UNITY_ARCHIVE_LEGACY_ROOT ? { legacyRoot: process.env.UNITY_ARCHIVE_LEGACY_ROOT } : {}),
   }) : undefined;
-} catch (error) { search?.close(); throw error; }
+} catch (error) { search?.close(); await libraryIndex?.close(); throw error; }
 const scheduler = native ? createScheduler(native, sources, {
   log: (event) => console.log(JSON.stringify(event)),
   ...('flushSearchQueue' in native ? { onFinished: async (signal: AbortSignal) => {
@@ -70,7 +79,7 @@ const scheduler = native ? createScheduler(native, sources, {
   } } : {}),
 }) : undefined;
 const app = native && scheduler
-  ? createNativeArchiveApp(native, scheduler, sources, adminToken ? { adminToken } : {})
+  ? createNativeArchiveApp(native, scheduler, sources, { ...(adminToken ? { adminToken } : {}), ...(libraryIndex ? { libraryIndex } : {}) })
   : createArchiveApp(source, { readOrigins: (process.env.UNITY_ARCHIVE_READ_ORIGINS ?? '').split(',').map((value) => value.trim()).filter(Boolean) });
 if (scheduler && !readOnly && process.env.UNITY_ARCHIVE_SCHEDULE !== 'off') scheduler.begin();
 const server = serve({ fetch: app.fetch, hostname, port }, (address) => {

@@ -123,7 +123,47 @@ describe('native Archive service', () => {
     expect((await app.request(`${nativeReadPrefix}/cards?sort=bogus`)).status).toBe(400);
     expect((await app.request(`${nativeReadPrefix}/cards?limit=500`)).status).toBe(400);
     expect((await app.request(`${nativeReadPrefix}/cards?nope=1`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=semantic`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=browse&q=forest`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=browse`)).status).toBe(200);
+    expect((await app.request(`${nativeReadPrefix}/cards?mode=browse&filter=name%20%3D%20forest`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?snapshot=bad`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?offset=1`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?filter=a&filter=b`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards?q=${'a'.repeat(2001)}`)).status).toBe(400);
     expect((await app.request(`${nativeReadPrefix}/objects/abc`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/identity`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/identity?fileHash=abc`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/identity?fileHash=${'a'.repeat(64)}&fileHash=${'b'.repeat(64)}`)).status).toBe(400);
+    expect((await app.request(`${nativeReadPrefix}/cards/demo:aster?version=a&version=b`)).status).toBe(400);
     expect((await app.request(`${nativeReadPrefix}/cards?q=tag:demo&has=greetings,lorebook&match=any&minTokens=10`)).status).toBe(200);
+  });
+
+  it('exposes exact versions and bounded byte-first identity matches through read-only routes', async () => {
+    const { app } = setup();
+    await archive.put({ provider: 'demo', recordId: 'aster', url: 'https://demo.test/aster', objects: [{ role: 'card', bytes: cardBytes('Aster'), mediaType: 'application/json' }] });
+    const first = await archive.card('demo:aster');
+    const file = first.versionList[0]!.objects.find((object) => object.role === 'card')!;
+    await archive.put({ provider: 'demo', recordId: 'aster', url: 'https://demo.test/aster', objects: [{ role: 'card', bytes: cardBytes('Changed'), mediaType: 'application/json' }] });
+    const pinned = await app.request(`${nativeReadPrefix}/cards/demo:aster?version=${first.versionId}`);
+    expect(pinned.status).toBe(200);
+    expect(await pinned.json()).toMatchObject({ archiveId: archive.archiveId, versionId: first.versionId, document: { data: { name: 'Aster' } } });
+    const identity = await app.request(`${nativeReadPrefix}/identity?fileHash=${file.sha256}`);
+    expect(await identity.json()).toMatchObject({ archiveId: archive.archiveId, complete: true, matches: [{ cardId: 'demo:aster', versionId: first.versionId, matchedBy: 'bytes' }] });
+    const files = await app.request(`${nativeReadPrefix}/cards/demo:aster/files?version=${first.versionId}`);
+    expect(await files.json()).toMatchObject({ files: [{ sha256: file.sha256 }] });
+    expect((await app.request(`${nativeReadPrefix}/cards/demo:aster?version=unknown`)).status).toBe(404);
+  });
+
+  it('rejects stale and changed-query paging receipts with 409 instead of mixing result pages', async () => {
+    const { app, admin, scheduler } = setup();
+    await admin('/sources/demo/runs', { method: 'POST' });
+    await scheduler.settled('demo');
+    const first = await (await app.request(`${nativeReadPrefix}/cards?sort=name&limit=1`)).json() as { snapshot: string };
+    expect(first.snapshot).toMatch(/^[a-f0-9]{64}$/);
+    expect((await app.request(`${nativeReadPrefix}/cards?sort=name&limit=1&offset=1&snapshot=${first.snapshot}`)).status).toBe(200);
+    expect((await app.request(`${nativeReadPrefix}/cards?sort=updated&snapshot=${first.snapshot}`)).status).toBe(409);
+    await admin('/cards/demo:aster/block', { method: 'POST', body: '{}' });
+    expect((await app.request(`${nativeReadPrefix}/cards?sort=name&offset=1&snapshot=${first.snapshot}`)).status).toBe(409);
   });
 });

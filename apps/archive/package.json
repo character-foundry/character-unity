@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/node.ts",
-    "build": "esbuild src/node.ts src/native-rehearsal.ts src/generation-cli.ts --bundle --external:better-sqlite3 --external:@lancedb/lancedb --external:apache-arrow --platform=node --target=node24 --format=esm --outdir=dist",
+    "build": "esbuild src/node.ts src/native-rehearsal.ts src/generation-cli.ts src/identity-cli.ts --bundle --external:better-sqlite3 --external:@lancedb/lancedb --external:apache-arrow --platform=node --target=node24 --format=esm --outdir=dist",
     "index": "tsx src/generation-cli.ts",
+    "identity": "tsx src/identity-cli.ts",
     "start": "node dist/node.js",
     "build:e2e": "esbuild tests/browser-fixture-cli.ts --bundle --external:better-sqlite3 --external:@lancedb/lancedb --external:apache-arrow --platform=node --target=node24 --format=esm --outdir=dist",
     "type-check": "tsc -p tsconfig.json"
@@ -14,6 +15,7 @@
   "dependencies": {
     "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
     "@character-unity/archive-client": "workspace:*",
+    "@character-unity/cards": "workspace:*",
     "@character-unity/scraper-kit": "workspace:*",
     "@character-unity/store": "workspace:*",
     "@hono/node-server": "2.1.4",

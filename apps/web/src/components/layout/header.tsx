@@ -18,16 +18,17 @@ export function Header() {
   const navigate = useNavigate();
   const onLibrary = libraryPaths.has(location.pathname);
   const current = onLibrary ? readSearch(new URLSearchParams(location.search)) : null;
-  // On the library the box searches live and keeps the bar's filters; elsewhere it opens the library.
+  // Archive searches submit explicitly: typing must not issue embedding requests.
   const commit = useCallback((value: string) => {
     if (!onLibrary) return;
     const next = writeSearch({ ...readSearch(new URLSearchParams(window.location.search)), q: value }).toString();
-    navigate(`${location.pathname}${next ? `?${next}` : ''}`, { replace: true });
+    navigate(`${location.pathname}${next ? `?${next}` : ''}`, { replace: location.pathname !== '/archive' });
   }, [onLibrary, navigate, location.pathname]);
-  const [text, setText] = useDebouncedText(current?.q ?? '', commit);
+  const commitLive = useCallback((value: string) => { if (location.pathname !== '/archive') commit(value); }, [commit, location.pathname]);
+  const [text, setText] = useDebouncedText(current?.q ?? '', commitLive);
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
-  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null);
+  const [notice, setNotice] = useState<{ text: string; error: boolean; existing: { id: string; name: string }[] } | null>(null);
   const mobileNav = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
@@ -60,13 +61,17 @@ export function Header() {
 
   async function importFiles(files: FileList) {
     setBusy(true); setNotice(null);
-    let imported = 0; const failed: string[] = [];
+    let imported = 0; const failed: string[] = [], existing: { id: string; name: string }[] = [];
     for (const file of Array.from(files)) {
-      try { await importFile(file); imported += 1; } catch { failed.push(file.name); }
+      try {
+        const result = await importFile(file);
+        if (result.import.created && result.import.match !== 'archive') imported += 1;
+        else existing.push({ id: result.card.id, name: file.name });
+      } catch (failure) { failed.push(`${file.name}: ${failure instanceof Error ? failure.message : 'Import failed'}`); }
     }
     setBusy(false); libraryChanged();
-    setNotice({ text: `Imported ${imported} card${imported === 1 ? '' : 's'}.${failed.length ? ` Could not import: ${failed.join(', ')}` : ''}`, error: failed.length > 0 });
-    setTimeout(() => setNotice(null), failed.length ? 10_000 : 4000);
+    setNotice({ text: `Imported ${imported} card${imported === 1 ? '' : 's'}.${existing.length ? ` Already have ${existing.length}; no duplicate stored.` : ''}${failed.length ? ` Could not import: ${failed.join(', ')}` : ''}`, error: failed.length > 0, existing });
+    setTimeout(() => setNotice(null), failed.length || existing.length ? 10_000 : 4000);
   }
 
   return (
@@ -107,7 +112,7 @@ export function Header() {
         <svg className="pointer-events-none absolute left-2.5 h-4 w-4 text-starlight/40" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
         </svg>
-        <input ref={searchInput} type="search" aria-label={location.pathname === '/archive' ? 'Search the Archive' : 'Search the library'} placeholder="Search characters, creators, tags…" value={text}
+        <input ref={searchInput} type="search" aria-label={location.pathname === '/archive' ? 'Search the Archive' : 'Search the library'} placeholder={location.pathname === '/archive' ? 'Search the Archive — press Enter' : 'Search characters, creators, tags…'} value={text}
           onChange={(event) => setText(event.target.value)} style={bare}
           className="h-full min-w-0 w-full pl-8 pr-2 text-[13px] text-starlight placeholder:text-starlight/40 sm:pr-14" />
         <kbd className="pointer-events-none absolute right-2 hidden rounded border border-nebula/25 px-1.5 text-[10px] text-starlight/40 sm:block">Ctrl K</kbd>
@@ -133,8 +138,9 @@ export function Header() {
         </Link>
       </div>
       {notice && (
-        <div role={notice.error ? 'alert' : 'status'} className={cn('fixed bottom-4 right-4 z-[200] max-w-[calc(100vw-2rem)] rounded-lg px-4 py-3 text-sm text-white shadow-lg', notice.error ? 'bg-red-600' : 'bg-emerald-600')}>
-          {notice.text}
+        <div role={notice.error ? 'alert' : 'status'} className={cn('fixed bottom-4 right-4 z-[200] max-w-[calc(100vw-2rem)] break-words rounded-lg px-4 py-3 text-sm text-white shadow-lg', notice.error ? 'bg-red-600' : 'bg-emerald-600')}>
+          <p>{notice.text}</p>
+          {notice.existing.length > 0 && <ul className="mt-2 space-y-1">{notice.existing.map((card, index) => <li key={`${card.id}:${index}`}><Link to={`/card/${encodeURIComponent(card.id)}`} className="underline"><span className="text-white">Open existing: {card.name}</span></Link></li>)}</ul>}
         </div>
       )}
     </header>

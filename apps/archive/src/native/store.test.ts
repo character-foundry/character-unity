@@ -91,6 +91,30 @@ describe('native Archive store', () => {
     expect(archive.list().total).toBe(1);
   });
 
+  it('reads an exact historical version and deduplicates bytes before content without merging source records', async () => {
+    await archive.put(scraped('1'));
+    const first = await archive.card('chub:1');
+    const original = first.versionList[0]!.objects.find((object) => object.role === 'card')!;
+    await archive.put(scraped('1', { name: 'Latest title', tags: ['Latest'], description: 'Changed after favoriting.' }));
+    await archive.put(scraped('2'));
+    const pinned = await archive.card('chub:1', first.versionId);
+    expect(pinned.versionId).toBe(first.versionId);
+    expect(pinned).toMatchObject({ name: 'Aster', tags: [], changedAt: first.versionList[0]!.fetchedAt, remoteUpdatedAt: first.versionList[0]!.remoteUpdatedAt });
+    expect((pinned.document as { data: { description: string } }).data.description).toBe('A map keeper.');
+    const duplicate = await archive.identity({ fileHash: original.sha256 });
+    expect(duplicate).toMatchObject({ archiveId: archive.archiveId, complete: true });
+    expect(duplicate.matches.map((match) => [match.cardId, match.versionId, match.matchedBy])).toEqual([
+      ['chub:1', first.versionId, 'bytes'], ['chub:2', (await archive.card('chub:2')).versionId, 'bytes'],
+    ]);
+    expect(duplicate.matches[0]!.contentHash).toMatch(/^[a-f0-9]{64}$/);
+    const byContent = await archive.identity({ fileHash: 'a'.repeat(64), contentHash: duplicate.matches[0]!.contentHash! });
+    expect(byContent.matches.map((match) => match.matchedBy)).toEqual(['content', 'content']);
+    expect(archive.list().total).toBe(2);
+    await expect(archive.card('chub:2', first.versionId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    archive.block('chub', '1');
+    expect((await archive.identity({ fileHash: original.sha256 })).matches.map((match) => match.cardId)).toEqual(['chub:2']);
+  });
+
   it('never replaces a real portrait with a placeholder', async () => {
     const real = png(800, 1200, 60_000), fuzz = png(240, 240, 20_000);
     await archive.put(scraped('1', {}, { objects: [{ role: 'card', bytes: cardJson({}), mediaType: 'application/json' }, { role: 'portrait', bytes: real, mediaType: 'image/png' }] }));
@@ -99,6 +123,15 @@ describe('native Archive store', () => {
     const after = archive.list().cards[0]!;
     expect(after.versions).toBe(2);
     expect(after.portrait).toBe(before);
+  });
+
+  it('reports unresolved same-name content without blocking imports of unrelated names', async () => {
+    await archive.put(scraped('1', { name: 'External image card', assets: [{ type: 'icon', name: 'missing', ext: 'png', uri: 'https://images.test/missing.png' }] }));
+    expect(await archive.identity({ contentHash: 'b'.repeat(64), name: 'Unrelated card' })).toMatchObject({ matches: [], complete: true, unresolved: 0 });
+    expect(await archive.identity({ contentHash: 'b'.repeat(64), name: 'External image card' })).toMatchObject({ matches: [], complete: false, unresolved: 1 });
+    expect(await archive.identity({ contentHash: 'b'.repeat(64) })).toMatchObject({ complete: false, unresolved: 1 });
+    const ref = (await archive.card('chub:1')).versionList[0]!.objects.find((object) => object.role === 'card')!;
+    expect(await archive.identity({ fileHash: ref.sha256 })).toMatchObject({ complete: true, matches: [{ contentHash: null, matchedBy: 'bytes' }] });
   });
 
   it('refuses unreadable card files and malformed records without storing a card', async () => {

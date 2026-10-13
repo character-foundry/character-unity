@@ -18,11 +18,14 @@ import { SyncCommandError, SyncReadError } from '@character-foundry/character-fo
 import type { NativeArchiveService } from '@character-unity/cards/native-archive';
 import { NativeArchiveUnavailable } from '@character-unity/cards/native-archive';
 import { nativeArchiveRoutes } from './archive-native.js';
+import { libraryIndexRoutes } from './library-index.js';
+import type { LibraryIndexService } from './library-index.js';
+export type { LibraryIndexService, LibraryIndexStatus } from './library-index.js';
 
 /** Shared Architect/hub API. Hosts supply storage, card operations and authentication. */
 export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; nativeArchive?: NativeArchiveService; hub?: HubService;
   /** Largest upload body (card file or asset form); hosted profiles pass hostedUploadByteLimit. */
-  uploadByteLimit?: number; remotes?: RemoteConnectionsService; chat?: ChatService; authenticate?: Authenticate } = {}) {
+  uploadByteLimit?: number; remotes?: RemoteConnectionsService; chat?: ChatService; libraryIndex?: LibraryIndexService; authenticate?: Authenticate } = {}) {
   const app = new Hono();
   app.onError((error, c) => {
     if (error instanceof SyncCommandError || error instanceof SyncReadError) {
@@ -55,6 +58,7 @@ export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; card
   });
   if (options.chat) app.route('/api/workspaces', chatRoutes(options));
   if (options.nativeArchive) app.route('/api/workspaces', nativeArchiveRoutes(options));
+  if (options.libraryIndex) app.route('/api/workspaces', libraryIndexRoutes(options));
   app.route('/api/workspaces', cardRoutes(options));
   app.route('/api/hub', hubRoutes(options));
   app.route('/api/remotes', remoteRoutes(options));

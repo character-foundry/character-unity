@@ -10,8 +10,15 @@
   Do not point the separate native prototype at live Archive paths. Live writer
   takeover requires coordinating the old scheduler/index workers/optimizer first.
   See `docs/adr/0001-existing-archive-and-library-references.md`. Finish the Archive
-  foundation before live takeover; editor/import cleanup is authorized while takeover is on hold. Unity favorites will be references
-  and changed saves will create forks, without duplicating original files.
+  foundation before live takeover; editor/import cleanup is authorized while takeover is on hold. Unity favorites are exact-version references;
+  changed saves create owned forks without duplicating inherited files. Read/open/
+  export must not register asset rows or populate identity/search indexes. File
+  import checks exact bytes before parsing, then Foundry content and asset identity;
+  incomplete Archive identity coverage is an explicit refusal, not a silent miss.
+  Unity-owned search projections go through an opt-in Archive admin endpoint into
+  the same LanceDB. The Unity outbox is durable; no idle polling or embedding on
+  browse. Failed/missing-provider work stays retryable. Do not enable these writers
+  or run corpus identity indexing against live paths without owner coordination.
 - Architect and hub share `packages/api` and `packages/store`.
   `apps/api` hosts that API on Node or Workers; it is not a second implementation.
 - Browser and portable code must not import Node adapters or native modules.

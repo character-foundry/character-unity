@@ -52,6 +52,10 @@ for (const adapter of ['native', 'indexeddb']) describe(`asset revisions with ${
     workspace = (await cards.createWorkspace(alice, 'Assets')).id;
   });
   afterEach(async () => { database?.close(); if (directory) await rm(directory, { recursive: true, force: true }); directory = undefined; vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  async function importInFreshWorkspace(bytes: Uint8Array) {
+    const target = await cards.createWorkspace(alice, 'Container roundtrip');
+    return cards.import(alice, target.id, bytes);
+  }
 
   it('adds, replaces and removes assets with exact history, SDK lineage and container round trips', async () => {
     const initial = await cards.import(alice, workspace, source);
@@ -69,7 +73,7 @@ for (const adapter of ['native', 'indexeddb']) describe(`asset revisions with ${
     expect(await receive(await cards.asset(alice, workspace, initial.card.id, first.id, 'declared/1'))).toEqual(text);
     for (const format of ['png', 'charx'] as const) {
       const exported = await cards.export(alice, workspace, initial.card.id, first.id, format);
-      const roundtrip = await cards.import(alice, workspace, exported.bytes);
+      const roundtrip = await importInFreshWorkspace(exported.bytes);
       expect(roundtrip.revision.identity).toEqual(first.identity);
       expect(readCardLineage(roundtrip.revision.document)).toEqual(readCardLineage(first.document));
     }
@@ -82,7 +86,7 @@ for (const adapter of ['native', 'indexeddb']) describe(`asset revisions with ${
     expect(await receive(await cards.asset(alice, workspace, initial.card.id, first.id, 'portrait'))).toEqual(image);
     expect(await receive(await cards.asset(alice, workspace, initial.card.id, second.id, 'portrait'))).toEqual(replacement);
     const charx = await cards.export(alice, workspace, initial.card.id, second.id, 'charx');
-    expect((await cards.import(alice, workspace, charx.bytes)).revision.identity).toEqual(second.identity);
+    expect((await importInFreshWorkspace(charx.bytes)).revision.identity).toEqual(second.identity);
     await expect(cards.export(alice, workspace, initial.card.id, second.id, 'png')).rejects.toMatchObject({ code: 'EXPORT_LOSS' });
     const reduced = structuredClone(second.document);
     (reduced.data as CardDocument).assets = ((reduced.data as CardDocument).assets as CardDocument[]).slice(1);
@@ -93,14 +97,15 @@ for (const adapter of ['native', 'indexeddb']) describe(`asset revisions with ${
     const fourth = await cards.saveAssets(alice, workspace, initial.card.id, third.id, empty, [], []);
     expect(fourth.assets).toEqual([]); expect(await verifyCardLineage(fourth.document)).toBe(true);
     const json = await cards.export(alice, workspace, initial.card.id, fourth.id, 'json');
-    expect((await cards.import(alice, workspace, json.bytes)).revision.identity).toEqual(fourth.identity);
+    expect((await importInFreshWorkspace(json.bytes)).revision.identity).toEqual(fourth.identity);
     expect(await receive(await cards.original(alice, workspace, initial.card.id))).toEqual(source);
     expect((await cards.history(alice, workspace, initial.card.id)).revisions.map((revision) => revision.sequence)).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('scopes existing bindings to the expected card and rejects malformed plans before staging', async () => {
     const initial = await cards.import(alice, workspace, source);
-    const other = await cards.import(alice, workspace, source);
+    const otherDocument = JSON.parse(new TextDecoder().decode(source)); otherDocument.data.name = 'Other asset fixture';
+    const other = await cards.import(alice, workspace, new TextEncoder().encode(JSON.stringify(otherDocument)));
     const draft = attach(initial.revision.document);
     const bindings = [uploaded('portrait', 0), uploaded('declared/0', 0), uploaded('declared/1', 1)];
     const files = [upload(image), upload(text, 'text/plain')];
@@ -186,16 +191,16 @@ for (const adapter of ['native', 'indexeddb']) describe(`asset revisions with ${
       const returned = extractFromPNG(exported.bytes).data as unknown as CardDocument;
       expect(returned).toHaveProperty('data.extensions.foundry.local.sillyTavernTransport');
       if (version === '3') expect((returned.data as CardDocument).assets).toEqual([{ type: 'icon', name: 'Authored.Main', ext: 'PNG', uri: 'ccdefault:', license: { keep: true } }]);
-      const direct = await cards.import(alice, workspace, exported.bytes); expect(direct.revision.identity).toEqual(saved.identity);
+      const direct = await importInFreshWorkspace(exported.bytes); expect(direct.revision.identity).toEqual(saved.identity);
       // Observed transport additions; the real application is checked by the separate harness.
       const data = returned.data as CardDocument;
       returned.name = data.name!; returned.description = data.description!; returned.fav = false; returned.create_date = '2026-10-11T00:00:00.000Z';
       (data.extensions as CardDocument).fav = false; returned.spec = 'chara_card_v3'; returned.spec_version = '3.0';
       const returnedBytes = embedIntoPNG(image, returned as unknown as CCv3Data, { key: 'ccv3' });
-      const restored = await cards.import(alice, workspace, returnedBytes);
+      const restored = await importInFreshWorkspace(returnedBytes);
       expect(restored.revision.identity).toEqual(saved.identity); expect(readCardLineage(restored.revision.document)).toEqual(readCardLineage(saved.document));
-      expect(await receive(await cards.original(alice, workspace, restored.card.id))).toEqual(returnedBytes);
-      expect(await receive(await cards.asset(alice, workspace, restored.card.id, restored.revision.id, 'portrait'))).toEqual(image);
+      expect(await receive(await cards.original(alice, restored.card.workspaceId, restored.card.id))).toEqual(returnedBytes);
+      expect(await receive(await cards.asset(alice, restored.card.workspaceId, restored.card.id, restored.revision.id, 'portrait'))).toEqual(image);
       data.description = returned.description = 'A changed external prompt';
       await expect(cards.import(alice, workspace, embedIntoPNG(image, returned as unknown as CCv3Data, { key: 'ccv3' }))).rejects.toBeDefined();
       const withAttachment = structuredClone(saved.document); const descriptors = ((withAttachment.data as CardDocument).assets ?? []) as CardDocument[];
@@ -214,6 +219,6 @@ for (const adapter of ['native', 'indexeddb']) describe(`asset revisions with ${
     const saved = await cards.saveAssets(alice, workspace, initial.card.id, initial.revision.id, initial.revision.document, [uploaded('portrait', 0)], [upload(image)]);
     expect(saved.document.spec).toBe('chara_card_v2'); expect(saved.document.data).not.toHaveProperty('assets');
     const png = await cards.export(alice, workspace, initial.card.id, saved.id, 'png');
-    expect((await cards.import(alice, workspace, png.bytes)).revision.identity).toEqual(saved.identity);
+    expect((await importInFreshWorkspace(png.bytes)).revision.identity).toEqual(saved.identity);
   });
 });

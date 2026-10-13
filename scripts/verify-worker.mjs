@@ -71,7 +71,7 @@ async function start() {
     });
   });
   const ready = await fetch(`${origin}/api/ready`, { signal: AbortSignal.timeout(5000) });
-  assert.equal(ready.status, 200); assert.equal((await ready.json()).storage.schemaVersion, 9);
+  assert.equal(ready.status, 200); assert.equal((await ready.json()).storage.schemaVersion, 13);
 }
 async function account(name) {
   const file = join(root, `${name}.json`);

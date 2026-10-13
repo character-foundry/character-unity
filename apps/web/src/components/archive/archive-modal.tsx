@@ -21,7 +21,7 @@ function Section({ title, value }: { title: string; value: string }) {
   );
 }
 
-/** Quick view of an Archive card: its text, where it came from, its archived versions, and Add to library. */
+/** Archive quick view. Library membership references a pinned version without copying files. */
 export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCard | null; onClose: () => void; onRemoved: () => void }) {
   const { settings } = useSettings();
   const [detail, setDetail] = useState<ArchiveCardDetail | null>(null);
@@ -30,9 +30,12 @@ export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCa
   useEffect(() => {
     setDetail(null); setError(null);
     if (!card) return;
-    let active = true;
-    archiveApi.card(card.id).then((value) => { if (active) setDetail(value); }, (failure: Error) => { if (active) setError(failure.message); });
-    return () => { active = false; };
+    const controller = new AbortController();
+    archiveApi.card(card.id, card.versionId, controller.signal).then(
+      (value) => { if (!controller.signal.aborted) setDetail(value); },
+      (failure: Error) => { if (!controller.signal.aborted) setError(failure.message); },
+    );
+    return () => controller.abort();
   }, [card]);
   if (!card) return null;
   const data = detail?.document?.data ?? {};
@@ -70,6 +73,7 @@ export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCa
                   try { await archiveApi.block(card.id); onRemoved(); } catch (failure) { window.alert(failure instanceof Error ? failure.message : 'Could not remove it'); }
                 }}>Remove from Archive</button>
             </div>
+            <p className="text-xs text-starlight/50">Adding or favoriting keeps a library link to this archived version. The original and its files stay in Archive; saving a changed edit creates your fork. Unfavoriting keeps the link.</p>
 
             <div className="flex flex-wrap gap-1.5">
               {card.tags.map((tag) => <Link key={tag} to={`/archive?tags=${encodeURIComponent(tag)}`} onClick={onClose} className="rounded bg-aurora/20 px-2 py-0.5 text-xs text-blue-200 hover:bg-nebula/40">{tag}</Link>)}

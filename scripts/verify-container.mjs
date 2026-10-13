@@ -56,7 +56,7 @@ async function ready(id, url) {
     try {
       const response = await fetch(`${url}/api/ready`, { signal: AbortSignal.timeout(1000) });
       if (response.ok) {
-        assert.deepEqual(await response.json(), { status: 'ready', storage: { schemaVersion: 9 } });
+        assert.deepEqual(await response.json(), { status: 'ready', storage: { schemaVersion: 13 } });
         return;
       }
     } catch { /* Retry only this live container's startup. */ }
@@ -288,7 +288,7 @@ try {
 
   const report = { version: 'unity.container-rehearsal.v1', imageId: metadata.Id, platform: `${metadata.Os}/${metadata.Architecture}`,
     node, foundryCommit,
-    schemaVersion: 9, nonRoot: true, readOnlyRoot: true, httpsProxy: true, secureCookieAttributes: true,
+    schemaVersion: 13, nonRoot: true, readOnlyRoot: true, httpsProxy: true, secureCookieAttributes: true,
     twoAccountPublishFork: true, immutablePublicActorProvisioning: true, signedReadPublishFork: true, verifiedRemoteForkReturn: true, signedReceiptsSurviveContainerReplacement: true, assetBearingCharxReimport: true, unchangedOriginal: true,
     sessionAndStorageSurviveContainerReplacement: true, accountRevocation: true, architectLinuxHostNetwork: true, gracefulStop: true };
   await mkdir('runtime', { recursive: true }); await writeFile('runtime/container-rehearsal.json', JSON.stringify(report, null, 2) + '\n');

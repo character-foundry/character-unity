@@ -251,7 +251,7 @@ for (const adapter of ['sqlite', 'd1']) describe(`sync contract / ${adapter}`, (
     expect(await inspectSchema(driver)).toBe(5);
     expect(await driver.query({ sql: "SELECT name FROM sqlite_master WHERE name GLOB 'unity_sync_*'" })).toEqual([]);
     await migrate(driver); await migrate(driver);
-    expect(await inspectSchema(driver)).toBe(12);
+    expect(await inspectSchema(driver)).toBe(13);
     expect(await driver.query({ sql: 'SELECT * FROM unity_migrations WHERE version <= 5 ORDER BY version' })).toEqual(ledger);
     expect(await accounts.list()).toEqual([existing.account]);
     expect((await accounts.login(existing.key))?.account).toEqual(existing.account);

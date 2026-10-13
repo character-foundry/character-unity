@@ -93,6 +93,32 @@ it('reuses old vector rows for semantic/hybrid queries and marks top-k coverage 
   expect(await inventory(directory)).toEqual(before);
 });
 
+it('reports actual typed fields and unknown vector coverage without a census, and browses filtered pages without embedding', async () => {
+  const { directory } = await seed(), before = await inventory(directory), reader = await open(directory, true);
+  expect(reader.filterFields).toContainEqual({ name: 'tokenCount', type: 'number' });
+  expect(reader.filterFields).toContainEqual({ name: 'topics', type: 'strings' });
+  expect(reader.filterFields.some((field) => field.name === 'searchText' || field.name === 'vector')).toBe(false);
+  expect(reader.embedding).toEqual({ model: embedder.space.model, dimensions: 2, indexedCards: null, indexedRows: null });
+  const first = await reader.browse({ filter: 'topics = demo', sort: 'name', limit: 1 });
+  const second = await reader.browse({ filter: 'topics = demo', sort: 'name', limit: 1, offset: 1 });
+  expect(first).toEqual({ ids: ['2'], total: 3 });
+  expect(second).toEqual({ ids: ['3'], total: 3 });
+  expect(await reader.browse({ filter: 'source = ct', excludedIds: ['3'], sort: 'name' })).toEqual({ ids: [], total: 0 });
+  expect(await reader.browse({ eligibleIds: [], sort: 'name' })).toEqual({ ids: [], total: 0 });
+  await expect(reader.browse({ filter: 'untrustedSql = 1', sort: 'name' })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  expect(await inventory(directory)).toEqual(before);
+});
+
+it('fences existing table writes and generation switches in search snapshots', async () => {
+  const { directory, rows } = await seed(), reader = await open(directory, true);
+  const snapshot = await reader.snapshot();
+  expect(await reader.snapshot()).toBe(snapshot);
+  await reader.upsertDocuments([{ ...rows[0]!, name: 'Changed' }]);
+  expect(await reader.snapshot()).not.toBe(snapshot);
+  await writeFile(join(directory, '.cards.active.json'), JSON.stringify({ tableName: 'cards_build_new' }));
+  await expect(reader.snapshot()).rejects.toMatchObject({ code: 'SNAPSHOT_CHANGED' });
+});
+
 it('does not truncate complete lexical/NOT results or fall back from unsupported semantic queries', async () => {
   const { directory } = await seed({ vector: false }), reader = await open(directory);
   await expect(reader.search('silver', { maxCandidates: 2 })).rejects.toMatchObject({ code: 'TOO_LARGE' });
@@ -143,6 +169,7 @@ it('opens a corpus beyond the copied adapter limit without scanning or limiting 
   const table = await connection.createTable('cards', makeArrowTable(rows, { schema }));
   await table.createIndex('searchText', { config: Index.fts({ withPosition: true }) }); table.close(); connection.close();
   const reader = await open(directory);
+  expect(await reader.browse({ sort: 'name', offset: 10_000, limit: 1 })).toEqual({ ids: ['1'], total: 10_001 });
   expect((await reader.search('unique-signal')).ids).toEqual(['10001']);
   for (const [text, ids] of [
     ['forest AND NOT spaceship', ['2']], ['"forest" AND NOT spaceship', ['2']],

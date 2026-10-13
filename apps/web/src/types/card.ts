@@ -31,6 +31,8 @@ export interface CardListItem {
   hasLorebook: boolean; lorebookEntriesCount: number; hasEmbeddedImages: boolean; embeddedImagesCount: number;
   tags: CardTag[]; createdAt: number; updatedAt: number; isFavorited: boolean;
   headRevisionId: string; revisionCount: number; isFork: boolean;
+  reference?: { archiveId: string; cardId: string; versionId: string };
+  archiveSource?: { archiveId: string; cardId: string; versionId: string };
 }
 
 export interface SavedAssetInfo {

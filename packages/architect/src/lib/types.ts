@@ -44,6 +44,8 @@ export interface CardMeta {
   id: string;
   /** Unity: an unsaved fork draft of this card; its first Save creates the fork. */
   forkOf?: string;
+  /** Unchanged Archive content; a changed Save creates an owned fork. */
+  archiveReference?: boolean;
   name: string;
   spec: Spec;
   tags: string[];

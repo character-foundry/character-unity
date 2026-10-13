@@ -47,6 +47,25 @@ describe('native viewer projection', () => {
     expect(detail.tags.map((tag) => tag.id)).toEqual(['nature', 'other']);
   });
 
+  it('preserves a pinned Archive reference through viewer projection without treating it as an owned revision', () => {
+    const source = opened(document);
+    source.reference = { archiveId: 'archive', cardId: 'source', versionId: 'exact-version' };
+    source.revision.id = 'exact-version';
+    const detail = toDetail('workspace', source, null);
+    expect(detail.reference).toEqual(source.reference);
+    expect(detail.imagePath).toContain('revisionId=exact-version');
+    expect(detail.isFork).toBe(false);
+    expect(detail.rawDocument).toBe(document);
+    delete source.reference;
+    source.source = null;
+    source.archiveSource = { archiveId: 'archive', cardId: 'source', versionId: 'exact-version' };
+    const fork = toDetail('workspace', source, null);
+    expect(fork.reference).toBeUndefined();
+    expect(fork.archiveSource).toEqual(source.archiveSource);
+    expect(fork.isFork).toBe(true);
+    expect(fork.originalFilename).toBe('archived-original.bin');
+  });
+
   it('does not reuse metadata from a different revision or call unknown accepted bytes JSON', () => {
     const current = opened(document);
     current.source = { provenance: { format: 'ccv3' } };

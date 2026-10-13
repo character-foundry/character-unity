@@ -1,17 +1,32 @@
 import { parseLibraryQuery } from '@character-unity/store/library-query';
 import type { QueryNode } from '@character-unity/store/library-query';
+import type { SearchFilterField } from '@character-unity/archive-client';
 
 export const archiveSorts = ['updated', 'added', 'newest', 'oldest', 'name', 'name_desc', 'tokens_desc', 'tokens_asc',
   'stars', 'favorites', 'chats', 'downloads', 'greetings', 'lorebook'] as const;
 export type ArchiveSort = typeof archiveSorts[number];
 export const archiveFlags = ['greetings', 'lorebook', 'gallery', 'embeddedImages', 'expressions', 'portrait', 'systemPrompt', 'exampleDialogues', 'followed'] as const;
 export type ArchiveFlag = typeof archiveFlags[number];
+export interface ArchiveCapabilities {
+  lexical: boolean; semantic: boolean; browse: boolean;
+  sorts: readonly ArchiveSort[]; browseSorts: readonly ArchiveSort[]; has: readonly ArchiveFlag[]; filterFields: readonly SearchFilterField[];
+  embedding?: { model: string; dimensions: number; indexedCards: number | null; indexedRows: number | null };
+  libraryIndex?: { enabled: boolean; semantic: boolean; reason?: string };
+}
 export const isArchiveSort = (value: string): value is ArchiveSort => (archiveSorts as readonly string[]).includes(value);
 export const isArchiveFlag = (value: string): value is ArchiveFlag => (archiveFlags as readonly string[]).includes(value);
 
 export interface ArchiveQuery {
   /** Existing LanceDB search; semantic modes require a compatible configured query embedder. */
-  mode?: 'lexical' | 'semantic' | 'hybrid';
+  mode?: 'browse' | 'lexical' | 'semantic' | 'hybrid';
+  /** Typed Lance metadata expression, never raw SQL. Requires the existing search index. */
+  filter?: string;
+  /** Repeat the first page's snapshot to reject changed data, index generations or query parameters. */
+  snapshot?: string;
+  /** HTTP-owned cancellation; never accepted as a caller-supplied query parameter. */
+  signal?: AbortSignal;
+  /** Trusted API proxy only, never a URL parameter. */
+  libraryWorkspaceId?: string;
   /** The library's search syntax: words, "phrases", OR, NOT/-, parentheses, name:, creator:, description:, tag:. */
   q?: string;
   tags?: readonly string[];

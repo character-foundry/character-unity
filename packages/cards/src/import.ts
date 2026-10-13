@@ -73,3 +73,27 @@ export async function prepareImport(input: Uint8Array, supplied: readonly Import
     mediaType: parsed.containerFormat === 'png' ? 'image/png' : parsed.containerFormat === 'charx' ? 'application/zip' : 'application/json',
     format: parsed.sourceFormat };
 }
+
+export interface ArchiveImportObject { role: 'card' | 'portrait' | 'raw' | 'asset'; name: string; sha256: string; mediaType: string; byteLength: number }
+
+/** Resolve one exact Archive version using the same import, portrait and identity policy as file imports. */
+export async function prepareArchiveImport(objects: readonly ArchiveImportObject[], read: (object: ArchiveImportObject) => Promise<Uint8Array>) {
+  if (objects.filter((object) => object.role === 'card').length !== 1) throw new CardError('UNSUPPORTED_FORMAT', 'This Archive version needs exactly one card file');
+  const container = objects.find((object) => object.role === 'card');
+  if (!container) throw new CardError('UNSUPPORTED_FORMAT', 'This Archive version has no card file');
+  const bytes = await read(container);
+  const parsed = parseCard(bytes, { maxFileSize: importByteLimit, maxAssetSize: importByteLimit, maxTotalSize: importByteLimit, extractAssets: false });
+  const document = parsed.originalShape as { data?: { assets?: unknown } } | null;
+  const declared = document?.data?.assets;
+  const uris = new Set(Array.isArray(declared) ? declared.flatMap((asset: unknown) => asset && typeof asset === 'object' && 'uri' in asset && typeof asset.uri === 'string' ? [asset.uri] : []) : []);
+  const extra = objects.filter((object) => (object.role === 'portrait' && parsed.containerFormat === 'json') || (object.role === 'asset' && uris.has(object.name)));
+  if (extra.length > 64 || [container, ...extra].some((object) => !Number.isSafeInteger(object.byteLength) || object.byteLength < 0)
+    || [container, ...extra].reduce((total, object) => total + object.byteLength, 0) > importByteLimit) throw new CardError('TOO_LARGE', 'Archive version exceeds import limits');
+  const supplied: ImportAsset[] = [];
+  for (const object of extra) {
+    // A separate PNG thumbnail is not the stripped primary image embedded in a character PNG.
+    if (object.role === 'portrait' && parsed.containerFormat === 'json') supplied.push({ binding: { kind: 'portrait' }, bytes: await read(object), mediaType: object.mediaType });
+    else if (object.role === 'asset' && uris.has(object.name)) supplied.push({ binding: { kind: 'uri', uri: object.name }, bytes: await read(object), mediaType: object.mediaType });
+  }
+  return prepareImport(bytes, supplied);
+}

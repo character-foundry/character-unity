@@ -161,6 +161,11 @@ test('browser CharX export and reimport retains opaque descriptors and colliding
   await editor.getByRole('button', { name: 'Download saved revision' }).click();
   const bytes = await readFile((await (await output).path())!);
   await editor.getByRole('button', { name: 'Close editor' }).click();
+  // The same workspace correctly deduplicates its own exported content. A
+  // fresh workspace exercises the actual CharX import/asset transport instead.
+  await page.getByLabel('New workspace', { exact: true }).fill('Opaque CharX destination');
+  await page.getByRole('button', { name: 'Create workspace' }).click();
+  await expect(page.getByText('Your library is empty.')).toBeVisible();
   await page.getByLabel('Import a card').setInputFiles({ name: 'preserved.charx', mimeType: 'application/zip', buffer: bytes });
   await editor.getByRole('button', { name: 'Character', exact: true }).click();
   await expect(editor.getByLabel('Description', { exact: true })).toHaveValue('Opaque containers survive.');

@@ -4,8 +4,9 @@ import { syncSchema } from './sync-schema.js';
 import { syncOperationsSchema } from './sync-operations-schema.js';
 import { syncOutboxSchema } from './sync-outbox-schema.js';
 import { assetMaintenanceSchema } from './asset-maintenance-schema.js';
-import { chatFingerprintSchema, chatSchema } from './chat-schema.js';
+import { chatFingerprintSchema, chatReferenceSchema, chatSchema } from './chat-schema.js';
 import { librarySchema } from './library-schema.js';
+import { archiveSchema } from './archive-schema.js';
 /** Append migrations; never edit a migration that has been applied to real data. */
 export const migrations = [{
   version: 1,
@@ -129,4 +130,5 @@ export const migrations = [{
 { version: 9, name: 'asset_retirement_fences', statements: assetMaintenanceSchema },
 { version: 10, name: 'chat_placements', statements: chatSchema },
   { version: 11, name: 'chat_fingerprints', statements: chatFingerprintSchema },
-  { version: 12, name: 'library_annotations', statements: librarySchema }] as const;
+  { version: 12, name: 'library_annotations', statements: librarySchema },
+  { version: 13, name: 'archive_references_and_import_identity', statements: [...archiveSchema, ...chatReferenceSchema] }] as const;

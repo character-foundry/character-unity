@@ -6,7 +6,8 @@
     ]
   },
   "include": [
-    "src"
+    "src",
+    "tests/unity-browser-fixture.ts"
   ],
   "exclude": [
     "src/worker.ts"

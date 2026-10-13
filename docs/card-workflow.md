@@ -27,6 +27,7 @@ from the host, never from a JSON owner/author field submitted by the browser.
 | `GET /api/workspaces` | Current actor's workspaces, bounded to 100 |
 | `POST /api/workspaces` | Create from `{name}` |
 | `GET /api/workspaces/:id/cards` | Bounded card list with `limit`/`afterId` |
+| `GET /api/workspaces/:id/card-summaries` | Globally filtered/paged owned cards and Archive references |
 | `POST /api/workspaces/:id/imports` | Raw accepted file body; optional `X-File-Name` provenance |
 | `GET /api/workspaces/:id/cards/:cardId` | Current revision and immutable source reference |
 | `POST /api/workspaces/:id/cards/:cardId/revisions` | Save `{expectedHead, document}` |
@@ -43,9 +44,25 @@ Foundry parses JSON/PNG/CharX, and Unity keeps `originalShape` rather than a los
 normalized view. Only wrapped CCv2/CCv3 documents are currently editable. Existing
 embedded assets are resolved with Foundry URI primitives and bound to verified
 byte digests; an implicit portrait is also included in identity. Remote/missing
-assets are reported unavailable and are never implicitly fetched. Unmapped assets,
-Risu modules, unwrapped/legacy cards and Voxta need additional loss-preserving
-adapters and are rejected rather than silently discarded.
+assets are reported unavailable and are never implicitly fetched. RisuAI's opaque
+module is preserved alongside its card and participates separately in deduplication;
+it is not an editable card-content binding. Unmapped assets, unwrapped/legacy cards
+and Voxta need additional loss-preserving adapters and are rejected rather than
+silently discarded.
+
+Standalone file import first checks the exact accepted-byte digest, before parsing
+or resolving external assets. A miss is parsed through Foundry and checked by
+content identity with asset digests, plus opaque module and lineage distinctions.
+Unity and the connected Archive are both checked. An existing match returns
+`{card:{id}, import:{created:false, match}}`; clients open that returned ID rather
+than requiring a newly created revision in every response. Concurrent claims share
+the same entry/upload key. Different source records retain their own provenance,
+and a shared ancestor root is not a deduplication key for edited forks.
+
+The legacy Archive has no hash index. An incomplete identity miss refuses the
+import without writing another card; its bounded, explicit metadata-index command
+is an operational writer action, not something browsing or importing silently
+launches. See [identity indexing and its authorization gate](archive-existing-storage.md#reference-identity-index).
 
 The accepted file is stored as an immutable completed asset. Schema v2 atomically
 attaches its source/provenance reference when creating the card and initial
@@ -53,6 +70,16 @@ revision. An import does not invent lineage. A source may already contain verifi
 lineage; its accepted file hash can differ from that lineage's earlier root hash.
 Original download always means the file this workspace accepted, not an implied
 permission to download a remote ancestor.
+
+Native Archive favorites/imports are different: they store exact-version membership
+and a bounded summary, not accepted original bytes or asset bundles. Unfavoriting
+keeps membership; explicit Remove unlinks it. Reads resolve the pin through Archive,
+and unavailable originals remain unavailable rather than falling back to a newer
+version. An unchanged Save creates nothing. A changed Save atomically creates one
+owned fork with exact Archive ancestry; inherited files remain external locators,
+and only new uploads enter Unity's blob store. Format/opaque-field changes still
+count as edits even when portable content identity is equal. Reference originals,
+revision exports and Send-to-chat use the same verified read-through path.
 
 Saves preserve opaque fields and existing assets, compute identity through Foundry,
 and add explicit revision lineage. Saving the same preserved JSON document

@@ -3,10 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
-import { describe, NativeArchiveError } from '../native/store.js';
+import { describe, NativeArchiveError, pinnedSummary } from '../native/store.js';
 import type { ArchiveCardDetail, ArchiveCardSummary, ArchiveObjectRef, ArchiveVersion, RunRecord, SourceRecord } from '../native/store.js';
 import { createObjectStore, sha256 } from '../native/objects.js';
-import type { ArchiveQuery } from '../native/query.js';
+import type { ArchiveCapabilities, ArchiveQuery } from '../native/query.js';
 import { archiveSorts } from '../native/query.js';
 import type { RunCounts, RunResult, ScrapedCard, ScrapedObject, ScrapeSink, SourceStats } from '@character-unity/scraper-kit';
 import { existingSchema, existingSchemaVersion } from './schema.js';
@@ -15,11 +15,20 @@ import { hashExistingFile, missing, readExistingFile, realDirectory, safeRelativ
 import type { ExistingSearch } from './search.js';
 import type { DocumentEmbedder } from '../embeddings.js';
 import { createVectorQueueDrainer } from './vector-queue.js';
+import { validateIdentityQuery } from '@character-unity/archive-client/native';
+import type { ArchiveIdentityQuery, ArchiveIdentityMatch, ArchiveIdentityResult } from '@character-unity/archive-client';
+import { archiveContentHash } from '../identity.js';
 import { loadExistingBlacklists } from './blacklists.js';
+import { ArchiveError } from '@character-unity/archive-client/contract';
+import type { SearchMatch } from '@character-unity/archive-client';
+import { searchSnapshot } from '../native/search-snapshot.js';
+import type { LibraryIndex, LibrarySearchCard } from '../library-index.js';
+import { mergeSearchPage } from '../library-search-merge.js';
 
 export interface ExistingArchiveOptions {
   databasePath: string; filesDirectory: string; objectsDirectory?: string;
   readOnly?: boolean; now?: () => string; search?: ExistingSearch; documentEmbedder?: DocumentEmbedder; legacyRoot?: string;
+  libraryIndex?: LibraryIndex;
 }
 type Row = Record<string, unknown> & { id: number };
 type Location = { origin: 'legacy' | 'objects'; path: string; sha256: string; byteLength: number; mediaType: string; bytes?: Uint8Array<ArrayBuffer> };
@@ -38,6 +47,7 @@ function sourcePath(card: ScrapedCard) {
 export async function openExistingArchive(options: ExistingArchiveOptions) {
   const blacklistEntries = !options.readOnly && options.legacyRoot ? await loadExistingBlacklists(options.legacyRoot) : [];
   const databasePath = resolve(options.databasePath), filesDirectory = await realDirectory(options.filesDirectory);
+  const existingArchiveId = `existing-${sha256(databasePath).slice(0, 24)}`;
   const databaseInfo = await lstat(databasePath);
   if (!databaseInfo.isFile() || databaseInfo.isSymbolicLink() || await realpath(databasePath) !== databasePath) throw new Error('Existing Archive database must be a real existing file');
   if (!options.readOnly && !options.objectsDirectory) throw new Error('Existing Archive writes require an explicit objectsDirectory');
@@ -68,7 +78,7 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
         db.exec(existingSchema);
         if (table('card_source_aliases')) db.exec('CREATE INDEX IF NOT EXISTS unity_archive_alias_identity ON card_source_aliases(source,source_id); CREATE INDEX IF NOT EXISTS unity_archive_alias_path ON card_source_aliases(source,lower(source_path));');
         db.prepare('INSERT OR REPLACE INTO unity_archive_meta(key,value) VALUES (?,?)').run('schema_version', String(existingSchemaVersion));
-        db.prepare('INSERT OR IGNORE INTO unity_archive_meta(key,value) VALUES (?,?)').run('archive_id', `archive-${randomUUID()}`);
+        db.prepare('INSERT OR IGNORE INTO unity_archive_meta(key,value) VALUES (?,?)').run('archive_id', existingArchiveId);
         db.prepare("UPDATE unity_archive_runs SET status = 'failed', finished_at = ?, error = coalesce(error,'The Archive stopped during this run') WHERE status = 'running'").run(now());
       })();
     } else db.pragma('query_only = ON');
@@ -78,13 +88,29 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
     throw error;
   }
   const bookkeeping = table('unity_archive_meta');
-  const archiveId = bookkeeping ? (db.prepare("SELECT value FROM unity_archive_meta WHERE key = 'archive_id'").get() as { value: string } | undefined)?.value ?? `existing-${sha256(databasePath).slice(0, 24)}` : `existing-${sha256(databasePath).slice(0, 24)}`;
+  const identityIndex = table('unity_archive_identities');
+  const archiveId = bookkeeping ? (db.prepare("SELECT value FROM unity_archive_meta WHERE key = 'archive_id'").get() as { value: string } | undefined)?.value ?? existingArchiveId : existingArchiveId;
+  const readInstance = randomUUID();
+  const databaseGeneration = () => JSON.stringify([readInstance, db.pragma('data_version', { simple: true }), db.prepare('SELECT total_changes() AS n').get()]);
+  const capabilities: ArchiveCapabilities = { lexical: !!options.search, semantic: options.search?.semantic ?? false,
+    browse: !!options.search, filterFields: options.search?.filterFields ?? [],
+    browseSorts: options.search?.sorts ?? [],
+    libraryIndex: options.libraryIndex?.capabilities ?? { enabled: false, semantic: false, reason: 'Library projection indexing is not enabled for this Archive' },
+    ...(options.search?.embedding ? { embedding: options.search.embedding } : {}),
+    sorts: archiveSorts.filter((sort) => sort !== 'downloads'),
+    has: ['greetings', 'lorebook', 'gallery', 'embeddedImages', 'expressions', 'systemPrompt', 'exampleDialogues', 'followed'] };
   const objects = createObjectStore(objectsDirectory), locations = new Map<string, Location>();
   const vectorQueue = createVectorQueueDrainer(db, options.search, options.documentEmbedder);
   let retainedBytes = 0;
   const stateJoin = bookkeeping ? 'LEFT JOIN unity_archive_state s ON s.card_id = c.id' : '';
   const stateFields = bookkeeping ? ', s.current_version, s.spec, s.alt_greetings, s.lorebook_entries, s.portrait_sha256, s.changed_at, s.last_seen_at' : '';
   const selected = `SELECT c.*${stateFields} FROM cards c ${stateJoin}`;
+  const observedIdentities = new Map<string, Omit<ArchiveIdentityMatch, 'matchedBy' | 'provider' | 'recordId' | 'url'>>();
+  const legacyStamp = "json_array(c.name,c.lastModified,c.source,c.sourceId,c.sourcePath,c.sourceUrl,(SELECT group_concat(a.originalUrl || ':' || a.localPath,'|') FROM cached_assets a WHERE a.cardId = c.id))";
+  function rememberIdentity(cardId: string, versionId: string, fileHash: string, contentHash: string | null) {
+    observedIdentities.delete(versionId); observedIdentities.set(versionId, { cardId, versionId, fileHash, contentHash });
+    while (observedIdentities.size > 2048) observedIdentities.delete(observedIdentities.keys().next().value!);
+  }
   const writable = () => { if (readonly) throw new NativeArchiveError('INVALID_INPUT', 'This existing Archive connection is read-only'); };
   async function writeObject(bytes: Uint8Array) {
     const hash = sha256(bytes);
@@ -172,7 +198,7 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
     const hash = sha256(bytes);
     return remember({ origin: 'legacy', path: name, bytes, sha256: hash, byteLength: bytes.byteLength, mediaType: 'application/json' });
   }
-  async function baseline(row: Row) {
+  async function baseline(row: Row, computeIdentity = false) {
     const id = String(row.id), prefix = `${id.slice(0, 2)}/${id}`, refs: ArchiveObjectRef[] = [];
     let description: ReturnType<typeof describe> | undefined, chosen: Location | undefined;
     for (const suffix of ['.charx', '.card.png', '.png', '.json']) {
@@ -220,7 +246,11 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
       catch (error) { if (!missing(error)) throw error; }
     }
     const fingerprint = fingerprintOf(refs);
-    return { id: `legacy-${id}-${fingerprint.slice(0, 24)}`, sequence: 1, fetchedAt: text(row.firstDownloadedAt) || text(row.lastModified), remoteUpdatedAt: iso(row.lastModified), objects: refs, description, fingerprint };
+    const versionId = `legacy-${id}-${fingerprint.slice(0, 24)}`;
+    const identity = computeIdentity ? await archiveContentHash(chosen.bytes ?? (await readObject(chosen.sha256)).bytes, description.document, refs, readObject)
+      : { hash: null, reason: 'Content identity was not requested', name: null };
+    if (computeIdentity) rememberIdentity(id, versionId, chosen.sha256, identity.hash);
+    return { id: versionId, sequence: 1, fetchedAt: text(row.firstDownloadedAt) || text(row.lastModified), remoteUpdatedAt: iso(row.lastModified), objects: refs, description, fingerprint, identity };
   }
   function versionObjects(version: string) {
     return db.prepare('SELECT v.role,v.name,v.sha256,o.byte_length AS byteLength,o.media_type AS mediaType FROM unity_archive_version_objects v JOIN unity_archive_objects o ON o.sha256 = v.sha256 WHERE v.version_id = ? ORDER BY v.role,v.name').all(version) as ArchiveObjectRef[];
@@ -230,6 +260,12 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
   function saveVersion(id: number, version: ArchiveVersion, fingerprint: string) {
     db.prepare('INSERT INTO unity_archive_versions(id,card_id,sequence,fingerprint,remote_updated_at,fetched_at) VALUES (?,?,?,?,?,?)').run(version.id, id, version.sequence, fingerprint, version.remoteUpdatedAt, version.fetchedAt);
     for (const ref of version.objects) db.prepare('INSERT INTO unity_archive_version_objects(version_id,role,name,sha256) VALUES (?,?,?,?)').run(version.id, ref.role, ref.name, ref.sha256);
+  }
+  function saveIdentity(id: number, version: string, refs: ArchiveObjectRef[], identity: { hash: string | null; reason: string | null; name: string | null }, stamp: string | null = null) {
+    const container = refs.find((ref) => ref.role === 'card');
+    if (!container) throw new NativeArchiveError('UNSUPPORTED_FORMAT', 'This Archive version has no card file');
+    db.prepare('INSERT OR REPLACE INTO unity_archive_identities(version_id,card_id,file_hash,content_hash,content_name,unavailable_reason,legacy_stamp) VALUES (?,?,?,?,?,?,?)')
+      .run(version, id, container.sha256, identity.hash, identity.name, identity.reason, stamp);
   }
   async function persistDerived(refs: ArchiveObjectRef[]) {
     for (const ref of refs) {
@@ -289,7 +325,7 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
       if (db.prepare('SELECT 1 FROM cards WHERE id = ?').get(id)) throw new NativeArchiveError('INVALID_INPUT', 'The upstream Chub ID is occupied by another source; resolve its numeric identity before writing');
     }
     id ??= numeric((db.prepare('SELECT max(id) AS id FROM cards').get() as { id: number | null }).id) + 1;
-    const prior = previous && !previous.current_version ? await baseline(previous) : undefined;
+    const prior = previous && !previous.current_version ? await baseline(previous, true) : undefined;
     const fingerprint = fingerprintOf(card.objects.filter((object) => object.role !== 'raw').map((object) => ({ role: object.role,
       name: object.name ?? (object.role === 'card' ? `card.${description.containerFormat}` : object.role), sha256: sha256(object.bytes), byteLength: object.bytes.byteLength, mediaType: object.mediaType })));
     const previousFingerprint = previous?.current_version ? (db.prepare('SELECT fingerprint FROM unity_archive_versions WHERE id = ?').get(previous.current_version) as { fingerprint: string }).fingerprint : prior?.fingerprint;
@@ -315,10 +351,11 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
       refs.push(objectRef(location, object.role, name));
     }
     if (prior) await persistDerived(prior.objects);
+    const identity = await archiveContentHash(containers[0]!.bytes, description.document, refs, readObject);
     const at = now();
     return db.transaction(() => {
       register([...(prior?.objects ?? []), ...refs]);
-      if (prior) saveVersion(id!, prior, prior.fingerprint);
+      if (prior) { saveVersion(id!, prior, prior.fingerprint); saveIdentity(id!, prior.id, prior.objects, prior.identity); }
       const values: Record<string, unknown> = { source: card.provider, sourceId: card.recordId, sourcePath: path, sourceUrl: card.url, fullPath: previous ? text(previous.fullPath) : path,
         name: description.name, author: description.creator, tagline: card.tagline ?? '', description: description.description, topics: description.tags.join(','), tokenCount: description.tokens,
         lastModified: iso(card.updatedAt) ?? (previous ? previous.lastModified : at), createdAt: iso(card.createdAt) ?? (previous ? previous.createdAt : at),
@@ -333,7 +370,8 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
       const count = (db.prepare('SELECT count(*) AS n FROM unity_archive_versions WHERE card_id = ?').get(id!) as { n: number }).n;
       const currentVersion = unchanged ? (text(previous?.current_version) || prior!.id) : randomUUID();
       if (!unchanged) saveVersion(id!, { id: currentVersion, sequence: count + 1, fetchedAt: at, remoteUpdatedAt: iso(card.updatedAt), objects: refs }, fingerprint);
-      const portraitHash = refs.find((ref) => ref.role === 'portrait')?.sha256 ?? (description.embeddedPortrait ? refs.find((ref) => ref.role === 'card')!.sha256 : null);
+      saveIdentity(id!, currentVersion, refs, identity);
+      const portraitHash = refs.find((ref) => ref.role === 'portrait')?.sha256 ?? (description.containerFormat === 'png' ? refs.find((ref) => ref.role === 'card')!.sha256 : null);
       db.prepare(`INSERT INTO unity_archive_state(card_id,current_version,spec,alt_greetings,lorebook_entries,portrait_sha256,changed_at,last_seen_at) VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(card_id) DO UPDATE SET current_version=excluded.current_version,spec=excluded.spec,alt_greetings=excluded.alt_greetings,lorebook_entries=excluded.lorebook_entries,
         portrait_sha256=excluded.portrait_sha256,changed_at=CASE WHEN current_version=excluded.current_version THEN changed_at ELSE excluded.changed_at END,last_seen_at=excluded.last_seen_at`)
@@ -364,13 +402,26 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
   return {
     archiveId, sink, put,
     async list(query: ArchiveQuery = {}) {
+      query.signal?.throwIfAborted();
       if (query.sort === 'downloads') throw new NativeArchiveError('INVALID_INPUT', 'The existing Archive has no download-count metric to sort by');
+      if (query.mode === 'browse' && query.q?.trim()) throw new NativeArchiveError('INVALID_INPUT', 'Browse mode does not accept query text');
+      if (query.mode && query.mode !== 'browse' && !query.q?.trim()) throw new NativeArchiveError('INVALID_INPUT', 'A search mode requires a query');
+      const indexed = !!(query.q?.trim() || query.filter || query.mode === 'browse');
+      if (indexed && !options.search) throw new ArchiveError('UNAVAILABLE', 'Existing Archive search requires its configured LanceDB index');
+      const sourceBefore = databaseGeneration(), indexBefore = indexed ? await options.search!.snapshot() : '';
+      const libraryBefore = query.libraryWorkspaceId && options.libraryIndex ? await options.libraryIndex.snapshot() : '';
+      const library = query.libraryWorkspaceId && options.libraryIndex ? await options.libraryIndex.search(query.libraryWorkspaceId, query) : undefined;
+      if (sourceBefore !== databaseGeneration()) throw new ArchiveError('SNAPSHOT_CHANGED', 'The Archive changed during the search; start from the first page');
       let ids: string[] | undefined;
       let complete = true;
-      if (query.q) {
-        if (!options.search) throw new Error('Existing Archive search requires its configured LanceDB index');
+      let browseTotal: number | undefined;
+      let scores: Map<string, number> | undefined, matches: Map<string, SearchMatch> | undefined;
+      const limit = Math.min(Math.max(query.limit ?? 48, 1), 100), offset = Math.max(query.offset ?? 0, 0);
+      const windowOffset = Math.max(0, offset - (library?.cards.length ?? 0)), windowLimit = limit + (library?.cards.length ?? 0);
+      if (indexed) {
         const quoted = (value: string) => JSON.stringify(value);
         const searchFilters: string[] = [];
+        if (query.filter) searchFilters.push(`(${query.filter})`);
         if (query.provider) searchFilters.push(`source = ${quoted(query.provider)}`);
         if (query.minTokens) searchFilters.push(`tokenCount >= ${query.minTokens}`);
         if (query.tags?.length) searchFilters.push(`(${query.tags.map((tag) => `topics = ${quoted(tag)}`).join(query.tagMode === 'any' ? ' OR ' : ' AND ')})`);
@@ -379,39 +430,175 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
         for (const flag of query.has ?? []) if (flag !== 'portrait' && flag !== 'followed') searchFilters.push(`${flags[flag]} = true`);
         existingFilter(query, bookkeeping); // Reject unsupported filters before an expensive native query.
         let eligibleIds: string[] | undefined;
-        const excludedIds = bookkeeping ? (db.prepare(`SELECT c.id FROM cards c JOIN unity_archive_blocked b ON b.card_id = c.id OR (b.provider = coalesce(c.source,'chub') AND b.record_id = coalesce(nullif(c.sourceId,''),CAST(c.id AS TEXT))) LIMIT 10001`).all() as { id: number }[]).map((row) => String(row.id)) : [];
-        if (excludedIds.length > 10_000) throw new Error('This search has more than 10,000 blocked IDs; narrow its metadata filters');
+        const visibility = existingFilter({}, bookkeeping);
+        const excludedIds = bookkeeping ? (db.prepare(`SELECT c.id FROM cards c WHERE NOT (${visibility.clause}) LIMIT 10001`).all(...visibility.params) as { id: number }[]).map((row) => String(row.id)) : [];
+        if (excludedIds.length > 10_000) throw new ArchiveError('TOO_LARGE', 'This search has more than 10,000 blocked IDs; narrow its metadata filters');
         if (query.has?.includes('followed')) {
           const creators = [...new Set((query.creators ?? []).map((creator) => creator.trim()).filter(Boolean))];
           if (!creators.length) eligibleIds = [];
           else searchFilters.push(`(${Array.from({ length: Math.ceil(creators.length / 64) }, (_, index) => `author IN [${creators.slice(index * 64, index * 64 + 64).map(quoted).join(',')}]`).join(' OR ')})`);
         }
-        const result = await options.search.search(query.q, { mode: query.mode ?? 'lexical', filter: searchFilters.join(' AND '), ...(eligibleIds ? { eligibleIds } : {}), ...(excludedIds.length ? { excludedIds } : {}) }); ids = result.ids; complete = result.complete;
+        const constraints = { filter: searchFilters.join(' AND '), ...(eligibleIds ? { eligibleIds } : {}), ...(excludedIds.length ? { excludedIds } : {}), ...(query.signal ? { signal: query.signal } : {}) };
+        if (!query.q?.trim()) {
+          const result = await options.search!.browse({ ...constraints, sort: query.sort ?? 'updated', offset: windowOffset, limit: windowLimit,
+            ...(library?.cards.length ? { mergeCandidates: true } : {}) });
+          ids = result.ids; browseTotal = result.total;
+        } else {
+          const result = await options.search!.search(query.q, { ...constraints, mode: query.mode === 'browse' ? 'lexical' : query.mode ?? 'lexical' });
+          ids = result.ids; complete = result.complete; scores = result.scores; matches = result.matches;
+        }
       }
-      const filter = existingFilter(query, bookkeeping, ids), limit = Math.min(Math.max(query.limit ?? 48, 1), 100), offset = Math.max(query.offset ?? 0, 0);
-      const total = (db.prepare(`SELECT count(*) AS n FROM cards c ${stateJoin} WHERE ${filter.clause}`).get(...filter.params) as { n: number }).n;
-      const ranked = ids?.length && query.mode && query.mode !== 'lexical' && !query.sort;
+      const filter = existingFilter(query, bookkeeping, ids);
+      const total = browseTotal ?? (db.prepare(`SELECT count(*) AS n FROM cards c ${stateJoin} WHERE ${filter.clause}`).get(...filter.params) as { n: number }).n;
+      const ranked = !!ids?.length && (browseTotal !== undefined || (!!query.mode && query.mode !== 'lexical' && !query.sort));
       const order = ranked ? `CASE c.id ${ids!.map((_, index) => `WHEN CAST(? AS INTEGER) THEN ${index}`).join(' ')} END` : existingSort[query.sort ?? 'updated'];
-      const rows = db.prepare(`${selected} WHERE ${filter.clause} ORDER BY ${order},c.id DESC LIMIT ? OFFSET ?`).all(...filter.params, ...(ranked ? ids! : []), limit, offset) as Row[];
-      const cards: ArchiveCardSummary[] = [];
-      for (let index = 0; index < rows.length; index += 4) cards.push(...await Promise.all(rows.slice(index, index + 4).map(async (row) => ({ ...summary(row), portrait: await portrait(row) }))));
-      return { cards, total, complete };
+      const rows = db.prepare(`${selected} WHERE ${filter.clause} ORDER BY ${order},c.id DESC LIMIT ? OFFSET ?`).all(...filter.params, ...(ranked ? ids! : []), windowLimit, browseTotal !== undefined ? 0 : windowOffset) as Row[];
+      if (browseTotal !== undefined && rows.length !== ids!.length) throw new ArchiveError('INTEGRITY', 'The existing search index and Archive metadata disagree; refresh the index before browsing this subset');
+      const merged = mergeSearchPage(query, rows.map((row) => ({ card: summary(row), row })), library?.cards ?? [],
+        scores, library?.scores, offset - windowOffset, limit);
+      const selectedRows = new Map(rows.map((row) => [String(row.id), row]));
+      const cards: (ArchiveCardSummary | LibrarySearchCard)[] = [];
+      for (let index = 0; index < merged.length; index += 4) cards.push(...await Promise.all(merged.slice(index, index + 4).map(async (card) =>
+        'libraryOwned' in card ? card : { ...card, portrait: await portrait(selectedRows.get(card.id)!) })));
+      query.signal?.throwIfAborted();
+      if (sourceBefore !== databaseGeneration() || (indexed && indexBefore !== await options.search!.snapshot())) throw new ArchiveError('SNAPSHOT_CHANGED', 'The Archive changed during the search; start from the first page');
+      if (query.libraryWorkspaceId && options.libraryIndex && libraryBefore !== await options.libraryIndex.snapshot()) throw new ArchiveError('SNAPSHOT_CHANGED', 'Library projections changed during the search; start from the first page');
+      const combinedScores = scores ? new Map([...scores, ...library?.scores ?? []]) : undefined;
+      const combinedMatches = new Map([...matches ?? [], ...library?.matches ?? []]);
+      const snapshot = searchSnapshot(query, `${archiveId}:${sourceBefore}:${indexBefore}:${library?.snapshot ?? ''}`, combinedScores ? [...combinedScores] : undefined);
+      if (query.snapshot && query.snapshot !== snapshot) throw new ArchiveError('SNAPSHOT_CHANGED', 'The Archive, ranking or query changed; start from the first page');
+      return { cards, total: total + (library?.cards.length ?? 0), complete: complete && (library?.complete ?? true), snapshot,
+        ...(combinedScores ? { scores: cards.map((card) => combinedScores.get(card.id) ?? 0), matches: cards.map((card) => combinedMatches.get(card.id) ?? null) } : {}) };
     },
-    async card(id: string): Promise<ArchiveCardDetail> {
+    async card(id: string, versionId?: string): Promise<ArchiveCardDetail & { archiveId: string }> {
       const row = visible(id);
       if (!row.current_version) {
         const version = await baseline(row), description = version.description;
+        if (versionId !== undefined && versionId !== version.id) throw new NativeArchiveError('NOT_FOUND', 'This exact Archive version is unavailable; the source file changed');
         const publicVersion: ArchiveVersion = { id: version.id, sequence: version.sequence, fetchedAt: version.fetchedAt, remoteUpdatedAt: version.remoteUpdatedAt, objects: version.objects };
-        return { ...summary(row), portrait: version.objects.find((ref) => ref.role === 'portrait')?.sha256 ?? null, versionId: version.id,
+        const container = version.objects.find((ref) => ref.role === 'card');
+        return { ...(versionId === undefined ? summary(row) : pinnedSummary(summary(row), description, publicVersion)), archiveId,
+          portrait: version.objects.find((ref) => ref.role === 'portrait')?.sha256 ?? (container?.mediaType === 'image/png' ? container.sha256 : null), versionId: version.id,
           spec: description.spec === 'v3' ? 'v3' : 'v2', document: description.document, versionList: [publicVersion] };
       }
       const versionList = (db.prepare('SELECT id,sequence,fetched_at AS fetchedAt,remote_updated_at AS remoteUpdatedAt FROM unity_archive_versions WHERE card_id = ? ORDER BY sequence DESC').all(row.id) as Omit<ArchiveVersion, 'objects'>[]).map((version) => ({ ...version, objects: versionObjects(version.id) }));
-      const container = versionObjects(text(row.current_version)).find((ref) => ref.role === 'card');
+      const version = versionList.find((item) => item.id === (versionId ?? row.current_version));
+      if (!version) throw new NativeArchiveError('NOT_FOUND', 'This Archive version is unavailable');
+      const container = version.objects.find((ref) => ref.role === 'card');
       if (!container) throw new NativeArchiveError('UNSUPPORTED_FORMAT', 'Archive version has no card file');
       const object = await readObject(container.sha256), description = describe({ provider: providerOf(row), recordId: recordOf(row), url: text(row.sourceUrl), objects: [] }, { role: 'card', ...object });
-      return { ...summary(row), document: description.document, versionList };
+      return { ...(versionId === undefined ? summary(row) : pinnedSummary(summary(row), description, version)), archiveId, versionId: version.id, portrait: version.objects.find((ref) => ref.role === 'portrait')?.sha256
+        ?? (container.mediaType === 'image/png' ? container.sha256 : null), document: description.document, versionList };
     },
-    async files(id: string) { const row = visible(id); return row.current_version ? versionObjects(text(row.current_version)) : (await baseline(row)).objects; },
+    async files(id: string, versionId?: string) {
+      const row = visible(id);
+      if (row.current_version) {
+        const selectedVersion = versionId ?? text(row.current_version);
+        if (!db.prepare('SELECT 1 FROM unity_archive_versions WHERE id = ? AND card_id = ?').get(selectedVersion, row.id)) throw new NativeArchiveError('NOT_FOUND', 'This Archive version is unavailable');
+        return versionObjects(selectedVersion);
+      }
+      const version = await baseline(row);
+      if (versionId !== undefined && versionId !== version.id) throw new NativeArchiveError('NOT_FOUND', 'This exact Archive version is unavailable; the source file changed');
+      return version.objects;
+    },
+    /** Indexed lookups plus at most 32 lazy legacy candidates; a partial miss is never authoritative. */
+    async identity(query: ArchiveIdentityQuery): Promise<ArchiveIdentityResult> {
+      try { validateIdentityQuery(query); } catch { throw new NativeArchiveError('INVALID_INPUT', 'Invalid Archive identity lookup'); }
+      const filter = existingFilter({}, bookkeeping);
+      if (query.name !== undefined) {
+        const candidates = db.prepare(`${selected} WHERE ${filter.clause} AND c.name = ?${bookkeeping ? ' AND s.current_version IS NULL' : ''}
+          ${identityIndex ? `AND NOT EXISTS (SELECT 1 FROM unity_archive_identities i WHERE i.card_id = c.id AND i.legacy_stamp = ${legacyStamp})` : ''}
+          ORDER BY c.id LIMIT 32`).all(...filter.params, query.name) as Row[];
+        for (const candidate of candidates) {
+          try { await baseline(candidate, true); }
+          catch (error) { if (!(error instanceof NativeArchiveError && error.code === 'UNSUPPORTED_FORMAT')) throw error; }
+        }
+      }
+      const select = `SELECT c.id AS cardId,i.version_id AS versionId,i.file_hash AS fileHash,i.content_hash AS contentHash,
+        coalesce(c.source,'chub') AS provider,coalesce(nullif(c.sourceId,''),CAST(c.id AS TEXT)) AS recordId,coalesce(c.sourceUrl,'') AS url
+        FROM unity_archive_identities i JOIN cards c ON c.id = i.card_id ${stateJoin}
+        WHERE ${filter.clause} AND (i.legacy_stamp IS NULL OR (s.current_version IS NULL AND i.legacy_stamp = ${legacyStamp}))`;
+      let indexed = identityIndex && query.fileHash ? db.prepare(`${select} AND i.file_hash = ? ORDER BY c.id,i.version_id LIMIT 101`).all(...filter.params, query.fileHash) as Omit<ArchiveIdentityMatch, 'matchedBy'>[] : [];
+      if (!indexed.length && bookkeeping && query.fileHash) indexed = db.prepare(`SELECT c.id AS cardId,v.id AS versionId,vo.sha256 AS fileHash,NULL AS contentHash,
+        coalesce(c.source,'chub') AS provider,coalesce(nullif(c.sourceId,''),CAST(c.id AS TEXT)) AS recordId,coalesce(c.sourceUrl,'') AS url
+        FROM unity_archive_version_objects vo JOIN unity_archive_versions v ON v.id = vo.version_id JOIN cards c ON c.id = v.card_id
+        WHERE ${filter.clause} AND vo.role = 'card' AND vo.sha256 = ? ORDER BY c.id,v.sequence LIMIT 101`).all(...filter.params, query.fileHash) as Omit<ArchiveIdentityMatch, 'matchedBy'>[];
+      if (!indexed.length && identityIndex && query.contentHash) indexed = db.prepare(`${select} AND i.content_hash = ? ORDER BY c.id,i.version_id LIMIT 101`).all(...filter.params, query.contentHash) as Omit<ArchiveIdentityMatch, 'matchedBy'>[];
+      const candidates = new Map(indexed.map((entry) => [entry.versionId, { ...entry, cardId: String(entry.cardId) }]));
+      for (const entry of observedIdentities.values()) {
+        if (entry.fileHash !== query.fileHash && (!query.contentHash || entry.contentHash !== query.contentHash)) continue;
+        let row: Row;
+        try { row = visible(entry.cardId); } catch (error) { if (error instanceof NativeArchiveError && error.code === 'NOT_FOUND') continue; throw error; }
+        candidates.set(entry.versionId, { ...entry, provider: providerOf(row), recordId: recordOf(row), url: text(row.sourceUrl) });
+      }
+      const all = [...candidates.values()].sort((a, b) => Number(a.cardId) - Number(b.cardId) || a.versionId.localeCompare(b.versionId));
+      const exact = query.fileHash ? all.filter((entry) => entry.fileHash === query.fileHash) : [];
+      const matchedBy = exact.length ? 'bytes' as const : 'content' as const;
+      const matches = exact.length ? exact : all.filter((entry) => !!query.contentHash && entry.contentHash === query.contentHash);
+      let complete = identityIndex;
+      let unresolvedCount = identityIndex ? 0 : (db.prepare(`SELECT count(*) AS n FROM cards c WHERE ${filter.clause}`).get(...filter.params) as { n: number }).n;
+      if (complete) {
+        const unresolved = query.contentHash ? ` OR (i.content_hash IS NULL${query.name === undefined ? '' : ' AND (i.content_name IS NULL OR i.content_name = ?)'} )` : '';
+        const nameArgs = query.contentHash && query.name !== undefined ? [query.name] : [];
+        const missingLegacy = (db.prepare(`SELECT count(*) AS n FROM cards c ${stateJoin} WHERE ${filter.clause} AND s.current_version IS NULL
+          AND NOT EXISTS (SELECT 1 FROM unity_archive_identities i WHERE i.card_id = c.id AND i.legacy_stamp = ${legacyStamp})`).get(...filter.params) as { n: number }).n;
+        const unknownLegacy = query.contentHash ? (db.prepare(`SELECT count(*) AS n FROM cards c ${stateJoin} JOIN unity_archive_identities i ON i.card_id = c.id
+          WHERE ${filter.clause} AND s.current_version IS NULL AND i.legacy_stamp = ${legacyStamp} AND i.content_hash IS NULL
+          ${query.name === undefined ? '' : 'AND (i.content_name IS NULL OR i.content_name = ?)'}`).get(...filter.params, ...nameArgs) as { n: number }).n : 0;
+        const missingVersion = (db.prepare(`SELECT count(*) AS n FROM unity_archive_versions v JOIN cards c ON c.id = v.card_id LEFT JOIN unity_archive_identities i ON i.version_id = v.id
+          WHERE ${filter.clause} AND (i.version_id IS NULL${unresolved})`).get(...filter.params, ...nameArgs) as { n: number }).n;
+        unresolvedCount = missingLegacy + unknownLegacy + missingVersion;
+        complete = !missingLegacy && !unknownLegacy && !missingVersion;
+      }
+      return { archiveId, matches: matches.slice(0, 100).map((entry) => ({ ...entry, matchedBy })), complete: complete && matches.length <= 100 && indexed.length <= 100, unresolved: unresolvedCount };
+    },
+    /** Explicit operator work only. Cursor checkpoints are metadata; original files are never copied. */
+    async indexIdentities(options: { limit?: number; after?: string } = {}): Promise<{ processed: number; unavailable: number; nextAfter: string | null; complete: boolean }> {
+      writable();
+      options = { ...options };
+      const operation = writes.then(async () => {
+      const limit = options.limit ?? 16;
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw new NativeArchiveError('INVALID_INPUT', 'Identity index batches contain 1–100 versions');
+      let afterId = 0, afterSequence = -1;
+      if (options.after !== undefined) {
+        try {
+          const parsed: unknown = JSON.parse(Buffer.from(options.after, 'base64url').toString('utf8'));
+          if (!Array.isArray(parsed) || parsed.length !== 2 || !Number.isSafeInteger(parsed[0]) || parsed[0] < 1 || !Number.isSafeInteger(parsed[1]) || parsed[1] < 0) throw new Error();
+          [afterId, afterSequence] = parsed as [number, number];
+        } catch { throw new NativeArchiveError('INVALID_INPUT', 'Invalid identity index cursor'); }
+      }
+      const filter = existingFilter({}, bookkeeping);
+      const jobs = db.prepare(`SELECT * FROM (
+        SELECT c.id AS cardId,NULL AS versionId,0 AS sequence,${legacyStamp} AS stamp FROM cards c ${stateJoin}
+          WHERE ${filter.clause} AND s.current_version IS NULL AND NOT EXISTS (SELECT 1 FROM unity_archive_identities i WHERE i.card_id = c.id AND i.legacy_stamp = ${legacyStamp})
+        UNION ALL SELECT c.id AS cardId,v.id AS versionId,v.sequence,NULL AS stamp FROM unity_archive_versions v JOIN cards c ON c.id = v.card_id
+          WHERE ${filter.clause} AND NOT EXISTS (SELECT 1 FROM unity_archive_identities i WHERE i.version_id = v.id)
+        ) WHERE cardId > ? OR (cardId = ? AND sequence > ?) ORDER BY cardId,sequence LIMIT ?`)
+        .all(...filter.params, ...filter.params, afterId, afterId, afterSequence, limit + 1) as { cardId: number; versionId: string | null; sequence: number; stamp: string | null }[];
+      let unavailable = 0;
+      for (const job of jobs.slice(0, limit)) {
+        const row = visible(String(job.cardId));
+        if (job.versionId === null) {
+          const version = await baseline(row, true);
+          const currentStamp = (db.prepare(`SELECT ${legacyStamp} AS stamp FROM cards c WHERE c.id = ?`).get(job.cardId) as { stamp: string }).stamp;
+          if (currentStamp !== job.stamp) throw new Error('Archive metadata changed during identity indexing; retry this batch');
+          saveIdentity(job.cardId, version.id, version.objects, version.identity, job.stamp);
+          unavailable += +!version.identity.hash;
+        } else {
+          const refs = versionObjects(job.versionId), container = refs.find((ref) => ref.role === 'card');
+          if (!container) throw new NativeArchiveError('UNSUPPORTED_FORMAT', 'This Archive version has no card file');
+          const object = await readObject(container.sha256);
+          const identity = await archiveContentHash(object.bytes, undefined, refs, readObject);
+          saveIdentity(job.cardId, job.versionId, refs, identity);
+          unavailable += +!identity.hash;
+        }
+      }
+      const last = jobs[Math.min(jobs.length, limit) - 1];
+      return { processed: Math.min(jobs.length, limit), unavailable, nextAfter: jobs.length > limit && last ? Buffer.from(JSON.stringify([last.cardId, last.sequence])).toString('base64url') : null, complete: jobs.length <= limit };
+      });
+      writes = operation.catch(() => undefined);
+      return operation;
+    },
     object: readObject,
     tags(limit = 2000) {
       const filter = existingFilter({}, bookkeeping);
@@ -421,9 +608,7 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
       const filter = existingFilter({}, bookkeeping), providers = Object.fromEntries((db.prepare(`SELECT coalesce(c.source,'chub') AS provider,count(*) AS n FROM cards c WHERE ${filter.clause} GROUP BY coalesce(c.source,'chub')`).all() as { provider: string; n: number }[]).map((row) => [row.provider, row.n]));
       return { archiveId, cards: Object.values(providers).reduce((sum, n) => sum + n, 0), providers, blocked: bookkeeping ? (db.prepare('SELECT count(*) AS n FROM unity_archive_blocked').get() as { n: number }).n : 0,
         lastChangedAt: (db.prepare('SELECT max(lastModified) AS at FROM cards').get() as { at: string | null }).at, readOnly: readonly,
-        capabilities: { lexical: !!options.search, semantic: options.search?.semantic ?? false,
-          sorts: archiveSorts.filter((sort) => sort !== 'downloads'),
-          has: ['greetings', 'lorebook', 'gallery', 'embeddedImages', 'expressions', 'systemPrompt', 'exampleDialogues', 'followed'] } };
+        capabilities };
     },
     block(provider: string, recordId: string, reason = 'Removed from the Archive') { writable(); const row = find(provider, recordId); db.prepare('INSERT OR REPLACE INTO unity_archive_blocked(provider,record_id,reason,blocked_at,card_id) VALUES (?,?,?,?,?)').run(provider, recordId, reason.slice(0, 500), now(), row?.id ?? null); },
     unblock(provider: string, recordId: string) { writable(); const row = find(provider, recordId); db.prepare('DELETE FROM unity_archive_blocked WHERE card_id = ? OR (provider = ? AND record_id = ?)').run(row?.id ?? null, provider, recordId); },
@@ -468,7 +653,7 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
       lexicalWrites = operation.catch(() => undefined);
       return operation;
     },
-    close() { db.close(); locations.clear(); retainedBytes = 0; if (lockPath) { try { if (readFileSync(lockPath, 'utf8') === lockToken) unlinkSync(lockPath); } catch (error) { if (!missing(error)) throw error; } } void options.search?.close(); },
+    close() { db.close(); locations.clear(); retainedBytes = 0; if (lockPath) { try { if (readFileSync(lockPath, 'utf8') === lockToken) unlinkSync(lockPath); } catch (error) { if (!missing(error)) throw error; } } void options.search?.close(); void options.libraryIndex?.close(); },
   };
 }
 export type ExistingArchive = Awaited<ReturnType<typeof openExistingArchive>>;

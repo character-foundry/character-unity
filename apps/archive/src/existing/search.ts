@@ -13,6 +13,7 @@ import { compileSearchFilter, searchFilterFields } from '../search-filter.js';
 import { evaluateSearch, parseSearchExpression } from '../search-query.js';
 import { hybridRank } from '../semantic-search.js';
 import { buildSearchDocument } from '../search-document.js';
+import type { ArchiveSort } from '../native/query.js';
 
 export interface ExistingSearchOptions {
   lanceDirectory: string;
@@ -48,6 +49,15 @@ export interface ExistingSearchResult {
   complete: boolean;
 }
 export interface IndexedVectorMetadata { cardId: string; textHash: string; model: string; dimensions: number }
+const browseOrders: Partial<Record<ArchiveSort, { column: string; ascending: boolean }>> = {
+  updated: { column: 'lastModified', ascending: false }, added: { column: 'added', ascending: false },
+  newest: { column: 'createdAt', ascending: false }, oldest: { column: 'createdAt', ascending: true },
+  name: { column: 'name', ascending: true }, name_desc: { column: 'name', ascending: false },
+  tokens_desc: { column: 'tokenCount', ascending: false }, tokens_asc: { column: 'tokenCount', ascending: true },
+  stars: { column: 'starCount', ascending: false }, favorites: { column: 'n_favorites', ascending: false },
+  chats: { column: 'nChats', ascending: false }, greetings: { column: 'hasAlternateGreetings', ascending: false },
+  lorebook: { column: 'hasLorebook', ascending: false },
+};
 const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 function invalid(message: string): never { throw new ArchiveError('INVALID_INPUT', message); }
 function tableName(value: string) {
@@ -137,12 +147,61 @@ export async function openExistingSearch(options: ExistingSearchOptions) {
         || dimensions !== options.embedder.space.dimensions)) invalid('Embedding model/dimensions do not match the existing Archive vector metadata');
     } else if (options.embedder) throw new ArchiveError('UNAVAILABLE', `Existing Lance vector table ${vectorName} is not available`);
     const lexical = table, vectorTable = vectors, vectorFields = vectors ? searchFilterFields(await vectors.schema()) : [];
+    const sorts = Object.entries(browseOrders).filter(([, order]) => schema.fields.some((field) => field.name === order.column)).map(([sort]) => sort as ArchiveSort);
     let closed = false;
     function ready() { if (closed) throw new ArchiveError('UNAVAILABLE', 'Existing Lance connection is closed'); }
+    function predicate(query: Pick<ExistingSearchQuery, 'filter' | 'eligibleIds' | 'excludedIds'>, fields = lexicalFields) {
+      if (query.eligibleIds && (query.eligibleIds.length > 10_000 || new Set(query.eligibleIds).size !== query.eligibleIds.length)) invalid('Existing search accepts at most 10,000 unique eligible IDs; use metadata filters for broader subsets');
+      if (query.excludedIds && (query.excludedIds.length > 10_000 || new Set(query.excludedIds).size !== query.excludedIds.length)) invalid('Existing search accepts at most 10,000 unique excluded IDs');
+      const eligible = query.eligibleIds?.map(cardId), excluded = query.excludedIds?.map(cardId);
+      return [compileSearchFilter(query.filter ?? '', fields), eligible ? eligible.length ? `id IN (${eligible.map(quoted).join(', ')})` : 'false' : '',
+        excluded?.length ? `id NOT IN (${excluded.map(quoted).join(', ')})` : ''].filter(Boolean).map((value) => `(${value})`).join(' AND ');
+    }
     return {
       tableName: activeName,
       vectorTableName: vectorTable ? vectorName : null,
       semantic: !!(vectorTable && options.embedder),
+      filterFields: options.embedder && vectorTable ? lexicalFields.filter((field) => vectorFields.some((other) => other.name === field.name && other.type === field.type)) : lexicalFields,
+      sorts,
+      // Coverage has not been counted. Do not turn a status read or startup into
+      // an index-wide census, and do not pretend the metadata sample is coverage.
+      embedding: space && dimensions ? { model: space.model, dimensions, indexedCards: null, indexedRows: null } : undefined,
+      async snapshot(): Promise<string> {
+        ready();
+        let currentName = baseName;
+        try {
+          const stat = await lstat(pointerPath);
+          if (!stat.isFile() || stat.size > 8192) invalid('Existing Lance active-table pointer is invalid');
+          const pointer: unknown = JSON.parse(await readFile(pointerPath, 'utf8'));
+          if (!pointer || typeof pointer !== 'object' || Array.isArray(pointer) || typeof (pointer as Record<string, unknown>).tableName !== 'string') invalid('Existing Lance active-table pointer is invalid');
+          currentName = (pointer as { tableName: string }).tableName;
+        } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+        if (currentName !== activeName) throw new ArchiveError('SNAPSHOT_CHANGED', 'The Archive search generation changed; reconnect and search again');
+        if (space) {
+          const current = readExistingVectorMetadata(options.databasePath!);
+          if (JSON.stringify(current) !== JSON.stringify(space)) throw new ArchiveError('SNAPSHOT_CHANGED', 'The Archive embedding generation changed; reconnect and search again');
+        }
+        return createHash('sha256').update(JSON.stringify([activeName, await lexical.version(), vectorName, vectorTable ? await vectorTable.version() : null, space])).digest('hex');
+      },
+      /** Server-side filtered paging, including broad subsets larger than the
+       * search candidate budget. Only this page's IDs cross the Lance boundary. */
+      async browse(query: Pick<ExistingSearchQuery, 'filter' | 'eligibleIds' | 'excludedIds' | 'signal'> & { sort?: ArchiveSort; offset?: number; limit?: number; mergeCandidates?: boolean } = {}) {
+        ready();
+        const offset = query.offset ?? 0, limit = query.limit ?? 48, sort = query.sort ?? 'updated';
+        if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10_000_000 || !Number.isSafeInteger(limit) || limit < 1 || limit > (query.mergeCandidates ? 10_100 : 100)) invalid('Invalid existing Archive browse page');
+        if (!sorts.includes(sort)) invalid('This existing index does not support that browse sort');
+        const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(query.signal ? [query.signal] : [])]);
+        signal.throwIfAborted();
+        const filter = predicate(query), order = browseOrders[sort]!;
+        const total = await lexical.countRows(filter || undefined);
+        let request = lexical.query().select([...new Set(['id', order.column])]).orderBy([{ columnName: order.column, ascending: order.ascending, nullsFirst: false }, { columnName: 'id', ascending: false }]).offset(offset).limit(limit);
+        if (filter) request = request.where(filter);
+        const rows = await request.toArray({ timeoutMs: 15_000 });
+        signal.throwIfAborted();
+        const ids = rows.map((row) => cardId(row.id));
+        if (new Set(ids).size !== ids.length) throw new ArchiveError('INTEGRITY', 'Existing Lance browse returned duplicate card IDs');
+        return { ids, total };
+      },
       async search(text: string, query: ExistingSearchQuery = {}): Promise<ExistingSearchResult> {
         ready();
         const mode = query.mode ?? 'lexical';
@@ -156,7 +215,7 @@ export async function openExistingSearch(options: ExistingSearchOptions) {
         const eligible = query.eligibleIds?.map(cardId);
         const excluded = query.excludedIds?.map(cardId);
         if (eligible?.length === 0) return { ids: [], scores: new Map(), matches: new Map(), complete: true };
-        const restrict = (filter: string) => [filter, eligible ? `id IN (${eligible.map(quoted).join(', ')})` : '', excluded?.length ? `id NOT IN (${excluded.map(quoted).join(', ')})` : ''].filter(Boolean).map((value) => `(${value})`).join(' AND ');
+        const restrict = (filter: string, column = 'id') => [filter, eligible ? `${column} IN (${eligible.map(quoted).join(', ')})` : '', excluded?.length ? `${column} NOT IN (${excluded.map(quoted).join(', ')})` : ''].filter(Boolean).map((value) => `(${value})`).join(' AND ');
         const ratio = query.semanticRatio ?? 0.4, k = query.rrfK ?? 60;
         if (!Number.isFinite(ratio) || ratio < 0 || ratio > 1 || !Number.isSafeInteger(k) || k < 1 || k > 1000) invalid('Invalid existing hybrid ranking parameters');
         const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(query.signal ? [query.signal] : [])]);
@@ -232,7 +291,7 @@ export async function openExistingSearch(options: ExistingSearchOptions) {
         if (mode === 'lexical' || (mode === 'hybrid' && ratio === 0)) scores = await lexicalSearch();
         else {
           if (!vectorTable || !options.embedder || !dimensions) throw new ArchiveError('UNAVAILABLE', 'Existing Archive semantic search needs its vector table and embedding provider');
-          const predicate = restrict(compileSearchFilter(query.filter ?? '', vectorFields));
+          const predicate = restrict(compileSearchFilter(query.filter ?? '', vectorFields), 'card_id');
           const vector = normalizedVector(await options.embedder.embed(text, signal), dimensions);
           let request = vectorTable.vectorSearch(vector).column('vector').distanceType('cosine')
             .select(['card_id', 'section', 'matchText', '_distance']).limit(limit + 1);

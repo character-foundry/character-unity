@@ -5,6 +5,7 @@ import { openDatabase } from './database.js';
 import { request, transaction } from './transaction.js';
 import type { RevisionInput } from '@character-unity/store';
 import { librarySearchCases } from '../../store/tests/conformance/library-search.cases.js';
+import { archiveForkCases, archiveMembershipCases, importIdentityCases, libraryReferenceCases, searchOutboxCases, sharedAssetCases } from '../../store/tests/conformance/archive.cases.js';
 
 const input: RevisionInput = { authorId: 'alice', document: { spec: 'chara_card_v3', data: { name: 'Aster', opaque: [null, 2] } },
   identity: { algorithm: 'fixture', hash: 'a'.repeat(64) } };
@@ -18,11 +19,61 @@ async function counts() { const db = await raw(); return transaction(db, names, 
 }); }
 const body = (bytes: Uint8Array) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(bytes); c.close(); } });
 async function digest(bytes: Uint8Array) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256', new Uint8Array(bytes)))].map((byte) => byte.toString(16).padStart(2, '0')).join(''); }
+async function versionTwo(format = 'character-unity-indexeddb') {
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const opening = indexedDB.open(name, 2);
+    opening.onupgradeneeded = () => {
+      const db = opening.result, tx = opening.transaction!;
+      db.createObjectStore('meta', { keyPath: 'key' }).add({ key: 'schema', format, version: 2 });
+      db.createObjectStore('workspaces', { keyPath: 'id' }).createIndex('owner', ['ownerId', 'createdAt', 'id']);
+      const cards = db.createObjectStore('cards', { keyPath: 'id' });
+      cards.createIndex('workspace', ['workspaceId', 'id']); cards.createIndex('forks', ['workspaceId', 'forkedFromRevisionId', 'id']);
+      db.createObjectStore('revisions', { keyPath: 'id' }).createIndex('history', ['workspaceId', 'cardId', 'sequence'], { unique: true });
+      db.createObjectStore('assets', { keyPath: 'id' }); db.createObjectStore('sources', { keyPath: 'cardId' }); db.createObjectStore('blobs', { keyPath: 'key' });
+      db.createObjectStore('deletions', { keyPath: 'cardId' }); db.createObjectStore('favorites', { keyPath: 'cardId' });
+      db.createObjectStore('follows', { keyPath: ['workspaceId', 'key'] }).createIndex('workspace', ['workspaceId', 'key']);
+      db.createObjectStore('metrics', { keyPath: 'revisionId' });
+      const createdAt = '2026-10-01T00:00:00.000Z';
+      tx.objectStore('workspaces').add({ id: 'w2', ownerId: 'alice', name: 'Existing', createdAt });
+      tx.objectStore('cards').add({ id: 'c2', workspaceId: 'w2', headRevisionId: 'r2', originalHash: null, forkedFromRevisionId: null, createdAt });
+      tx.objectStore('revisions').add({ id: 'r2', workspaceId: 'w2', cardId: 'c2', sequence: 1, parentRevisionId: null, ...input, assets: [], createdAt });
+      tx.objectStore('favorites').add({ cardId: 'c2', workspaceId: 'w2', createdAt });
+    };
+    opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error);
+  });
+  db.close();
+}
 
 beforeEach(() => { vi.stubGlobal('indexedDB', new IDBFactory()); vi.stubGlobal('IDBKeyRange', IDBKeyRange); });
 afterEach(() => { for (const handle of handles.splice(0)) handle.close(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('browser storage', () => {
+  it('pins Archive membership without copying originals (S20)', async () => {
+    const { store } = await open(); await archiveMembershipCases(store, (await store.createWorkspace({ ownerId: 'alice', name: 'References' })).id);
+    expect(await counts()).toEqual([0, 0, 0]);
+  });
+  it('keeps Archive-derived fork assets external and preserves exact ancestry (S21)', async () => {
+    const { store } = await open(); await archiveForkCases(store, (await store.createWorkspace({ ownerId: 'alice', name: 'Forks' })).id);
+    const db = await raw();
+    expect(await transaction(db, ['blobs'], 'readonly', function* (tx) { return yield* request(tx.objectStore('blobs').count()); })).toBe(0);
+  });
+  it('deduplicates concurrent imports without losing module or lineage differences (S22)', async () => {
+    const { store } = await open(); await importIdentityCases(store, (await store.createWorkspace({ ownerId: 'alice', name: 'Imports' })).id);
+  });
+  it('filters and globally pages local cards and Archive references together (S23)', async () => {
+    const { store } = await open(); await libraryReferenceCases(store, (await store.createWorkspace({ ownerId: 'alice', name: 'Library' })).id);
+  });
+  it('reuses durable staged and ready import assets without changing ordinary staging (S24)', async () => {
+    const { store } = await open(), workspaceId = (await store.createWorkspace({ ownerId: 'alice', name: 'Assets' })).id;
+    await sharedAssetCases(store, workspaceId);
+    const existing = await store.stageSharedAsset({ workspaceId, hash: '9'.repeat(64), byteLength: 5, mediaType: 'image/png' });
+    const second = await open();
+    expect((await second.store.stageSharedAsset({ workspaceId, hash: existing.hash, byteLength: existing.byteLength, mediaType: existing.mediaType })).id).toBe(existing.id);
+  });
+  it('persists guarded search jobs without idle polling or generation reset (S25)', async () => {
+    const { store } = await open(); await searchOutboxCases(store, (await store.createWorkspace({ ownerId: 'alice', name: 'Search' })).id);
+    const second = await open(); expect(await second.store.listSearchJobs()).toEqual([]);
+  });
   it('reopens sources and ordered revisions, snapshots inputs and isolates workspaces', async () => {
     const first = await open();
     const workspace = await first.store.createWorkspace({ name: 'Desk', ownerId: 'alice' });
@@ -147,10 +198,29 @@ describe('browser storage', () => {
     });
     v1.close();
     const { store } = await open();
-    expect(await store.readiness()).toEqual({ schemaVersion: 2 });
+    expect(await store.readiness()).toEqual({ schemaVersion: 3 });
     expect(await store.getCard('w1', 'c1')).toMatchObject({ id: 'c1' });
     await store.deleteCard('w1', 'c1');
     await expect(store.getCard('w1', 'c1')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+  it('upgrades populated version 2 in place and queues only existing head metadata', async () => {
+    await versionTwo();
+    const { store } = await open();
+    expect((await store.getRevision('w2', 'r2')).document).toEqual(input.document);
+    expect(await store.getFavorite('w2', 'c2')).toBe(true);
+    expect(await store.listSearchJobs()).toEqual([{ workspaceId: 'w2', cardId: 'c2', revisionId: 'r2', operation: 'upsert', eventSequence: 1, error: null }]);
+    expect(await store.listArchiveReferences('w2')).toEqual([]);
+    const db = await raw();
+    expect(await transaction(db, ['blobs'], 'readonly', function* (tx) { return yield* request(tx.objectStore('blobs').count()); })).toBe(0);
+  });
+  it('rejects a modified version 2 marker without accepting or overwriting it', async () => {
+    await versionTwo('another-application');
+    await expect(open()).rejects.toMatchObject({ code: 'SCHEMA_MISMATCH' });
+    const db = await new Promise<IDBDatabase>((resolve, reject) => { const opening = indexedDB.open(name);
+      opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error); });
+    handles.push(db); expect(db.version).toBe(2);
+    expect(await transaction(db, ['meta'], 'readonly', function* (tx) { return yield* request(tx.objectStore('meta').get('schema')); }))
+      .toMatchObject({ format: 'another-application', version: 2 });
   });
 
   it('refuses foreign schemas and namespaces without erasing data', async () => {

@@ -100,6 +100,46 @@ describe('native editor Save API', () => {
     expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
+  it('opens an Archive reference read-only and saves its first changed edit as an owned fork', async () => {
+    const reference = { archiveId: 'archive', cardId: 'source', versionId: 'archive-version' };
+    const fetcher = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...opened('reference', revision('archive-version')), reference }))
+      .mockResolvedValueOnce(Response.json(metadata))
+      .mockImplementationOnce(async (input, init) => {
+        expect(input).toBe('/api/workspaces/asset-tests/cards/reference/fork-assets');
+        const form = init?.body as FormData, value = JSON.parse(form.get('input') as string);
+        expect(value.expectedHead).toBe('archive-version');
+        expect(value.document.data.description).toBe('My edit');
+        expect(value.bindings).toEqual([{ path: 'declared/0', source: { kind: 'existing', path: 'declared/0' } }]);
+        expect([...form.keys()]).toEqual(['input']);
+        return Response.json({ cardId: 'owned-fork', revisionId: 'fork-head', revision: revision('fork-head', 1, value.document) });
+      });
+    vi.stubGlobal('fetch', fetcher);
+    const source = (await api.getCard('reference')).data!;
+    expect(source.meta.archiveReference).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    const draft = { ...source, data: { ...document, data: { ...document.data, description: 'My edit' } } as unknown as Card['data'] };
+    const saved = await api.updateCard('reference', draft);
+    expect(saved.data?.meta.id).toBe('owned-fork');
+    expect(saved.data?.meta.archiveReference).not.toBe(true);
+    expect(api.headRevision('reference')).toBe('archive-version');
+    expect(api.headRevision('owned-fork')).toBe('fork-head');
+    expect(editorAssets.hasChanges(saved.data!)).toBe(false);
+  });
+
+  it('retains the reference marker when an unchanged Archive Save creates no fork', async () => {
+    const reference = { archiveId: 'archive', cardId: 'source', versionId: 'archive-version' };
+    const value = revision('archive-version');
+    vi.stubGlobal('fetch', vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(Response.json({ ...opened('reference', value), reference }))
+      .mockResolvedValueOnce(Response.json(metadata))
+      .mockResolvedValueOnce(Response.json({ cardId: 'reference', revisionId: value.id, revision: value, reference })));
+    const source = (await api.getCard('reference')).data!;
+    const saved = (await api.updateCard('reference', source)).data!;
+    expect(saved.meta).toMatchObject({ id: 'reference', archiveReference: true });
+    expect(editorAssets.hasChanges(saved)).toBe(false);
+  });
+
   it('does not let a library summary refresh silently advance an open editor’s expected head', async () => {
     const fetcher = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json(opened('pinned')))

@@ -17,10 +17,13 @@ let origin = `http://${urlHost}:${port}`;
 const databasePath = process.env.UNITY_DB_PATH ?? fileURLToPath(new URL('../runtime/unity.db', import.meta.url));
 const blobDirectory = process.env.UNITY_BLOB_DIR ?? fileURLToPath(new URL('../runtime/blobs', import.meta.url));
 const remoteConnections = await loadRemoteConnections(process.env.UNITY_REMOTE_CONNECTIONS_FILE);
+const libraryIndexFlag = process.env.UNITY_ARCHIVE_LIBRARY_INDEX ?? '0';
+if (!['0', '1'].includes(libraryIndexFlag)) throw new Error('UNITY_ARCHIVE_LIBRARY_INDEX must be 0 or 1');
 const services = await openLocalServices({ databasePath, blobDirectory, remoteConnections,
   ...(process.env.UNITY_ARCHIVE_ORIGIN ? { archiveOrigin: process.env.UNITY_ARCHIVE_ORIGIN } : {}),
   // The native Archive (scraped cards): its loopback address and the admin token it was started with.
   ...(process.env.UNITY_ARCHIVE_NATIVE_ORIGIN ? { nativeArchive: { origin: process.env.UNITY_ARCHIVE_NATIVE_ORIGIN,
+    libraryIndex: libraryIndexFlag === '1',
     ...(process.env.UNITY_ARCHIVE_ADMIN_TOKEN ? { adminToken: process.env.UNITY_ARCHIVE_ADMIN_TOKEN } : {}) } } : {}) });
 const app = profile === 'hub'
   ? createAccountApi({ origin: publicOrigin!, accounts: services.accounts, store: services.store, forSession: services.forSession, ...(syncEnabled ? { sync: createSyncApi({ writes: syncWritesEnabled, origin: publicOrigin!, hub: services.hub, sync: services.sync }) } : {}) })

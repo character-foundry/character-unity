@@ -1,8 +1,9 @@
 # Shared workspace store
 
 One SQLite schema for Architect/hub workspaces, cards, immutable revisions,
-parent/fork relationships and staged/completed asset metadata. Archive data
-never lives here. Node and D1 share repository SQL and migrations.
+parent/fork relationships and staged/completed asset metadata. Archive original
+documents and bytes stay external; Unity stores only their library links and
+exact-version ancestry. Node and D1 share repository SQL and migrations.
 
 ```ts
 import { openNodeStore } from '@character-unity/store/node';
@@ -47,8 +48,8 @@ Hosts authorize workspaces, authors and fork sources. Ordinary reads and saves
 are workspace-scoped; explicit forks may link an authorized source in another
 workspace. HTTP mutations use the authorized card service rather than exposing these methods directly.
 
-Documents are opaque JSON snapshots (max 256 KiB, depth 64), with at most 64 asset
-references. The store validates JSON and identity shape but does not parse cards,
+Documents are opaque JSON snapshots (max 16 MiB, depth 64), with at most 8193 asset
+references. Hosted D1 additionally enforces its smaller per-value limit. The store validates JSON and identity shape but does not parse cards,
 compute canonical hashes or serialize lineage; those remain Foundry primitives.
 It never adds lineage to an untouched original.
 
@@ -87,3 +88,35 @@ original source and outbox frame blocks retirement. Creation timestamps are
 immutable, with conservative migration-time backfill for older assets. Normal
 asset reads hide retired records. See [asset maintenance](../../docs/asset-maintenance.md)
 for the two-phase storage workflow and delayed-upload limitations.
+
+Schema v13 adds exact-version Archive library references. `addArchiveReference`
+is idempotent for workspace + Archive + card + version; distinct versions and
+upstream records retain their own provenance. References contain a bounded
+summary, identity and favorite state, not the original document or blobs.
+Unfavoriting keeps membership; removing membership deletes only the link.
+`findArchiveReference` and `archiveMemberships` resolve exact pins, never latest.
+
+`createArchiveFork` commits the first changed revision with its external ancestor
+and optional source metadata in one batch. `registerArchiveAsset` stores only
+ready metadata and a pinned logical path; its bytes remain in Archive. The host
+must resolve that locator through Archive, not the ordinary blob store. Such
+assets are permanently excluded from blob retirement. Local revision ancestry
+remains a separate relationship; removing a reference does not remove its forks.
+
+`findImportMatch` checks accepted input bytes first, then current content together
+with opaque module and exact lineage digests. An ancestor's original hash or file
+is not a match for its edited fork. `createImportedCard` atomically claims the
+import identity, so concurrent imports return one winner. `stageSharedAsset` is
+opt-in import staging that shares one durable digest/size/media-type upload key;
+ordinary `stageAsset` remains independent. Retirement releases the shared claim
+but keeps the retired asset's permanent fence.
+
+`listLibrarySummaries` globally filters, sorts and pages local cards and Archive
+links before loading page documents. Tag counts include both. Saved Archive forks
+carry `archiveSource` as well as their independent local revision history.
+
+Every owned head change or deletion atomically updates the search outbox;
+reference/favorite changes do not. `listSearchJobs`, `ackSearchJob` and
+`failSearchJob` let a host explicitly drain bounded work into the existing Lance
+directory. Acknowledgments retain the monotonic counter, preventing late results
+from erasing newer work. Jobs store metadata only and start no idle polling.

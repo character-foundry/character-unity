@@ -6,7 +6,7 @@ import type { Authenticate } from './cards.js';
 import { json } from './body.js';
 
 type Env = { Variables: { actor: Actor } };
-const queryKeys = ['q', 'mode', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'sort', 'offset', 'limit'];
+const queryKeys = ['q', 'mode', 'filter', 'snapshot', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'sort', 'offset', 'limit'];
 
 /**
  * The native Archive, read through this host: browsing, files for the library, and Settings' scraper
@@ -24,13 +24,18 @@ export function nativeArchiveRoutes(options: { nativeArchive?: NativeArchiveServ
   });
   const archive = () => options.nativeArchive!;
   const base = '/:workspaceId/archive/v2';
-  routes.get(`${base}/status`, async (c) => c.json(await archive().status(c.get('actor'), c.req.param('workspaceId'))));
+  routes.get(`${base}/status`, async (c) => c.json(await archive().status(c.get('actor'), c.req.param('workspaceId'), c.req.raw.signal)));
   routes.get(`${base}/cards`, async (c) => {
     const params = new URL(c.req.url).searchParams;
     if (c.req.url.length > 20_000 || [...params.keys()].some((key) => !queryKeys.includes(key) || params.getAll(key).length !== 1)) throw new CardError('INVALID_INPUT', 'Invalid Archive query');
-    return c.json(await archive().list(c.get('actor'), c.req.param('workspaceId'), params));
+    return c.json(await archive().list(c.get('actor'), c.req.param('workspaceId'), params, c.req.raw.signal));
   });
-  routes.get(`${base}/cards/:id`, async (c) => c.json(await archive().card(c.get('actor'), c.req.param('workspaceId'), c.req.param('id'))));
+  routes.get(`${base}/cards/:id`, async (c) => {
+    const params = new URL(c.req.url).searchParams, versionId = params.get('version') ?? undefined;
+    if ([...params.keys()].some((key) => key !== 'version') || params.getAll('version').length > 1
+      || (versionId !== undefined && (!versionId || versionId.length > 200))) throw new CardError('INVALID_INPUT', 'Expected an exact Archive version');
+    return c.json(await archive().card(c.get('actor'), c.req.param('workspaceId'), c.req.param('id'), c.req.raw.signal, versionId));
+  });
   routes.get(`${base}/tags`, async (c) => c.json(await archive().tags(c.get('actor'), c.req.param('workspaceId'))));
   routes.get(`${base}/objects/:hash`, async (c) => {
     const upstream = await archive().object(c.get('actor'), c.req.param('workspaceId'), c.req.param('hash'));
@@ -38,7 +43,11 @@ export function nativeArchiveRoutes(options: { nativeArchive?: NativeArchiveServ
     return new Response(upstream.body, { headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream',
       'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
   });
-  routes.post(`${base}/cards/:id/import`, async (c) => c.json(await archive().import(c.get('actor'), c.req.param('workspaceId'), c.req.param('id')), 201));
+  for (const method of ['post', 'put'] as const) routes[method](`${base}/cards/:id/${method === 'post' ? 'import' : 'favorite'}`, async (c) => {
+    const body = c.req.header('content-type')?.includes('application/json') ? await json(c, 1024) : {};
+    if (Object.keys(body).some((key) => key !== 'versionId') || (body.versionId !== undefined && (typeof body.versionId !== 'string' || !body.versionId || body.versionId.length > 200))) throw new CardError('INVALID_INPUT', 'Expected an exact Archive version');
+    return c.json(await archive().import(c.get('actor'), c.req.param('workspaceId'), c.req.param('id'), body.versionId as string | undefined, method === 'put'), 201);
+  });
   routes.post(`${base}/cards/:id/block`, async (c) => c.json(await archive().admin.block(c.get('actor'), c.req.param('workspaceId'), c.req.param('id'))));
   routes.get(`${base}/sources`, async (c) => c.json(await archive().admin.sources(c.get('actor'), c.req.param('workspaceId'))));
   routes.put(`${base}/sources/:provider`, async (c) => c.json(await archive().admin.saveSource(c.get('actor'), c.req.param('workspaceId'), c.req.param('provider'), await json(c, 65_536))));

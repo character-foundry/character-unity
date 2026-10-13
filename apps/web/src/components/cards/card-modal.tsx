@@ -49,8 +49,9 @@ export function CardModal({ card, isOpen, onClose, placements }: CardModalProps)
               <FavoriteButton key={`${card.id}:${card.isFavorited}`} cardId={card.id} initial={card.isFavorited} className="p-1" iconClassName="h-5 w-5" />
               {card.tokensTotal !== null && <span className="text-sm text-solar">{card.tokensTotal.toLocaleString()} tokens</span>}
               {card.isFork && <span className="rounded bg-nebula px-2 py-0.5 text-xs font-semibold text-white">FORK</span>}
+              {card.reference && <span className="rounded bg-emerald-900/50 px-2 py-0.5 text-xs font-semibold text-emerald-200">ARCHIVE LINK</span>}
               {card.forksCount !== null && card.forksCount > 0 && <span className="text-sm text-starlight/60">{card.forksCount} fork{card.forksCount === 1 ? '' : 's'}</span>}
-              <span className="text-xs text-starlight/60">Revision {card.revisionCount}</span>
+              <span className="text-xs text-starlight/60" title={card.reference?.versionId}>{card.reference ? 'Pinned Archive version' : `Revision ${card.revisionCount}`}</span>
             </div>
             <div className="flex flex-wrap gap-2">
               <MetadataBadge type="greetings" count={card.totalGreetingsCount} variant="full" />
@@ -69,8 +70,9 @@ export function CardModal({ card, isOpen, onClose, placements }: CardModalProps)
                 <Link to={`/card/${encodeURIComponent(card.id)}/edit`} onClick={onClose} className="btn-primary flex-1 py-2 text-center">Edit</Link>
                 <Link to={`/card/${encodeURIComponent(card.id)}/fork`} onClick={onClose} className="btn-secondary flex-1 py-2 text-center" title="Your copy is created only when you save">Fork</Link>
               </div>
+              {card.reference && <p className="text-xs text-starlight/60">This is a library link, not a copy. Changed Save creates your fork; the archived original remains read-only.</p>}
               <div className="flex items-center gap-2"><SendMenu cardId={card.id} placements={placements} variant="wide" className="flex-1" /><PlacementChips placements={placements} /></div>
-              <DeleteCardButton cardId={card.id} name={card.name} onDeleted={onClose} className="w-full" />
+              <DeleteCardButton cardId={card.id} name={card.name} reference={Boolean(card.reference)} onDeleted={onClose} className="w-full" />
             </div>
           </div>
         </div>

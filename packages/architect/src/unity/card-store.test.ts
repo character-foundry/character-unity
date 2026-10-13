@@ -78,6 +78,58 @@ describe('native editor Save lifecycle', () => {
     return { client, store };
   }
 
+  it('keeps an untouched Archive reference unchanged, then promotes its changed Save without losing in-flight typing', async () => {
+    const reference = { archiveId: 'archive', cardId: 'source', versionId: 'head-1' };
+    fetcher.mockResolvedValueOnce(Response.json({ ...opened('reference'), reference }));
+    await cards.getState().loadCard('reference');
+    await cards.getState().saveCard();
+    expect(posts()).toHaveLength(0);
+    cards.getState().updateCardFields({ description: 'First edited value' });
+    fetcher.mockResolvedValueOnce(Response.json({ assets: [] }));
+    const pending = deferred<Response>();
+    let submitted: Json | undefined;
+    fetcher.mockImplementationOnce(async (path, options) => {
+      expect(path).toBe('/api/workspaces/save-tests/cards/reference/fork-assets');
+      submitted = JSON.parse((options!.body as FormData).get('input') as string).document;
+      return pending.promise;
+    });
+    const save = cards.getState().saveCard();
+    await vi.waitFor(() => expect(submitted).toBeDefined());
+    const selection = cards.getState().selectionVersion;
+    cards.getState().updateCardFields({ description: 'Typed during the first fork Save' });
+    const saved = revision('fork-head', stamped(submitted!, 'fork-head'));
+    pending.resolve(Response.json({ cardId: 'owned-fork', revisionId: saved.id, revision: saved }));
+    await save;
+    expect(cards.getState().currentCard?.meta).toMatchObject({ id: 'owned-fork' });
+    expect(cards.getState().currentCard?.meta.archiveReference).not.toBe(true);
+    expect(data(cards.getState().currentCard).description).toBe('Typed during the first fork Save');
+    expect(lineage(cards.getState().currentCard)).toEqual({ revisionHash: 'fork-head' });
+    expect(cards.getState().selectionVersion).toBe(selection);
+    expect(cards.getState().isDirty).toBe(true);
+    expect(saveDraft).toHaveBeenLastCalledWith('owned-fork', cards.getState().currentCard, 'fork-head');
+  });
+
+  it('exports the newly saved owned fork rather than the unchanged Archive source', async () => {
+    const reference = { archiveId: 'archive', cardId: 'source', versionId: 'head-1' };
+    fetcher.mockResolvedValueOnce(Response.json({ ...opened('reference'), reference }));
+    await cards.getState().loadCard('reference');
+    cards.getState().updateCardFields({ description: 'My exported edit' });
+    fetcher.mockResolvedValueOnce(Response.json({ assets: [] }))
+      .mockImplementationOnce(async (_path, options) => {
+        const input = JSON.parse((options!.body as FormData).get('input') as string);
+        const saved = revision('owned-head', stamped(input.document, 'owned-head'));
+        return Response.json({ cardId: 'owned-fork', revisionId: saved.id, revision: saved });
+      }).mockImplementationOnce(async (path) => {
+        expect(path).toBe('/api/workspaces/save-tests/cards/owned-fork/export?format=json&revisionId=owned-head');
+        return new Response('exported owned fork', { headers: { 'content-type': 'application/json' } });
+      });
+    const anchor = { href: '', download: '', click: vi.fn() };
+    vi.stubGlobal('document', { createElement: () => anchor });
+    await cards.getState().exportCard('json');
+    expect(anchor.click).toHaveBeenCalledOnce();
+    expect(cards.getState().currentCard?.meta.id).toBe('owned-fork');
+  });
+
   it.each(['updateCardData', 'updateCardFields'] as const)('preserves opaque wrapped CCv2 envelope fields through %s', (method) => {
     const wrapped = { spec: 'chara_card_v2', spec_version: '2.0', opaque_root: { keep: [null, 7] },
       data: { name: 'V2', description: 'Original', extensions: { vendor: { keep: true } } } };

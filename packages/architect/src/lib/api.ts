@@ -8,7 +8,8 @@ export type Result<T> = { data?: T; error?: string };
 type Json = Record<string, unknown>;
 interface RequestOptions { signal?: AbortSignal }
 interface UnityRevision { id: string; sequence: number; document: Json; createdAt: string; assets?: { path: string; assetId: string }[] }
-interface UnityOpened { card: { id: string; createdAt: string }; revision: UnityRevision; favorite?: boolean }
+interface ArchiveReference { archiveId: string; cardId: string; versionId: string }
+interface UnityOpened { card: { id: string; createdAt: string }; revision: UnityRevision; favorite?: boolean; reference?: ArchiveReference }
 export interface UnityVersion { id: string; cardId: string; version: number; createdAt: string; message?: string; data?: Card['data'] }
 interface UnitySummary { id: string; headRevisionId: string; name: string; creator: string; tags: string[]; spec: 'v2' | 'v3'; hasPortrait: boolean; favorite: boolean; createdAt: string; updatedAt: string }
 const text = (value: unknown) => typeof value === 'string' ? value : '';
@@ -25,6 +26,7 @@ export class UnityApiClient {
   private readonly imageHeads = new Map<string, string>();
   private readonly portraits = new Map<string, boolean>();
   private readonly favorites = new Map<string, boolean>();
+  private readonly references = new Set<string>();
   private readonly reads = new Map<string, number>();
   private epoch = 0;
 
@@ -46,7 +48,7 @@ export class UnityApiClient {
   headRevision(cardId: string) { return this.heads.get(cardId); }
   pinRevision(cardId: string, revisionId: string) { this.heads.set(cardId, revisionId); this.imageHeads.set(cardId, revisionId); }
   select() { this.epoch++; }
-  dispose() { this.select(); this.lifetime.abort(); this.assets.reset(); this.heads.clear(); this.imageHeads.clear(); this.reads.clear(); }
+  dispose() { this.select(); this.lifetime.abort(); this.assets.reset(); this.heads.clear(); this.imageHeads.clear(); this.reads.clear(); this.references.clear(); }
   private base() { return `/api/workspaces/${encodeURIComponent(this.workspaceId)}/cards`; }
   private current(epoch: number, signal?: AbortSignal) { return epoch === this.epoch && !this.signal.aborted && !signal?.aborted; }
   private async send(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
@@ -79,7 +81,8 @@ export class UnityApiClient {
     const meta: CardMeta = { id, name: text(data.name) || 'Untitled', spec: revision.document.spec === 'chara_card_v3' ? 'v3' : 'v2',
       tags, favorite: this.favorites.get(id) ?? false, creator: text(data.creator) || undefined,
       characterVersion: text(data.character_version) || undefined, rating: tags.some((tag) => tag.toLowerCase() === 'nsfw') ? 'NSFW' : 'SFW',
-      createdAt, updatedAt: revision.createdAt, assetCount: (revision.assets ?? []).filter((asset) => asset.path.startsWith('declared/')).length };
+      createdAt, updatedAt: revision.createdAt, assetCount: (revision.assets ?? []).filter((asset) => asset.path.startsWith('declared/')).length,
+      ...(this.references.has(id) ? { archiveReference: true } : {}) };
     return { meta, data: revision.document as unknown as CCv2Data | CCv3Data };
   }
   async listCards(query?: string, page = 1, limit = 50, favoritesOnly = false, options: CardListOptions = {}, request: RequestOptions = {}) {
@@ -106,12 +109,16 @@ export class UnityApiClient {
     if (result.error || !result.data) return { error: result.error };
     if (!this.current(epoch, options.signal) || this.reads.get(key) !== read) return { error: 'This card read was superseded' };
     this.favorites.set(id, result.data.favorite === true);
+    if (options.pinHead !== false) {
+      if (result.data.reference) this.references.add(id); else this.references.delete(id);
+    }
     return { data: this.toCard(id, result.data.revision, result.data.card.createdAt, options.pinHead !== false) };
   }
   async updateCard(id: string, updates: Partial<Card>, options: RequestOptions = {}): Promise<Result<Card>> {
     const epoch = this.epoch, expectedHead = this.heads.get(id);
     if (!expectedHead) return { error: 'Reload this card before saving' };
     if (!updates.data) return { error: 'Nothing to save' };
+    if (this.references.has(id)) return this.createCard({ ...updates, meta: { ...updates.meta, id: '', forkOf: id } } as Card, options);
     const card = updates as Card, plan = this.assets.hasChanges(card) ? await this.assets.prepare(card) : undefined;
     const result = await this.unity<UnityRevision>(`${this.base()}/${encodeURIComponent(id)}/${plan ? 'asset-revisions' : 'revisions'}`, plan ? {
       method: 'POST', body: assetPlanForm(plan, expectedHead), signal: options.signal,
@@ -126,10 +133,13 @@ export class UnityApiClient {
     const epoch = this.epoch, forkOf = card.meta.forkOf, expectedHead = forkOf ? this.heads.get(forkOf) : undefined;
     if (forkOf && !expectedHead) return { error: 'Reload the original card before saving this fork' };
     const plan = await this.assets.prepare(card);
-    const result = await this.unity<{ cardId: string; revisionId: string; revision: UnityRevision }>(forkOf
+    const result = await this.unity<{ cardId: string; revisionId: string; revision: UnityRevision; reference?: ArchiveReference }>(forkOf
       ? `${this.base()}/${encodeURIComponent(forkOf)}/fork-assets` : this.base(), { method: 'POST', body: assetPlanForm(plan, expectedHead), signal: options.signal });
     if (result.error || !result.data) return { error: result.error };
     const remember = this.current(epoch, options.signal);
+    if (remember) {
+      if (result.data.reference) this.references.add(result.data.cardId); else this.references.delete(result.data.cardId);
+    }
     const saved = this.toCard(result.data.cardId, result.data.revision, result.data.revision.createdAt, remember);
     if (remember) this.assets.accept(saved, plan, result.data.revisionId);
     return { data: saved };

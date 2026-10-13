@@ -5,6 +5,7 @@ import {
 } from './contract.js';
 import type { ArchiveErrorCode, ArchiveStatus, CardPage, CardResult, ListRequest, OriginalObject, SelectionManifest, Snapshot, SearchRequest, SearchPage, SearchFilterField } from './contract.js';
 export type * from './contract.js';
+export type * from './native.js';
 export { ArchiveError } from './contract.js';
 
 /** Fully receive and verify before exposing original bytes to callers. Never follows redirects. */

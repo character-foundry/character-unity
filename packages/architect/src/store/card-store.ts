@@ -162,12 +162,13 @@ export function createCardStore({ api, assets, tokens, recovery, isDisposed, sig
             else delete foundry.lineage;
             extensions.foundry = foundry; inner.extensions = extensions;
             merged = { data: data as unknown as Card['data'], meta: { ...latest.meta, id: saved.meta.id, forkOf: undefined,
+              archiveReference: saved.meta.archiveReference, favorite: saved.meta.favorite,
               updatedAt: saved.meta.updatedAt, createdAt: saved.meta.createdAt } };
           }
           const dirty = changedDuringSave || assets.hasChanges(merged);
           set({ currentCard: merged, isDirty: dirty }); updateTokens(merged);
           if (dirty) await recovery.save(saved.meta.id, merged, api.headRevision(saved.meta.id)).catch(console.warn);
-          else if (currentCard.meta.id) await recovery.remove(currentCard.meta.id).catch(console.warn);
+          if (currentCard.meta.id && (!dirty || currentCard.meta.id !== saved.meta.id)) await recovery.remove(currentCard.meta.id).catch(console.warn);
         } catch (error) {
           if (selected(selectionVersion) && !controller.signal.aborted) throw error;
         } finally {
@@ -198,14 +199,16 @@ export function createCardStore({ api, assets, tokens, recovery, isDisposed, sig
         if (inactive() || !currentCard?.meta.id) return;
         await get().saveCard();
         if (!selected(selectionVersion)) return;
-        const { data, error } = await api.exportCard(currentCard.meta.id, format, { signal });
+        const saved = get().currentCard;
+        if (!saved?.meta.id) return;
+        const { data, error } = await api.exportCard(saved.meta.id, format, { signal });
         if (!selected(selectionVersion)) return;
         if (error) throw new Error(error);
         if (!data) throw new Error('Export returned no file');
         const url = URL.createObjectURL(data);
         try {
           const anchor = document.createElement('a'); anchor.href = url;
-          anchor.download = `${currentCard.meta.name}.${format === 'voxta' ? 'voxpkg' : format}`;
+          anchor.download = `${saved.meta.name}.${format === 'voxta' ? 'voxpkg' : format}`;
           anchor.click();
         } finally { URL.revokeObjectURL(url); }
       },

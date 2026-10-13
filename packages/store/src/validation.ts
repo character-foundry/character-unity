@@ -1,5 +1,5 @@
 import { StoreError } from './types.js';
-import type { CardDocument, RevisionInput } from './types.js';
+import type { ArchivePin, ArchiveReferenceSummary, CardDocument, ContentIdentity, ImportIdentity, RevisionInput } from './types.js';
 
 export function invalid(message: string): never { throw new StoreError('INVALID_INPUT', message); }
 export function text(value: string, name: string, max = 200): string {
@@ -26,6 +26,50 @@ export function count(value: number, name: string): number {
 }
 export function limit(value = 50): number {
   if (!Number.isInteger(value) || value < 1 || value > 100) invalid('Page size must be between 1 and 100');
+  return value;
+}
+export function archivePin(value: ArchivePin): ArchivePin {
+  return { archiveId: text(value.archiveId, 'archiveId'), cardId: text(value.cardId, 'Archive cardId'),
+    versionId: text(value.versionId, 'Archive versionId') };
+}
+export function contentIdentity(value: ContentIdentity): ContentIdentity {
+  return { algorithm: text(value.algorithm, 'identity algorithm', 80), hash: hash(value.hash) };
+}
+export function importIdentity(value: ImportIdentity): ImportIdentity {
+  const result: ImportIdentity = {};
+  if (value.fileHash !== undefined) result.fileHash = hash(value.fileHash);
+  if (value.identity !== undefined) result.identity = contentIdentity(value.identity);
+  result.moduleHash = value.moduleHash == null ? null : hash(value.moduleHash);
+  result.lineageHash = value.lineageHash == null ? null : hash(value.lineageHash);
+  if (!result.fileHash && !result.identity) invalid('An import requires a file or content identity');
+  return result;
+}
+export function archiveSummary(value: ArchiveReferenceSummary): ArchiveReferenceSummary {
+  const string = (value: string, name: string, max: number) => {
+    if (typeof value !== 'string' || value.length > max) invalid(`${name} must contain at most ${max} characters`);
+    return value;
+  };
+  if (!Array.isArray(value.tags) || value.tags.length > 100 || !Array.isArray(value.flags) || value.flags.length > 30
+    || typeof value.portrait !== 'boolean') invalid('Invalid Archive summary');
+  const summary: ArchiveReferenceSummary = { name: string(value.name, 'name', 500), creator: string(value.creator, 'creator', 500),
+    description: string(value.description, 'description', 4000), tags: value.tags.map((tag) => string(tag, 'tag', 200)),
+    source: text(value.source, 'source', 80), format: text(value.format, 'format', 80),
+    changedAt: string(value.changedAt, 'changedAt', 80), portrait: value.portrait,
+    tokensTotal: value.tokensTotal === null ? null : count(value.tokensTotal, 'tokensTotal'),
+    flags: value.flags.map((flag) => text(flag, 'flag', 80)) };
+  for (const field of ['greetingCount', 'alternateGreetingCount', 'lorebookEntryCount', 'assetCount', 'versionCount'] as const) {
+    if (value[field] !== undefined) summary[field] = count(value[field], field);
+  }
+  if (value.spec !== undefined) summary.spec = text(value.spec, 'spec', 80);
+  if (new TextEncoder().encode(JSON.stringify(summary)).byteLength > 32768) invalid('Archive summary exceeds 32768 bytes');
+  return summary;
+}
+export function assetPath(value: string): string {
+  text(value, 'asset path', 512);
+  if (value.startsWith('/') || value.includes('\\') || Array.from(value).some((char) => char.charCodeAt(0) < 32)
+    || value.split('/').some((part) => part === '..' || part === '.' || !part)) {
+    invalid('Asset paths must be relative logical paths without traversal');
+  }
   return value;
 }
 
@@ -63,11 +107,7 @@ export function revision(input: RevisionInput): string {
   const paths = new Set<string>();
   for (const asset of assets) {
     text(asset.assetId, 'assetId');
-    text(asset.path, 'asset path', 512);
-    if (asset.path.startsWith('/') || asset.path.includes('\\') || Array.from(asset.path).some((char) => char.charCodeAt(0) < 32)
-      || asset.path.split('/').some((part) => part === '..' || part === '.' || !part)) {
-      invalid('Asset paths must be relative logical paths without traversal');
-    }
+    assetPath(asset.path);
     if (paths.has(asset.path)) invalid('Asset paths must be unique within a revision');
     paths.add(asset.path);
   }

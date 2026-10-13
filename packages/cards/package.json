@@ -6,13 +6,15 @@
   "exports": {
     ".": "./src/index.ts",
     "./contract": "./src/types.ts",
+    "./import": "./src/import.ts",
     "./archive": "./src/archive.ts",
     "./hub": "./src/hub.ts",
     "./remote": "./src/remote.ts",
     "./remote-outbox": "./src/remote-outbox.ts",
     "./connections": "./src/connections.ts",
     "./chat": "./src/chat.ts",
-    "./native-archive": "./src/native-archive.ts"
+    "./native-archive": "./src/native-archive.ts",
+    "./native-reader": "./src/native-reader.ts"
   },
   "scripts": {
     "type-check": "tsc -p tsconfig.json"

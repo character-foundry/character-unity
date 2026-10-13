@@ -125,17 +125,19 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
         const card = await legacy.createCard({ ...input, workspaceId: workspace.id, originalHash });
         expect(await inspectSchema(old.driver)).toBe(1);
         await migrate(old.driver);
-        expect(await inspectSchema(old.driver)).toBe(12);
+        expect(await inspectSchema(old.driver)).toBe(13);
         expect(await legacy.getRevision(workspace.id, card.revision.id)).toEqual(card.revision);
         expect(await legacy.getCard(workspace.id, card.card.id)).toEqual(card.card);
         expect(await legacy.getSource(workspace.id, card.card.id)).toBeNull();
+        expect(await legacy.listSearchJobs()).toEqual([{ workspaceId: workspace.id, cardId: card.card.id, revisionId: card.revision.id,
+          operation: 'upsert', eventSequence: 1, error: null }]);
       } finally { await old.close(); }
     });
 
     it('[S01] applies versioned migrations idempotently and rejects drift or future history', async () => {
       await migrate(fixture.driver);
-      expect(await inspectSchema(fixture.driver)).toBe(12);
-      expect(await store.readiness()).toEqual({ schemaVersion: 12 });
+      expect(await inspectSchema(fixture.driver)).toBe(13);
+      expect(await store.readiness()).toEqual({ schemaVersion: 13 });
       await fixture.driver.batch([{ sql: "UPDATE unity_migrations SET checksum = 'changed' WHERE version = 1" }]);
       await expect(migrate(fixture.driver)).rejects.toMatchObject({ code: 'SCHEMA_MISMATCH' });
       await fixture.driver.batch([{ sql: 'UPDATE unity_migrations SET version = 99 WHERE version = 1' }]);
@@ -348,7 +350,7 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
         expect(await other.driver.query({ sql: 'SELECT * FROM unity_migrations' })).toEqual([]);
         expect(await other.driver.query({ sql: "SELECT name FROM sqlite_master WHERE name = 'unity_cards'" })).toEqual([]);
         await Promise.all([migrate(other.driver), migrate(other.driver)]);
-        expect(await inspectSchema(other.driver)).toBe(12);
+        expect(await inspectSchema(other.driver)).toBe(13);
       } finally { await other.close(); }
     });
   });

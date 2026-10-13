@@ -3,7 +3,7 @@ import type { CardIdentityOptions } from '@character-foundry/character-foundry/i
 import { parseURI } from '@character-foundry/character-foundry/core';
 import type { AssetService } from '@character-unity/assets';
 import { StoreError } from '@character-unity/store';
-import type { CardDocument, Revision, UnityStore } from '@character-unity/store';
+import type { Card, CardDocument, Revision, RevisionInput, UnityStore } from '@character-unity/store';
 import { revisionIdentityOptions } from './revision-assets.js';
 import { documentByteLimit } from '@character-unity/store/validation';
 import { CardError, declaredAssetLimit, importByteLimit, risuModulePath } from './types.js';
@@ -18,11 +18,22 @@ function bindingPath(value: unknown): value is string {
 function descriptor(value: unknown): value is CardDocument & { uri: string } {
   return object(value) && typeof value.uri === 'string';
 }
+function archiveComparable(document: CardDocument): string {
+  const value = JSON.parse(canonicalJson(document)) as CardDocument;
+  const data = value.data;
+  // Bound asset paths/digests are compared separately. Ignore only transport
+  // URI relocation, never format changes or opaque fields omitted by identity.
+  if (object(data) && Array.isArray(data.assets)) for (const asset of data.assets) {
+    if (descriptor(asset)) asset.uri = 'unity:bound-asset';
+  }
+  return canonicalJson(value);
+}
 
 /** Explicit full asset binding replacement. Existing sources can only name paths
  * in this card's expected revision, never arbitrary asset/storage identifiers. */
 export async function saveAssetRevision(store: UnityStore, assets: AssetService, actorInput: Actor, workspaceId: string, cardId: string,
-  expectedHead: string, input: CardDocument, bindingsInput: readonly AssetBinding[], uploadsInput: readonly AssetUpload[], signal?: AbortSignal, operation: 'edit' | 'fork' = 'edit') {
+  expectedHead: string, input: CardDocument, bindingsInput: readonly AssetBinding[], uploadsInput: readonly AssetUpload[], signal?: AbortSignal, operation: 'edit' | 'fork' = 'edit',
+  archiveSource?: { card: Card; revision: Revision; commit(input: RevisionInput): Promise<Revision> }) {
   const actor = { ...actorInput };
   const document = JSON.parse(canonicalJson(input)) as CardDocument;
   if (new TextEncoder().encode(JSON.stringify(document)).byteLength > documentByteLimit) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
@@ -39,9 +50,9 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   check();
   const workspace = await store.getWorkspace(workspaceId);
   if (workspace.ownerId !== actor.id) throw new CardError('FORBIDDEN', 'Workspace belongs to another account');
-  const card = await store.getCard(workspaceId, cardId);
+  const card = archiveSource?.card ?? await store.getCard(workspaceId, cardId);
   if (card.headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before saving');
-  const current = await store.getRevision(workspaceId, expectedHead);
+  const current = archiveSource?.revision ?? await store.getRevision(workspaceId, expectedHead);
   if (current.cardId !== cardId) throw new StoreError('NOT_FOUND', 'Revision does not belong to this card');
   if (!card.originalHash) throw new CardError('INVALID_LINEAGE', 'Card has no accepted original root');
   const previousOptions = await revisionIdentityOptions(store, current);
@@ -98,8 +109,10 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
     mediaType: originals.get(risuModulePath)!.mediaType, assetId: module.assetId });
   const existingDigests = [...originals].map(([path, asset]) => ({ path, hash: asset.hash })).sort((a, b) => a.path.localeCompare(b.path));
   const nextDigests = planned.map(({ path, hash }) => ({ path, hash })).sort((a, b) => a.path.localeCompare(b.path));
-  if (operation === 'edit' && canonicalJson(document) === canonicalJson(current.document) && canonicalJson(existingDigests) === canonicalJson(nextDigests)) {
-    if ((await store.getCard(workspaceId, cardId)).headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before saving');
+  const sameDocument = archiveSource ? archiveComparable(document) === archiveComparable(current.document)
+    : canonicalJson(document) === canonicalJson(current.document);
+  if ((operation === 'edit' || archiveSource) && sameDocument && canonicalJson(existingDigests) === canonicalJson(nextDigests)) {
+    if (!archiveSource && (await store.getCard(workspaceId, cardId)).headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before saving');
     check(); return current;
   }
   const saved = await createCardRevision(document, { ...options, originalHash: card.originalHash, parents: previous ? [previous] : [],
@@ -118,6 +131,7 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
     references.push({ path: reference.path, assetId });
   }
   check();
+  if (archiveSource) return archiveSource.commit({ authorId: actor.id, document: saved.card, identity: saved.lineage.content, assets: references });
   // Domain batch checks the expected head and every ready asset atomically. Account
   // hosts additionally guard this batch against session revocation during uploads.
   if (operation === 'fork') return (await store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: expectedHead,

@@ -1,9 +1,12 @@
 import { StoreError } from '@character-unity/store';
-import type { Asset, Card, CardSource, CardSourceInput, Revision, RevisionInput, UnityStore, Workspace } from '@character-unity/store';
+import type { ArchiveForkSource, ArchiveReference, Asset, Card, CardSource, CardSourceInput, LibrarySummaryItem, Revision, RevisionInput, UnityStore, Workspace } from '@character-unity/store';
 import * as validate from '@character-unity/store/validation';
-import { fold, libraryComparator, libraryMatcher, librarySource } from '@character-unity/store/library-query';
+import { archiveReferenceLibraryRow, fold, libraryComparator, libraryMatcher, librarySource } from '@character-unity/store/library-query';
+import type { LibraryRow } from '@character-unity/store/library-query';
 import { inspectDatabase } from './database.js';
 import { request, transaction } from './transaction.js';
+import { createBrowserArchiveOperations, deleteImportClaims, findImportMatchInTransaction, importClaims, importStores } from './archive.js';
+import { createBrowserSearchOutbox, enqueueSearchJob } from './search-outbox.js';
 
 function* get<T>(tx: IDBTransaction, store: string, id: string): Generator<IDBRequest, T | undefined, unknown> {
   return yield* request<T | undefined>(tx.objectStore(store).get(id));
@@ -43,25 +46,30 @@ function revision(card: Card, input: RevisionInput, sequence: number, parent: st
 function* insertRevision(tx: IDBTransaction, value: Revision) {
   for (const asset of value.assets) yield* ready(tx, value.workspaceId, asset.assetId);
   yield* request(tx.objectStore('revisions').add(value));
+  yield* enqueueSearchJob(tx, { workspaceId: value.workspaceId, cardId: value.cardId, revisionId: value.id, operation: 'upsert' });
 }
 function* insertSource(tx: IDBTransaction, card: Card, source?: CardSourceInput) {
   if (!source) return;
   yield* ready(tx, card.workspaceId, source.assetId);
   yield* request(tx.objectStore('sources').add({ ...source, cardId: card.id, workspaceId: card.workspaceId }));
 }
-const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources', 'deletions'];
+const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources', 'deletions', 'importClaims', 'searchJobs'];
 
 /** Same trusted domain contract as SQL; each write is one native IDB transaction. */
 export function createBrowserStore(db: IDBDatabase): UnityStore {
+  const archive = createBrowserArchiveOperations(db);
   function headRows(workspaceId: string) {
-    return transaction(db, ['cards', 'revisions', 'sources', 'deletions', 'favorites', 'metrics'], 'readonly', function* (tx) {
+    return transaction(db, ['cards', 'revisions', 'sources', 'deletions', 'favorites', 'metrics', 'archiveForks'], 'readonly', function* (tx) {
       const cards = yield* request<Card[]>(tx.objectStore('cards').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
-      const rows: { card: Card; revision: Revision; source: CardSource | undefined; favorite: boolean; tokens: number | null }[] = [];
+      const rows: { card: Card; revision: Revision; source: CardSource | undefined; favorite: boolean; tokens: number | null;
+        archiveFork: ArchiveForkSource | undefined; parentCardId: string | undefined }[] = [];
       for (const card of cards) {
         if (!card.headRevisionId || (yield* get(tx, 'deletions', card.id))) continue;
         const metrics = yield* get<{ total: number }>(tx, 'metrics', card.headRevisionId);
+        const parent = card.forkedFromRevisionId ? yield* get<Revision>(tx, 'revisions', card.forkedFromRevisionId) : undefined;
         rows.push({ card, revision: yield* scoped<Revision>(tx, 'revisions', workspaceId, card.headRevisionId), source: yield* get<CardSource>(tx, 'sources', card.id),
-          favorite: !!(yield* get(tx, 'favorites', card.id)), tokens: metrics ? metrics.total : null });
+          favorite: !!(yield* get(tx, 'favorites', card.id)), tokens: metrics ? metrics.total : null,
+          archiveFork: yield* get<ArchiveForkSource>(tx, 'archiveForks', card.id), parentCardId: parent?.cardId });
       }
       return rows;
     });
@@ -72,6 +80,8 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
     })).map((row) => row.key));
   }
   return {
+    ...archive,
+    ...createBrowserSearchOutbox(db),
     readiness: () => inspectDatabase(db),
     async findSyncFork() { throw new StoreError('INVALID_INPUT', 'Signed sync writes require a SQL host'); },
     async createWorkspace(input) {
@@ -117,8 +127,44 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         card.headRevisionId = crypto.randomUUID();
         const value = revision(card, data, parent.sequence + 1, expectedHead);
         yield* insertRevision(tx, value);
+        yield* deleteImportClaims(tx, cardId, 'content');
         yield* request(tx.objectStore('cards').put(card));
         return value;
+      });
+    },
+    async createArchiveFork(input) {
+      const data = snapshot(input), source = sourceSnapshot(input.source), pin = validate.archivePin(input.pin), workspaceId = validate.text(input.workspaceId, 'workspaceId');
+      const referenceId = input.referenceId === undefined ? null : validate.text(input.referenceId, 'referenceId');
+      const card: Card = { id: crypto.randomUUID(), workspaceId, headRevisionId: crypto.randomUUID(),
+        originalHash: input.originalHash === undefined ? null : validate.hash(input.originalHash), forkedFromRevisionId: null, createdAt: new Date().toISOString() };
+      const value = revision(card, data, 1, null);
+      let sourceProvider = input.sourceProvider === undefined ? 'file' : validate.text(input.sourceProvider, 'sourceProvider', 80);
+      return transaction(db, [...writeStores, 'archiveReferences', 'archiveForks'], 'readwrite', function* (tx) {
+        yield* workspace(tx, workspaceId);
+        if (referenceId) {
+          const ref = yield* scoped<ArchiveReference>(tx, 'archiveReferences', workspaceId, referenceId);
+          if (JSON.stringify(ref.pin) !== JSON.stringify(pin)) throw new StoreError('INTEGRITY', 'The fork must retain its exact Archive ancestor');
+          sourceProvider = ref.summary.source;
+        }
+        yield* request(tx.objectStore('cards').add(card));
+        yield* insertSource(tx, card, source);
+        yield* request(tx.objectStore('archiveForks').add({ cardId: card.id, workspaceId, pin, referenceId, sourceProvider }));
+        yield* insertRevision(tx, value); return { card, revision: value };
+      });
+    },
+    async createImportedCard(input) {
+      const data = snapshot(input), source = sourceSnapshot(input.source), workspaceId = validate.text(input.workspaceId, 'workspaceId');
+      const identities = { ...validate.importIdentity(input), fileHash: validate.hash(input.fileHash), identity: validate.contentIdentity(input.identity) };
+      const card: Card = { id: crypto.randomUUID(), workspaceId, headRevisionId: crypto.randomUUID(),
+        originalHash: input.originalHash === undefined ? identities.fileHash : validate.hash(input.originalHash), forkedFromRevisionId: null, createdAt: new Date().toISOString() };
+      const value = revision(card, data, 1, null);
+      return transaction(db, [...new Set([...writeStores, ...importStores])], 'readwrite', function* (tx) {
+        yield* workspace(tx, workspaceId);
+        const existing = yield* findImportMatchInTransaction(tx, workspaceId, identities);
+        if (existing) return { created: false as const, existing };
+        yield* request(tx.objectStore('cards').add(card)); yield* insertSource(tx, card, source); yield* insertRevision(tx, value);
+        for (const claim of importClaims(workspaceId, card.id, value.id, identities)) yield* request(tx.objectStore('importClaims').add(claim));
+        return { created: true as const, card, revision: value };
       });
     },
     async forkCard(input, syncContext) {
@@ -178,6 +224,46 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         sourceFormat: typeof (source?.provenance as { format?: unknown } | undefined)?.format === 'string' ? (source!.provenance as { format: string }).format : null,
       })) };
     },
+    async listLibrarySummaries(workspaceId, query = {}) {
+      validate.text(workspaceId, 'workspaceId');
+      const limit = validate.limit(query.limit ?? 48), offset = validate.count(query.offset ?? 0, 'offset');
+      if (query.ids && query.ids.length > 100) throw new StoreError('INVALID_INPUT', 'At most 100 card IDs');
+      query.ids?.forEach((id) => validate.text(id, 'cardId'));
+      if (query.forkOf) validate.text(query.forkOf, 'forkOf');
+      const scan = await headRows(workspaceId);
+      const references = await transaction(db, ['archiveReferences'], 'readonly', function* (tx) {
+        return yield* request<ArchiveReference[]>(tx.objectStore('archiveReferences').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
+      });
+      const localForks = new Map<string, number>(), referenceForks = new Map<string, number>();
+      for (const entry of scan) {
+        if (entry.parentCardId) localForks.set(entry.parentCardId, (localForks.get(entry.parentCardId) ?? 0) + 1);
+        if (entry.archiveFork) {
+          const key = JSON.stringify([entry.archiveFork.pin.archiveId, entry.archiveFork.pin.cardId, entry.archiveFork.pin.versionId]);
+          referenceForks.set(key, (referenceForks.get(key) ?? 0) + 1);
+        }
+      }
+      const rows: { row: LibraryRow; item: LibrarySummaryItem; parentId?: string | undefined }[] = scan.map((entry) => {
+        const provenance = entry.archiveFork ? { kind: 'archive', source: { provider: entry.archiveFork.sourceProvider } } : entry.source?.provenance ?? null;
+        const forkCount = localForks.get(entry.card.id) ?? 0;
+        return { parentId: entry.archiveFork?.referenceId ?? entry.parentCardId, row: {
+          cardId: entry.card.id, cardCreatedAt: entry.card.createdAt, forkedFromRevisionId: entry.archiveFork ? 'archive' : entry.card.forkedFromRevisionId,
+          revisionCreatedAt: entry.revision.createdAt, sequence: entry.revision.sequence, document: entry.revision.document,
+          assetPaths: entry.revision.assets.map((asset) => asset.path), forkCount, provenance, favorite: entry.favorite, inChat: false, tokens: entry.tokens,
+        }, item: { card: entry.card, revision: entry.revision, sourceFormat: typeof entry.source?.provenance.format === 'string' ? entry.source.provenance.format : null,
+          ...(entry.archiveFork ? { archiveSource: entry.archiveFork.pin } : {}),
+          forkCount, favorite: entry.favorite, tokensTotal: entry.tokens, source: librarySource(provenance, entry.revision.document) } };
+      });
+      for (const reference of references) {
+        const forkCount = referenceForks.get(JSON.stringify([reference.pin.archiveId, reference.pin.cardId, reference.pin.versionId])) ?? 0;
+        // This browser-only profile has no chat target/placement adapter.
+        rows.push({ row: archiveReferenceLibraryRow(reference, forkCount, false), item: { reference, forkCount, inChat: false } });
+      }
+      const matcher = libraryMatcher({ ...query, tags: [...(query.tags ?? []), ...(query.tag?.trim() ? [query.tag] : [])] }, await followedKeys(workspaceId));
+      const ids = query.ids ? new Set(query.ids) : null;
+      const matching = rows.filter(({ row, parentId }) => (!ids || ids.has(row.cardId)) && (!query.forkOf || parentId === query.forkOf) && matcher(row));
+      const compare = libraryComparator(query.sort ?? 'edited'); matching.sort((a, b) => compare(a.row, b.row));
+      return { total: matching.length, items: matching.slice(offset, offset + limit).map(({ item }) => item) };
+    },
     async listCardTags(workspaceId, options = {}) {
       const limit = options.limit ?? 1000;
       if (!Number.isInteger(limit) || limit < 1 || limit > 5000) throw new StoreError('INVALID_INPUT', 'Tag list size must be between 1 and 5000');
@@ -192,14 +278,25 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
           entry.cards.add(card.id); counts.set(key, entry);
         }
       }
+      const references = await transaction(db, ['archiveReferences'], 'readonly', function* (tx) {
+        return yield* request<ArchiveReference[]>(tx.objectStore('archiveReferences').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
+      });
+      for (const reference of references) for (const tag of reference.summary.tags) {
+        if (!tag.replace(/^ +| +$/g, '')) continue;
+        const key = fold(tag), entry = counts.get(key) ?? { tag, cards: new Set<string>() };
+        if (tag > entry.tag) entry.tag = tag;
+        entry.cards.add(reference.id); counts.set(key, entry);
+      }
       return [...counts.entries()].map(([key, { tag, cards }]) => ({ key, tag, count: cards.size }))
         .sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)).slice(0, limit).map(({ tag, count }) => ({ tag, count }));
     },
     async deleteCard(workspaceId, cardId) {
-      await transaction(db, ['cards', 'deletions', 'favorites'], 'readwrite', function* (tx) {
-        yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
+      await transaction(db, ['cards', 'deletions', 'favorites', 'importClaims', 'searchJobs'], 'readwrite', function* (tx) {
+        const card = yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
         yield* request(tx.objectStore('deletions').add({ cardId, workspaceId, deletedAt: new Date().toISOString() }));
         yield* request(tx.objectStore('favorites').delete(cardId));
+        yield* deleteImportClaims(tx, cardId);
+        if (card.headRevisionId) yield* enqueueSearchJob(tx, { workspaceId, cardId, revisionId: card.headRevisionId, operation: 'delete' });
       });
     },
     async getFavorite(workspaceId, cardId) {
@@ -233,6 +330,10 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         const provenance = source?.provenance as { kind?: unknown; cardId?: unknown } | undefined;
         if (provenance?.kind === 'archive' && typeof provenance.cardId === 'string' && ids.has(provenance.cardId)) links[provenance.cardId] = card.id;
       }
+      const references = await transaction(db, ['archiveReferences'], 'readonly', function* (tx) {
+        return yield* request<ArchiveReference[]>(tx.objectStore('archiveReferences').index('workspace').getAll(IDBKeyRange.bound([workspaceId], [workspaceId, []])));
+      });
+      for (const ref of references) if (ids.has(ref.pin.cardId)) links[ref.pin.cardId] = ref.id;
       return links;
     },
     async listFollowedCreators(workspaceId) {
@@ -284,6 +385,19 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
       return transaction(db, ['workspaces', 'assets'], 'readwrite', function* (tx) {
         yield* workspace(tx, asset.workspaceId);
         yield* request(tx.objectStore('assets').add(asset)); return asset;
+      });
+    },
+    async stageSharedAsset(input) {
+      const id = crypto.randomUUID(), asset: Asset = { id, workspaceId: validate.text(input.workspaceId, 'workspaceId'), hash: validate.hash(input.hash),
+        byteLength: validate.count(input.byteLength, 'byteLength'), mediaType: validate.text(input.mediaType, 'mediaType'), storageKey: `assets/${id}`, state: 'staged' };
+      const key = [asset.workspaceId, asset.hash, asset.byteLength, asset.mediaType];
+      return transaction(db, ['workspaces', 'assets', 'sharedAssets'], 'readwrite', function* (tx) {
+        yield* workspace(tx, asset.workspaceId);
+        const previous = yield* request<{ assetId: string } | undefined>(tx.objectStore('sharedAssets').get(key));
+        if (previous) return yield* scoped<Asset>(tx, 'assets', asset.workspaceId, previous.assetId);
+        yield* request(tx.objectStore('assets').add(asset));
+        yield* request(tx.objectStore('sharedAssets').add({ workspaceId: asset.workspaceId, hash: asset.hash, byteLength: asset.byteLength,
+          mediaType: asset.mediaType, assetId: asset.id })); return asset;
       });
     },
     async completeAsset(input) {

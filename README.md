@@ -15,8 +15,13 @@ Existing Archive database/files/LanceDB stay in place. Live writer takeover is
 on hold. The native viewer/shell no longer uses Next shims or old CardsHub
 server fallbacks. Each editor now owns its workspace, draft, assets, expected
 revision heads and request lifetime; multiple hosts do not share editing state.
-Archive-reference favorites/import
-deduplication remain subsequent work, not completed features.
+Archive favorites now add exact-version library references, not copied cards.
+Unchanged reads and editor drafts resolve through Archive; the first changed Save
+creates an owned fork and retains inherited asset locators. File import checks
+exact bytes, then Foundry content/asset identity across both stores. The native
+Archive page exposes lexical, Boolean, semantic, hybrid and indexed-filter modes,
+with explicit provider, coverage and failure reporting. See
+[in-place setup and explicit indexing gates](docs/archive-existing-storage.md).
 
 The following foundation history describes the earlier standalone/scaffold
 profiles, which remain available for regression checks pending retirement:
@@ -184,7 +189,7 @@ uses the fixture/copied contract; full legacy search parity remains open.
 
 ## Ownership
 
-- `apps/archive`: local-only Archive; owns its future DB, original files and LanceDB.
+- `apps/archive`: local Archive service; owns the existing database, originals and LanceDB.
 - `apps/architect`: standalone editor host, with local API and browser-only storage profiles.
 - `apps/hub`: sharing host, fresh start with no old CardsHub database migration.
 - `apps/api`: Node and Workers entrypoints for the shared API.

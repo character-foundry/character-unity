@@ -26,7 +26,7 @@ export async function exportRevision(store: UnityStore, assets: AssetService, re
   let total = 0;
   for (const reference of revision.assets) {
     deadline.throwIfAborted();
-    const object = await assets.download(revision.workspaceId, reference.assetId);
+    const object = await assets.download(revision.workspaceId, reference.assetId, deadline);
     if (total + object.byteLength > importByteLimit) { await object.body.cancel(); throw new CardError('TOO_LARGE', `Export assets exceed ${importByteLimit / 1024 / 1024} MiB`); }
     const reader = object.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
     const cancel = () => { void reader.cancel().catch(() => undefined); };
