@@ -10,6 +10,10 @@ Native file imports, staged portrait/attachment edits, atomic first Save/forks,
 assets-aware immutable Restore and supported browser-local AI/settings replace
 old-server fallbacks. Viewer/Next-shim removal follows the editor phase.
 
+Latest owner priority: native viewer/Next-shim removal (`cu-1o2.26`) next,
+then editor isolation (`cu-1o2.5.12`). Wizard QA (`cu-1o2.5.5`) is low
+priority and does not gate either pass.
+
 Verification: type-check, expanded native-editor lint, all 571 tests across 69
 files, every conformance report (including 38/38 SQLite/D1 store checks), builds,
 and nine production-bundle Chromium workflows pass. Browser checks cover

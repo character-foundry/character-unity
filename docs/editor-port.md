@@ -27,6 +27,9 @@ compatibility shims; its native rewrite is the next phase (`cu-1o2.26`). General
 import deduplication and Archive-reference favorites/forks are separate remaining
 work (`cu-1o2.27`), not capabilities of this editor integration.
 
+Owner work order: native viewer/Next-shim removal first, editor isolation
+second. Wizard workflow QA (`cu-1o2.5.5`) is low priority, not a prerequisite.
+
 `pnpm dev` starts API + unified web. `pnpm test:e2e:unity` builds the real unified
 web UI and runs its isolated production-bundle browser workflows. The legacy
 host tests below remain useful scaffold regressions but do not prove parity of
