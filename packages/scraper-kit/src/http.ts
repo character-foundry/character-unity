@@ -22,6 +22,8 @@ export interface HttpOptions {
 }
 
 export interface HttpResponse { status: number; bytes: Uint8Array; type: string; url: string }
+/** A request's own options: `timeoutMs` overrides the client's per-attempt timeout (e.g. for large downloads). */
+export type RequestOptions = RequestInit & { timeoutMs?: number };
 
 const transient = new Set([408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524]);
 
@@ -46,12 +48,12 @@ export function createHttp(options: HttpOptions) {
   let queue: Promise<unknown> = Promise.resolve();
   let lastStart = -Infinity;
 
-  async function once(url: string, init: RequestInit): Promise<{ response: HttpResponse; retryAfter: string | null }> {
+  async function once(url: string, { timeoutMs, ...init }: RequestOptions): Promise<{ response: HttpResponse; retryAfter: string | null }> {
     const gap = lastStart + options.minIntervalMs - Date.now();
     if (gap > 0) await wait(gap, options.signal);
     options.signal?.throwIfAborted();
     lastStart = Date.now();
-    const signal = AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
+    const signal = AbortSignal.any([AbortSignal.timeout(timeoutMs ?? options.timeoutMs ?? 30_000), ...(options.signal ? [options.signal] : [])]);
     const response = await fetcher(url, { redirect: 'follow', ...init, headers: { ...options.headers, ...init.headers as Record<string, string> }, signal });
     const length = Number(response.headers.get('content-length') ?? 0);
     if (length > maxBytes) { await response.body?.cancel(); throw new ScrapeHttpError(response.status, url, `Response from ${new URL(url).host} is larger than ${maxBytes} bytes`); }
@@ -60,7 +62,7 @@ export function createHttp(options: HttpOptions) {
     return { response: { status: response.status, bytes, type: response.headers.get('content-type') ?? '', url: response.url || url }, retryAfter: response.headers.get('retry-after') };
   }
 
-  async function request(url: string, init: RequestInit = {}): Promise<HttpResponse> {
+  async function request(url: string, init: RequestOptions = {}): Promise<HttpResponse> {
     for (let attempt = 0; ; attempt++) {
       let result: Awaited<ReturnType<typeof once>> | undefined, failure: unknown;
       try { result = await once(url, init); } catch (error) {
@@ -86,13 +88,13 @@ export function createHttp(options: HttpOptions) {
   }
 
   return {
-    request: (url: string, init?: RequestInit) => serial(() => request(url, init)),
-    async json<T = unknown>(url: string, init?: RequestInit): Promise<T> {
+    request: (url: string, init?: RequestOptions) => serial(() => request(url, init)),
+    async json<T = unknown>(url: string, init?: RequestOptions): Promise<T> {
       const response = await serial(() => request(url, init));
       try { return JSON.parse(new TextDecoder().decode(response.bytes)) as T; }
       catch (error) { throw new ScrapeHttpError(response.status, url, `${new URL(url).host} did not return JSON`, { cause: error }); }
     },
-    async text(url: string, init?: RequestInit) {
+    async text(url: string, init?: RequestOptions) {
       return new TextDecoder().decode((await serial(() => request(url, init))).bytes);
     },
   };

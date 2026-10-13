@@ -2,7 +2,7 @@ import { createHttp } from './http.js';
 import type { Fetch, Http } from './http.js';
 
 export { createHttp, ScrapeHttpError, sleep } from './http.js';
-export type { Fetch, Http, HttpOptions, HttpResponse } from './http.js';
+export type { Fetch, Http, HttpOptions, HttpResponse, RequestOptions } from './http.js';
 export { pngSize, isPlaceholderImage } from './image.js';
 
 /** A file the plugin fetched, kept byte for byte. Exactly one `card` object per card. */
