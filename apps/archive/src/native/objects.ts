@@ -24,7 +24,7 @@ export function createObjectStore(root: string) {
       try { await rename(temporary, target); } catch (error) { await rm(temporary, { force: true }); throw error; }
       return hash;
     },
-    async get(hash: string): Promise<Uint8Array> {
+    async get(hash: string): Promise<Uint8Array<ArrayBuffer>> {
       const bytes = new Uint8Array(await readFile(path(hash)));
       if (sha256(bytes) !== hash) throw new Error(`Archive object ${hash} does not match its digest`);
       return bytes;
