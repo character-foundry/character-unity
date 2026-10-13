@@ -1,6 +1,7 @@
 import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e', fullyParallel: false, workers: 1, retries: 0,
+  testIgnore: '**/unity-editor/**',
   timeout: 30_000, expect: { timeout: 5_000 },
   outputDir: 'runtime/e2e-results', reporter: [['list'], ['html', { outputFolder: 'runtime/e2e-report', open: 'never' }]],
   use: { baseURL: 'http://127.0.0.1:19310', browserName: 'chromium', viewport: { width: 1440, height: 1000 }, trace: 'retain-on-failure', screenshot: 'only-on-failure' },

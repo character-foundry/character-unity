@@ -13,6 +13,8 @@ import { FieldRenderer } from './FieldRenderer';
 import type { FieldDefinition } from '../config/field-definitions';
 import { getValueByPath, setValueByPath, isFieldVisible } from '../config/field-definitions';
 import type { FocusField, LLMProvider } from '../../../lib/types';
+import { invokeClientLLM } from '../../../lib/client-llm';
+import { clientProvider } from '../../../store/llm-store';
 
 // ============================================================================
 // PROPS INTERFACE
@@ -45,10 +47,6 @@ export interface DynamicFieldProps {
     tagsSystemPrompt: string;
     taglineSystemPrompt: string;
   };
-  /** Is light mode (client-only) */
-  isLightMode?: boolean;
-  /** Invoke client LLM function */
-  invokeClientLLM?: typeof import('../../../lib/client-llm').invokeClientLLM;
 }
 
 // ============================================================================
@@ -220,8 +218,6 @@ export function DynamicField({
   onOpenTemplates,
   llmSettings,
   aiPrompts,
-  isLightMode,
-  invokeClientLLM,
 }: DynamicFieldProps) {
   const [generating, setGenerating] = useState(false);
 
@@ -350,50 +346,17 @@ export function DynamicField({
         ? `Generate tags for this character:\n\nName: ${name}\n\nDescription:\n${description}`
         : `Write a short tagline for this character:\n\nName: ${name}\n\nDescription:\n${description}`;
 
-      if (isLightMode && invokeClientLLM) {
-        // Client-side LLM call
-        const clientProvider = {
-          id: activeProvider.id,
-          name: activeProvider.label || activeProvider.name,
-          kind:
-            activeProvider.kind === 'anthropic' ? 'anthropic' as const : 'openai-compatible' as const,
-          baseURL: activeProvider.baseURL || '',
-          apiKey: activeProvider.apiKey || '',
-          defaultModel: activeProvider.defaultModel || '',
-          temperature: activeProvider.temperature,
-          maxTokens: activeProvider.maxTokens,
-        };
-
-        const result = await invokeClientLLM({
-          provider: clientProvider,
-          messages: [
-            { role: 'system' as const, content: systemPrompt },
-            { role: 'user' as const, content: userPrompt },
-          ],
-          temperature: isTagsField ? 0.7 : 0.8,
-          maxTokens: 200,
-        });
-
-        if (!result.success) throw new Error(result.error || 'LLM request failed');
-        content = result.content || '';
-      } else {
-        // Server-side LLM call
-        const response = await fetch('/api/llm/invoke', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            providerId: activeProvider.id,
-            system: systemPrompt,
-            messages: [{ role: 'user', content: userPrompt }],
-            temperature: isTagsField ? 0.7 : 0.8,
-            maxTokens: 200,
-          }),
-        });
-
-        const data = await response.json();
-        if (data.error) throw new Error(data.error);
-        content = data.content || data.text || '';
-      }
+      const result = await invokeClientLLM({
+        provider: clientProvider(activeProvider),
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: isTagsField ? 0.7 : 0.8,
+        maxTokens: 200,
+      });
+      if (!result.success) throw new Error(result.error || 'LLM request failed');
+      content = result.content || '';
 
       // Process the result
       if (isTagsField) {
@@ -437,8 +400,6 @@ export function DynamicField({
     llmSettings,
     aiPrompts,
     cardData,
-    isLightMode,
-    invokeClientLLM,
     value,
     handleChange,
   ]);

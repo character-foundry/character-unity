@@ -102,7 +102,7 @@ export async function openCard(id: string): Promise<OpenedCard> {
 
 export async function importFile(file: File) {
   return call<{ card: { id: string } }>(`/api/workspaces/${await libraryId()}/imports`, {
-    method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-file-name': file.name.slice(0, 500) }, body: file,
+    method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name), 'x-file-name-encoding': 'uri' }, body: file,
   });
 }
 

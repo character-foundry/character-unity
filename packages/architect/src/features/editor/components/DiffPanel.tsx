@@ -1,19 +1,16 @@
 /**
- * Diff Panel - Version History and Comparison
+ * Diff Panel - Saved Revision History and Comparison
  *
- * Provides version snapshot management and diff viewing with:
+ * Provides immutable revision history and diff viewing with:
  * - CodeMirror 6 merge view for side-by-side comparison
  * - Per-entry lorebook diffing
  * - Support for character cards and standalone lorebooks
  */
 
-import { useEffect, useState, lazy, Suspense } from 'react';
-import { generateId } from '@card-architect/import-core';
-import { useCardStore } from '../../../store/card-store';
-import { api } from '../../../lib/api';
-import { localDB, type StoredVersion } from '../../../lib/db';
-import { getDeploymentConfig } from '../../../config/deployment';
-import type { DiffViewMode } from '../../../lib/types';
+import { useEffect, useState, useRef, lazy, Suspense } from 'react';
+import { editorSelection, useCardStore } from '../../../store/card-store';
+import { api, type UnityVersion } from '../../../lib/api';
+import type { Card, DiffViewMode } from '../../../lib/types';
 import {
   getLorebookFromData,
   computeLorebookDiff,
@@ -31,26 +28,6 @@ const CodeMirrorMergeView = lazy(() =>
 const LorebookDiffView = lazy(() =>
   import('./LorebookDiffView').then((m) => ({ default: m.LorebookDiffView }))
 );
-
-// Type that works for both API and IndexedDB versions
-type UnifiedVersion = {
-  id: string;
-  version: number;
-  message?: string;
-  data: unknown;
-  createdAt: string;
-};
-
-// Convert StoredVersion to UnifiedVersion
-function storedToUnified(stored: StoredVersion): UnifiedVersion {
-  return {
-    id: stored.id,
-    version: stored.versionNumber,
-    message: stored.message,
-    data: stored.data,
-    createdAt: stored.createdAt,
-  };
-}
 
 // Loading spinner component
 function LoadingSpinner() {
@@ -129,22 +106,29 @@ function ViewModeSelector({
 export function DiffPanel() {
   const currentCard = useCardStore((state) => state.currentCard);
   const setCurrentCard = useCardStore((state) => state.setCurrentCard);
-  const [versions, setVersions] = useState<UnifiedVersion[]>([]);
-  const [selectedVersion, setSelectedVersion] = useState<UnifiedVersion | null>(null);
+  const [versions, setVersions] = useState<UnityVersion[]>([]);
+  const [selectedVersion, setSelectedVersion] = useState<(UnityVersion & { data: Card['data'] }) | null>(null);
   const [viewMode, setViewMode] = useState<DiffViewMode>('split');
   const [lorebookDiff, setLorebookDiff] = useState<LorebookDiff | undefined>();
-
-  const config = getDeploymentConfig();
-  const isClientMode = config.mode === 'light' || config.mode === 'static';
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [loadingVersionId, setLoadingVersionId] = useState<string | null>(null);
+  const request = useRef(0);
 
   // Check if current card has a lorebook
   const hasLorebook = currentCard ? cardHasLorebook(currentCard) : false;
 
   useEffect(() => {
+    request.current++;
+    setVersions([]);
+    setSelectedVersion(null);
+    setLoadingVersionId(null);
+    setError(null);
     if (currentCard?.meta.id) {
-      loadVersions();
+      void loadVersions();
     }
-  }, [currentCard?.meta.id]);
+  }, [currentCard?.meta.id, currentCard?.meta.updatedAt]);
 
   // Compute lorebook diff when version is selected
   useEffect(() => {
@@ -166,80 +150,60 @@ export function DiffPanel() {
 
   const loadVersions = async () => {
     if (!currentCard?.meta.id) return;
-
-    if (isClientMode) {
-      const stored = await localDB.getVersionsByCard(currentCard.meta.id);
-      setVersions(stored.map(storedToUnified));
-    } else {
-      const { data } = await api.listVersions(currentCard.meta.id);
-      if (data) {
-        setVersions(data as UnifiedVersion[]);
-      }
-    }
+    const generation = request.current;
+    setIsLoading(true);
+    const result = await api.listVersions(currentCard.meta.id);
+    if (request.current !== generation) return;
+    if (result.error) setError(result.error);
+    else setVersions(result.data ?? []);
+    setIsLoading(false);
   };
 
-  const handleCreateSnapshot = async () => {
+  const handleRestore = async (version: UnityVersion) => {
     if (!currentCard?.meta.id) return;
-
-    const message = prompt('Snapshot message (optional):');
-
-    if (isClientMode) {
-      const versionNumber = await localDB.getNextVersionNumber(currentCard.meta.id);
-      const version: StoredVersion = {
-        id: generateId(),
-        cardId: currentCard.meta.id,
-        versionNumber,
-        message: message || undefined,
-        data: currentCard.data,
-        createdAt: new Date().toISOString(),
-      };
-      await localDB.saveVersion(version);
-    } else {
-      await api.createVersion(currentCard.meta.id, message || undefined);
-    }
-    loadVersions();
-  };
-
-  const handleRestore = async (version: UnifiedVersion) => {
-    if (!currentCard?.meta.id) return;
-    if (!confirm(`Restore to Version ${version.version}?`)) return;
-
-    if (isClientMode) {
-      // Restore by updating the card with the version's data
-      const restoredCard = {
-        ...currentCard,
-        data: version.data as typeof currentCard.data,
-        meta: {
-          ...currentCard.meta,
-          updatedAt: new Date().toISOString(),
-        },
-      };
-      await localDB.saveCard(restoredCard);
-      setCurrentCard(restoredCard);
+    if (useCardStore.getState().isSaving || useCardStore.getState().isRestoring) return;
+    const warning = useCardStore.getState().isDirty ? '\nUnsaved edits will be discarded.' : '';
+    if (!confirm(`Restore Version ${version.version} as a new saved revision?${warning}`)) return;
+    setIsRestoring(true);
+    const selection = editorSelection();
+    useCardStore.setState({ isRestoring: true });
+    setError(null);
+    try {
+      const result = await api.restoreVersion(currentCard.meta.id, version.id);
+      if (result.error || !result.data) throw new Error(result.error ?? 'Restore failed');
+      if (editorSelection() !== selection || useCardStore.getState().currentCard?.meta.id !== currentCard.meta.id) return;
+      setCurrentCard(result.data);
       setSelectedVersion(null);
-    } else {
-      await api.restoreVersion(currentCard.meta.id, version.id);
-      window.location.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Restore failed');
+    } finally {
+      setIsRestoring(false);
+      useCardStore.setState({ isRestoring: false });
     }
   };
 
-  const handleDelete = async (version: UnifiedVersion) => {
-    if (!currentCard?.meta.id) return;
-    if (!confirm('Delete this snapshot? This cannot be undone.')) return;
-
-    if (isClientMode) {
-      await localDB.deleteVersion(version.id);
-    } else {
-      await api.deleteVersion(currentCard.meta.id, version.id);
-    }
-    loadVersions();
-  };
-
-  const handleVersionClick = (version: UnifiedVersion) => {
+  const handleVersionClick = async (version: UnityVersion) => {
+    const generation = ++request.current;
     if (selectedVersion?.id === version.id) {
       setSelectedVersion(null);
-    } else {
-      setSelectedVersion(version);
+      return;
+    }
+    if (version.data !== undefined) {
+      setSelectedVersion({ ...version, data: version.data });
+      return;
+    }
+    if (!currentCard?.meta.id) return;
+    setLoadingVersionId(version.id);
+    setError(null);
+    try {
+      const result = await api.getVersion(currentCard.meta.id, version.id);
+      if (request.current !== generation) return;
+      if (result.error || !result.data) throw new Error(result.error ?? 'Failed to load revision');
+      setSelectedVersion(result.data);
+    } catch (err) {
+      if (request.current === generation) setError(err instanceof Error ? err.message : 'Failed to load revision');
+    } finally {
+      if (request.current === generation) setLoadingVersionId(null);
     }
   };
 
@@ -264,6 +228,7 @@ export function DiffPanel() {
             <div className="flex gap-2">
               <button
                 onClick={() => handleRestore(selectedVersion)}
+                disabled={isRestoring}
                 className="btn-primary"
               >
                 Restore This Version
@@ -293,6 +258,8 @@ export function DiffPanel() {
             )}
           </div>
         </div>
+
+        {error && <p role="alert" className="p-4 text-sm text-red-300">{error}</p>}
 
         {/* Diff content */}
         <div className="flex-1 overflow-auto p-4">
@@ -332,17 +299,16 @@ export function DiffPanel() {
             </p>
           )}
         </div>
-        <button onClick={handleCreateSnapshot} className="btn-primary">
-          Create Snapshot
-        </button>
+        <p className="text-sm text-dark-muted">Each Save keeps a permanent revision.</p>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
-        {versions.length === 0 ? (
+        {error && <p role="alert" className="mb-4 text-sm text-red-300">{error}</p>}
+        {isLoading ? <LoadingSpinner /> : versions.length === 0 ? (
           <div className="text-center text-dark-muted py-8">
-            <p>No snapshots yet</p>
+            <p>No saved revisions yet</p>
             <p className="text-sm mt-2">
-              Create a snapshot to save a version of your card
+              Save the card to keep its first revision.
             </p>
           </div>
         ) : (
@@ -380,7 +346,7 @@ export function DiffPanel() {
                     }}
                     className="btn-secondary"
                   >
-                    Compare
+                    {loadingVersionId === version.id ? 'Loading...' : 'Compare'}
                   </button>
                   <button
                     onClick={(e) => {
@@ -388,17 +354,9 @@ export function DiffPanel() {
                       handleRestore(version);
                     }}
                     className="btn-secondary"
+                    disabled={isRestoring}
                   >
                     Restore
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete(version);
-                    }}
-                    className="btn-secondary text-red-400 hover:text-red-300 hover:border-red-400"
-                  >
-                    Delete
                   </button>
                 </div>
               </div>

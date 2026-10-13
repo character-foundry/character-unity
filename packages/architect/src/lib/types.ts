@@ -226,6 +226,7 @@ export interface LLMProvider {
   mode?: OpenAIMode;
   anthropicVersion?: string;
   streamDefault?: boolean;
+  clientKind?: 'openai-compatible' | 'anthropic' | 'openrouter';
 }
 
 // Alias for compatibility

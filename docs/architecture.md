@@ -11,8 +11,10 @@ into the library, and saved edits create forks. Viewing and favoriting do not co
 originals or unchanged assets. File import must check Archive and Unity before
 creating another entry.
 
-Complete the Archive foundation before further viewer/editor work. The current
-native store is a separate-schema prototype, not an approved additional corpus.
+The existing-storage Archive backend is implemented; live writer takeover and
+real-source verification remain on hold. The owner authorized native editor/import
+cleanup next, followed by viewer/UI replacement. The earlier native store is a
+separate-schema prototype, not an approved additional corpus.
 There is no measured evidence that rebuilding the existing database improves
 efficiency. Implementation and operational acceptance are tracked separately in
 [`implementation.md`](implementation.md). See the
@@ -75,12 +77,18 @@ SDK tree or unresolved `workspace:` dependency into released packages.
 
 ## UI and editor
 
-Vite/React is the accepted hub direction. Architect now consumes the per-instance
-editor package and injects saves through the shared API. Hub mounts that same
-editor with account sessions, publication, forks and visible lineage browsing.
-Core fields and embedded lorebooks are editable; remaining rich features need staged ports,
-with their status recorded in `editor-port.md`. Archive's existing UI can be
-ported separately without coupling data adoption to a framework rewrite.
+The active `apps/web` shell uses Vite/React and mounts `packages/architect`.
+Its native API client has no inherited Architect-server fallback. Original-byte
+imports go to the shared Foundry-backed backend; portrait/attachment drafts and
+text save together. First Save publishes a new card/fork atomically. Browser-local
+AI and preferences remain local; unavailable old-server capabilities are not
+advertised. Global stores currently constrain this editor to one instance per
+page, with explicit selection guards for pending work. See `editor-port.md`.
+
+The earlier `packages/editor` and `apps/architect`/`apps/hub` profiles retain
+per-instance scaffold controllers and regression coverage pending retirement.
+The active viewer still uses CardsHub components through Next shims; a native
+viewer/shell rewrite follows editor integration. Data adoption remains separate.
 
 ## Already settled historical decisions
 

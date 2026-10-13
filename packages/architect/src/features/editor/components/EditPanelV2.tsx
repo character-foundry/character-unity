@@ -12,15 +12,12 @@
  * - Tab content generated from configuration
  */
 
-import { cardImageUrl } from '../../../unity/config';
+import { editorAssets } from '../../../unity/assets';
 import { useState, useEffect } from 'react';
 import { useCardStore, extractCardData } from '../../../store/card-store';
 import { useSettingsStore } from '../../../store/settings-store';
 import { useTokenStore } from '../../../store/token-store';
 import { useLLMStore } from '../../../store/llm-store';
-import { localDB } from '../../../lib/db';
-import { getDeploymentConfig } from '../../../config/deployment';
-import { invokeClientLLM } from '../../../lib/client-llm';
 import {
   normalizeSpec,
   type FocusField,
@@ -46,112 +43,64 @@ type EditTab = TabId | 'lorebook' | 'extensions';
 // AVATAR UPLOAD COMPONENT (Special handling, not schema-driven)
 // ============================================================================
 
-interface AvatarUploadProps {
-  cardId: string;
-  isLightMode: boolean;
-  cachedImageUrl: string | null;
-  onImageUploaded: (imageUrl: string) => void;
-}
+function AvatarUpload() {
+  const cardId = useCardStore((state) => state.currentCard?.meta.id);
+  const [imageUrl, setImageUrl] = useState('');
+  const [imageFailed, setImageFailed] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-function AvatarUpload({ cardId, isLightMode, cachedImageUrl, onImageUploaded }: AvatarUploadProps) {
-  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      if (isLightMode) {
-        const reader = new FileReader();
-        reader.onload = async () => {
-          const fullDataUrl = reader.result as string;
-          let thumbnailUrl = fullDataUrl;
-
-          try {
-            const img = new Image();
-            await new Promise<void>((resolve, reject) => {
-              img.onload = () => resolve();
-              img.onerror = () => reject();
-              img.src = fullDataUrl;
-            });
-
-            let width = img.width;
-            let height = img.height;
-            const maxSize = 400;
-
-            if (width > height && width > maxSize) {
-              height = Math.round((height * maxSize) / width);
-              width = maxSize;
-            } else if (height > maxSize) {
-              width = Math.round((width * maxSize) / height);
-              height = maxSize;
-            }
-
-            const canvas = document.createElement('canvas');
-            canvas.width = width;
-            canvas.height = height;
-            const ctx = canvas.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(img, 0, 0, width, height);
-              thumbnailUrl = canvas.toDataURL('image/webp', 0.8);
-              if (!thumbnailUrl.startsWith('data:image/webp')) {
-                thumbnailUrl = canvas.toDataURL('image/jpeg', 0.85);
-              }
-            }
-          } catch {
-            // Use full image if thumbnail fails
-          }
-
-          await localDB.saveImage(cardId, 'thumbnail', thumbnailUrl);
-          onImageUploaded(thumbnailUrl);
-          alert('Image updated successfully!');
-        };
-        reader.readAsDataURL(file);
-      } else {
-        const formData = new FormData();
-        formData.append('file', file);
-
-        const response = await fetch(`/api/cards/${cardId}/image`, {
-          method: 'POST',
-          body: formData,
-        });
-
-        if (!response.ok) {
-          throw new Error('Failed to upload image');
+  useEffect(() => {
+    let active = true;
+    setImageUrl('');
+    setError(null);
+    const refresh = async () => {
+      const card = useCardStore.getState().currentCard;
+      if (!card) return;
+      try {
+        const assets = await editorAssets.list(card);
+        if (active) {
+          setImageUrl(assets.find((asset) => asset.portrait)?.url ?? '');
+          setImageFailed(false);
         }
-
-        onImageUploaded(`/api/cards/${cardId}/image?t=${Date.now()}`);
-        alert('Image updated successfully!');
+      } catch (err) {
+        if (active) setError(err instanceof Error ? err.message : 'Failed to load portrait');
       }
-    } catch (error) {
-      console.error('Failed to upload image:', error);
-      alert('Failed to upload image. Please try again.');
+    };
+    void refresh();
+    const unsubscribe = editorAssets.subscribe(() => { queueMicrotask(() => { if (active) void refresh(); }); });
+    return () => { active = false; unsubscribe(); };
+  }, [cardId]);
+
+  const handleUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const input = event.currentTarget;
+    const file = input.files?.[0];
+    const card = useCardStore.getState().currentCard;
+    if (!file || !card) return;
+    setIsUploading(true);
+    setError(null);
+    try {
+      await editorAssets.setPortrait(card, file);
+      if (useCardStore.getState().currentCard?.meta.id === card.meta.id) {
+        useCardStore.setState({ isDirty: true });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to add portrait');
     } finally {
-      e.target.value = '';
+      setIsUploading(false);
+      input.value = '';
     }
   };
-
-  const imageUrl = isLightMode
-    ? cachedImageUrl || ''
-    : cachedImageUrl || cardImageUrl(cardId); // Unity port: unity portrait asset URL
 
   return (
     <div className="flex flex-col items-center">
       <div className="w-[300px] bg-dark-bg border border-dark-border rounded overflow-hidden mb-2">
-        {imageUrl ? (
+        {imageUrl && !imageFailed ? (
           <img
             src={imageUrl}
             alt="Character Avatar"
             className="w-full h-auto"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-              const parent = e.currentTarget.parentElement;
-              if (parent && !parent.querySelector('.no-image-placeholder')) {
-                const placeholder = document.createElement('div');
-                placeholder.className =
-                  'no-image-placeholder flex items-center justify-center text-dark-muted text-sm w-full h-48';
-                placeholder.textContent = 'No Image';
-                parent.appendChild(placeholder);
-              }
-            }}
+            onError={() => setImageFailed(true)}
           />
         ) : (
           <div className="flex items-center justify-center text-dark-muted text-sm w-full h-48">
@@ -159,16 +108,20 @@ function AvatarUpload({ cardId, isLightMode, cachedImageUrl, onImageUploaded }: 
           </div>
         )}
       </div>
-      <label htmlFor="avatar-upload" className="btn-secondary inline-flex px-3 py-2 rounded-lg text-sm cursor-pointer">
-        Upload Image
+      <label htmlFor="avatar-upload" className="btn-secondary inline-flex px-3 py-2 rounded-lg text-sm cursor-pointer focus-within:ring-2 focus-within:ring-blue-500">
+        {isUploading ? 'Adding portrait...' : 'Upload Image'}
         <input
           id="avatar-upload"
           type="file"
           accept="image/*"
-          className="hidden"
+          aria-label="Choose portrait"
+          className="sr-only"
           onChange={handleUpload}
+          disabled={isUploading}
         />
       </label>
+      {error && <p role="alert" className="text-sm text-red-300 mt-2 max-w-[300px]">{error}</p>}
+      <p className="text-xs text-dark-muted mt-2">Portrait changes are saved with the card.</p>
     </div>
   );
 }
@@ -244,11 +197,6 @@ interface TabContentProps {
   onOpenTemplates: (fieldName: FocusField, value: string) => void;
   llmSettings: { providers: LLMProvider[]; activeProviderId?: string };
   aiPrompts: { tagsSystemPrompt: string; taglineSystemPrompt: string };
-  isLightMode: boolean;
-  // Avatar-specific props
-  cardId?: string;
-  cachedImageUrl?: string | null;
-  onImageUploaded?: (url: string) => void;
   // Package ID for timestamps
   packageId?: string;
 }
@@ -264,10 +212,6 @@ function TabContent({
   onOpenTemplates,
   llmSettings,
   aiPrompts,
-  isLightMode,
-  cardId,
-  cachedImageUrl,
-  onImageUploaded,
 }: TabContentProps) {
   const fields = getFieldsForTab(tab);
 
@@ -279,16 +223,9 @@ function TabContent({
     return (
       <div className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-[auto_1fr] gap-6">
-          {cardId && onImageUploaded && (
-            <div className="flex justify-center md:justify-start">
-              <AvatarUpload
-                cardId={cardId}
-                isLightMode={isLightMode}
-                cachedImageUrl={cachedImageUrl || null}
-                onImageUploaded={onImageUploaded}
-              />
-            </div>
-          )}
+          <div className="flex justify-center md:justify-start">
+            <AvatarUpload />
+          </div>
 
           <div className="space-y-4">
             {coreFields.map((field) => (
@@ -304,8 +241,6 @@ function TabContent({
                 onOpenTemplates={onOpenTemplates}
                 llmSettings={llmSettings}
                 aiPrompts={aiPrompts}
-                isLightMode={isLightMode}
-                invokeClientLLM={isLightMode ? invokeClientLLM : undefined}
               />
             ))}
           </div>
@@ -324,8 +259,6 @@ function TabContent({
             onOpenTemplates={onOpenTemplates}
             llmSettings={llmSettings}
             aiPrompts={aiPrompts}
-            isLightMode={isLightMode}
-            invokeClientLLM={isLightMode ? invokeClientLLM : undefined}
           />
         ))}
       </div>
@@ -347,8 +280,6 @@ function TabContent({
           onOpenTemplates={onOpenTemplates}
           llmSettings={llmSettings}
           aiPrompts={aiPrompts}
-          isLightMode={isLightMode}
-          invokeClientLLM={isLightMode ? invokeClientLLM : undefined}
         />
       ))}
     </div>
@@ -366,7 +297,6 @@ export function EditPanelV2() {
   const { settings: llmSettings, loadSettings } = useLLMStore();
 
   const [activeTab, setActiveTab] = useState<EditTab>('basic');
-  const [cachedImageUrl, setCachedImageUrl] = useState<string | null>(null);
 
   // LLM Assist sidebar state
   const [llmAssistOpen, setLLMAssistOpen] = useState(false);
@@ -378,22 +308,11 @@ export function EditPanelV2() {
   const [templatesField, setTemplatesField] = useState<FocusField>('description');
   const [templatesValue, setTemplatesValue] = useState('');
 
-  const config = getDeploymentConfig();
-  const isLightMode = config.mode === 'light' || config.mode === 'static';
 
   // Load LLM settings on mount
   useEffect(() => {
     loadSettings();
   }, [loadSettings]);
-
-  // Load cached image from IndexedDB in light mode
-  useEffect(() => {
-    if (isLightMode && currentCard?.meta?.id) {
-      localDB.getImage(currentCard.meta.id, 'thumbnail').then((imageData) => {
-        setCachedImageUrl(imageData);
-      });
-    }
-  }, [isLightMode, currentCard?.meta?.id]);
 
   // Early return if no card
   if (!currentCard) return null;
@@ -596,10 +515,6 @@ export function EditPanelV2() {
               onOpenTemplates={handleOpenTemplates}
               llmSettings={llmSettings}
               aiPrompts={aiPrompts}
-              isLightMode={isLightMode}
-              cardId={currentCard.meta.id}
-              cachedImageUrl={cachedImageUrl}
-              onImageUploaded={setCachedImageUrl}
               packageId={currentCard.meta.packageId}
             />
           )}

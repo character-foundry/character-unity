@@ -67,6 +67,26 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
       return Promise.all(tables.map(async (table) => fixture.driver.query({ sql: `SELECT COUNT(*) AS count FROM unity_${table}` })));
     }
 
+    it('[S19] atomically rejects an editor fork if the source advances just before commit', async () => {
+      const base = await store.createCard({ ...input, workspaceId, originalHash });
+      const guarded = createStore({
+        query: faultDriver.query,
+        batch: async (statements) => {
+          await store.saveRevision({ ...input, workspaceId, cardId: base.card.id, expectedHead: base.revision.id });
+          return faultDriver.batch(statements);
+        },
+      });
+      await expect(guarded.forkCard({ ...input, workspaceId, sourceWorkspaceId: workspaceId,
+        sourceRevisionId: base.revision.id, expectedSourceHead: base.revision.id })).rejects.toMatchObject({ code: 'HEAD_CONFLICT' });
+      expect(await store.listCards(workspaceId)).toHaveLength(1);
+      expect(await store.listRevisions(workspaceId, base.card.id)).toHaveLength(2);
+      const head = (await store.getCard(workspaceId, base.card.id)).headRevisionId;
+      const forkInput = { ...input, workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: head, expectedSourceHead: head };
+      const pending = store.forkCard(forkInput);
+      forkInput.expectedSourceHead = 'mutated-after-call';
+      expect((await pending).revision.parentRevisionId).toBe(head);
+    });
+
     it('[S15] commits immutable source provenance with the card or rolls everything back', async () => {
       const asset = await readyAsset();
       const before = await counts();

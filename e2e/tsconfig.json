@@ -6,7 +6,8 @@
     ]
   },
   "include": [
-    "*.ts",
-    "../playwright.config.ts"
+    "**/*.ts",
+    "../playwright.config.ts",
+    "../playwright.unity.config.ts"
   ]
 }

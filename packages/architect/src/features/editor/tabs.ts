@@ -29,12 +29,6 @@ const DiffPanel = lazy(() =>
   import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel }))
 );
 
-// Lazy-loaded settings panels
-
-const DiffSettings = lazy(() =>
-  import('./settings/DiffSettings').then((m) => ({ default: m.DiffSettings }))
-);
-
 /**
  * Register all core editor tabs
  */
@@ -91,19 +85,5 @@ export function registerCoreTabs(): void {
     condition: () => useSettingsStore.getState().features?.diffEnabled ?? true,
   });
 
-  // ==================== Settings Panels ====================
-
-  // Diff settings panel
-  registry.registerSettingsPanel({
-    id: 'diff-settings',
-    label: 'Snapshots',
-    component: DiffSettings,
-    group: 'general',
-    color: 'amber',
-    order: 35,
-  });
-
-  // Note: Web Import and SillyTavern settings are registered by their own modules
-
-  console.log('[CoreTabs] Registered 5 core editor tabs and snapshot settings');
+  console.log('[CoreTabs] Registered 5 core editor tabs');
 }

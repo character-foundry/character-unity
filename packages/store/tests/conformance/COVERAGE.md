@@ -1,6 +1,6 @@
 # Store contract coverage
 
-Specification: internal store contract v0.1 in `requirements.json` (S01–S18).
+Specification: internal store contract v0.1 in `requirements.json` (S01–S19).
 Every listed clause is a MUST, tested against both native SQLite and local D1.
 The shared suite is `store.test.ts`. These are specification-derived tests, not
 outputs captured from the unsafe predecessor implementation.
@@ -12,8 +12,9 @@ driver case fails coverage accounting. CI runs this same command via `pnpm check
 | Section | MUST clauses | Required executions | Evidence |
 |---|---:|---:|---|
 | Migration safety | 4 (S01, S02, S14, S16) | 8 | History validation, foreign DB rejection, failing DDL batch |
-| Revisions and provenance | 8 (S03–S07, S09, S13, S15) | 16 | Snapshot, failure injection, CAS races, immutable forks/revisions |
+| Revisions and provenance | 9 (S03–S07, S09, S13, S15, S19) | 18 | Snapshot, failure injection, CAS races, immutable forks/revisions and atomic expected-source-head guard |
 | Isolation, assets and bounds | 4 (S08, S10–S12) | 8 | Workspace scoping, completion measurements, input limits, pagination |
+| Library summaries and search | 2 (S17, S18) | 4 | Head summaries, filters, ordering, totals and consistent search semantics |
 
 The generated report records actual passing counts; this file defines expected
 coverage. SQLite additionally has a separate on-disk reopen/two-connection test.

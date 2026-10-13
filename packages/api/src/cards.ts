@@ -105,7 +105,14 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   });
   routes.post('/:workspaceId/imports', async (c) => {
     const { cards, actor } = await required(c);
-    const filename = c.req.header('x-file-name') ?? 'original';
+    let filename = c.req.header('x-file-name') ?? 'original';
+    const encoding = c.req.header('x-file-name-encoding');
+    if (encoding !== undefined && encoding !== 'uri') throw new CardError('INVALID_INPUT', 'Unknown file name encoding');
+    if (encoding === 'uri') {
+      if (filename.length > 6144) throw new CardError('INVALID_INPUT', 'File name is too long');
+      try { filename = decodeURIComponent(filename); }
+      catch { throw new CardError('INVALID_INPUT', 'Invalid file name encoding'); }
+    }
     if (filename.length > 512) throw new CardError('INVALID_INPUT', 'File name is too long');
     return c.json(await cards.import(actor, c.req.param('workspaceId'), await bytes(c, uploadLimit), { kind: 'file', filename }), 201);
   });
@@ -160,6 +167,18 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
     const { cards, actor } = await required(c);
     return c.json(await cards.open(actor, c.req.param('workspaceId'), c.req.param('cardId')));
   });
+  routes.post('/:workspaceId/cards', async (c) => {
+    const { cards, actor } = await required(c);
+    const value = await assetRevisionBody(c, uploadLimit, { requireHead: false });
+    const created = await cards.createDraft(actor, c.req.param('workspaceId'), value.document, value.bindings, value.uploads, c.req.raw.signal);
+    return c.json({ cardId: created.card.id, revisionId: created.revision.id, revision: created.revision }, 201);
+  });
+  routes.post('/:workspaceId/cards/:cardId/fork-assets', async (c) => {
+    const { cards, actor } = await required(c);
+    const value = await assetRevisionBody(c, uploadLimit);
+    return c.json(await cards.forkAssets(actor, c.req.param('workspaceId'), c.req.param('cardId'), value.expectedHead!,
+      value.document, value.bindings, value.uploads, c.req.raw.signal), 201);
+  });
   routes.post('/:workspaceId/cards/:cardId/forks', async (c) => {
     const { cards, actor } = await required(c);
     // An empty body copies the card as is; `{ expectedHead, document }` saves an edited fork draft in one step.
@@ -180,6 +199,14 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
       || Object.keys(input).some((key) => !['expectedHead', 'document'].includes(key))) throw new CardError('INVALID_INPUT', 'Expected a document and revision head');
     return c.json(await cards.save(actor, c.req.param('workspaceId'), c.req.param('cardId'), input.expectedHead, input.document as CardDocument));
   });
+  routes.post('/:workspaceId/cards/:cardId/restores', async (c) => {
+    const { cards, actor } = await required(c);
+    const input = await json(c, 8192);
+    if (Object.keys(input).some((key) => !['expectedHead', 'revisionId'].includes(key))
+      || typeof input.expectedHead !== 'string' || !input.expectedHead || input.expectedHead.length > 200
+      || typeof input.revisionId !== 'string' || !input.revisionId || input.revisionId.length > 200) throw new CardError('INVALID_INPUT', 'Expected a saved revision and current head');
+    return c.json(await cards.restore(actor, c.req.param('workspaceId'), c.req.param('cardId'), input.expectedHead, input.revisionId));
+  });
   routes.get('/:workspaceId/cards/:cardId/revisions', async (c) => {
     const { cards, actor } = await required(c);
     const params = new URL(c.req.url).searchParams;
@@ -195,7 +222,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   routes.post('/:workspaceId/cards/:cardId/asset-revisions', async (c) => {
     const { cards, actor } = await required(c);
     const value = await assetRevisionBody(c, uploadLimit);
-    return c.json(await cards.saveAssets(actor, c.req.param('workspaceId'), c.req.param('cardId'), value.expectedHead,
+    return c.json(await cards.saveAssets(actor, c.req.param('workspaceId'), c.req.param('cardId'), value.expectedHead!,
       value.document, value.bindings, value.uploads, c.req.raw.signal));
   });
   for (const action of ['assets', 'asset'] as const) routes.get(`/:workspaceId/cards/:cardId/${action}`, async (c) => {
@@ -203,7 +230,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
     const params = new URL(c.req.url).searchParams;
     const revisionId = params.get('revisionId'), path = params.get('path');
     if (!revisionId || revisionId.length > 200 || [...params.keys()].some((key) => !(action === 'asset' ? ['revisionId', 'path'] : ['revisionId']).includes(key) || params.getAll(key).length !== 1)
-      || (action === 'asset' && (!path || !/^(portrait|declared\/(0|[1-9][0-9]?))$/.test(path)))) throw new CardError('INVALID_INPUT', 'Expected an explicit revision and asset path');
+      || (action === 'asset' && (!path || !/^(portrait|declared\/(0|[1-9][0-9]{0,3}))$/.test(path) || (path.startsWith('declared/') && Number(path.slice(9)) >= 8191)))) throw new CardError('INVALID_INPUT', 'Expected an explicit revision and asset path');
     if (action === 'assets') return c.json(await cards.assetList(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId));
     const value = await cards.asset(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId, path!);
     return new Response(value.body, { headers: { 'content-type': value.mediaType, 'content-length': String(value.byteLength),

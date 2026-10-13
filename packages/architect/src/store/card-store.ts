@@ -1,25 +1,25 @@
 import { create } from 'zustand';
-import { generateId } from '@card-architect/import-core';
 import type { Card, CCv2Data, CCv3Data, CardMeta } from '../lib/types';
 import type { CharacterBook, CCv2Wrapped } from '@character-foundry/character-foundry/schemas';
 import { api } from '../lib/api';
 import { localDB } from '../lib/db';
 import { extractCardData } from '../lib/card-utils';
 import { useTokenStore } from './token-store';
-import { getDeploymentConfig } from '../config/deployment';
-import { isUnityHost, unityAutoSaveDelayMs } from '../unity/config';
-import { importCardClientSide, importVoxtaPackageClientSide, importCardFromURLClientSide } from '../lib/client-import';
-import { exportCard as exportCardClientSide } from '../lib/client-export';
+import { editorAssets } from '../unity/assets';
+import { importCharacterFile, importCharacterUrl } from '../unity/import';
 import { isV3Card, isV2Card, isWrappedV2, getInnerData, type CardFields } from '../lib/card-type-guards';
 import type { CardExtensions } from '../lib/extension-types';
 
 export { extractCardData };
+let selectionVersion = 0;
+export const editorSelection = () => selectionVersion;
 
 interface CardStore {
   // Current card
   currentCard: Card | null;
   isDirty: boolean;
   isSaving: boolean;
+  isRestoring: boolean;
   autoSaveTimeout: ReturnType<typeof setTimeout> | null;
 
   // Actions
@@ -28,7 +28,6 @@ interface CardStore {
   updateCardMeta: (updates: Partial<CardMeta>) => void;
   saveCard: () => Promise<void>;
   debouncedAutoSave: () => void;
-  createSnapshot: (message?: string) => Promise<void>;
   loadCard: (id: string) => Promise<void>;
   createNewCard: () => Promise<void>;
   createNewLorebook: () => Promise<void>;
@@ -52,11 +51,16 @@ export const useCardStore = create<CardStore>((set, get) => ({
   currentCard: null,
   isDirty: false,
   isSaving: false,
+  isRestoring: false,
   autoSaveTimeout: null,
 
   // Set current card
   setCurrentCard: (card) => {
-    set({ currentCard: card, isDirty: false });
+    selectionVersion++;
+    const timeout = get().autoSaveTimeout;
+    if (timeout) clearTimeout(timeout);
+    editorAssets.reset();
+    set({ currentCard: card, isDirty: false, autoSaveTimeout: null });
     if (card) {
       useTokenStore.getState().updateTokenCounts(card);
     }
@@ -70,7 +74,7 @@ export const useCardStore = create<CardStore>((set, get) => ({
     // Deep merge to preserve spec/spec_version and nested data for both V2 and V3
     // V2 can be wrapped { spec, spec_version, data } or unwrapped (legacy)
     // V3 is always wrapped { spec, spec_version, data }
-    let newData;
+    let newData: Card['data'];
 
     if (currentCard.meta.spec === 'v3') {
       const v3Data = currentCard.data as CCv3Data;
@@ -87,23 +91,22 @@ export const useCardStore = create<CardStore>((set, get) => ({
       } as CCv3Data;
     } else {
       // V2 - handle both wrapped and unwrapped formats
-      const v2Data = currentCard.data as any;
+      const v2Data = currentCard.data as unknown as Record<string, unknown>;
       const isWrapped = v2Data.spec === 'chara_card_v2' && 'data' in v2Data;
 
       if (isWrapped) {
         // Wrapped V2: preserve wrapper structure
-        const updatesAsV2 = updates as any;
+        const updatesAsV2 = updates as unknown as Record<string, unknown>;
         newData = {
-          spec: 'chara_card_v2',
-          spec_version: '2.0',
+          ...v2Data,
           data: {
-            ...v2Data.data,
-            ...(updatesAsV2.data || updatesAsV2),
+            ...(v2Data.data as Record<string, unknown>),
+            ...((updatesAsV2.data as Record<string, unknown> | undefined) ?? updatesAsV2),
           },
-        };
+        } as unknown as CCv2Data;
       } else {
         // Unwrapped/legacy V2
-        newData = { ...v2Data, ...updates };
+        newData = { ...v2Data, ...updates } as CCv2Data;
       }
     }
 
@@ -153,104 +156,53 @@ export const useCardStore = create<CardStore>((set, get) => ({
       clearTimeout(autoSaveTimeout);
     }
 
-    const timeout = setTimeout(() => {
-      get().saveCard();
-    }, isUnityHost() ? unityAutoSaveDelayMs : 2000); // Unity: each save is an immutable revision
-
-    set({ autoSaveTimeout: timeout });
-  },
-
-  // Create snapshot (manual versioning)
-  createSnapshot: async (message?: string) => {
-    const { currentCard } = get();
-    if (!currentCard || !currentCard.meta.id) return;
-
-    const config = getDeploymentConfig();
-
-    try {
-      // Save current changes first
-      await get().saveCard();
-
-      // Client-side mode: save to IndexedDB
-      if (config.mode === 'light' || config.mode === 'static') {
-        const versionNumber = await localDB.getNextVersionNumber(currentCard.meta.id);
-        const version = {
-          id: generateId(),
-          cardId: currentCard.meta.id,
-          versionNumber,
-          message,
-          data: currentCard.data,
-          createdAt: new Date().toISOString(),
-        };
-        await localDB.saveVersion(version);
-        return;
-      }
-
-      // Server mode: create version via API
-      const { error } = await api.createVersion(currentCard.meta.id, message);
-      if (error) {
-        console.error('Failed to create snapshot:', error);
-        throw new Error(error);
-      }
-    } catch (err) {
-      console.error('Failed to create snapshot:', err);
-      throw err;
-    }
+    // Recovery drafts are local only. Immutable library revisions are written
+    // by explicit Save, never by a timer or merely opening the editor.
+    set({ autoSaveTimeout: null });
   },
 
   // Save card to API or IndexedDB
   saveCard: async () => {
-    const { currentCard, isDirty } = get();
+    const { currentCard, isDirty, isSaving } = get();
     // Export/send callers flush pending edits, but a saved card should not be
     // rewritten: even identical server updates advance its last-edited date.
-    if (!currentCard || (currentCard.meta.id && !isDirty)) {
+    if (!currentCard || isSaving || get().isRestoring || (currentCard.meta.id && !isDirty && !editorAssets.hasChanges(currentCard))) {
       return;
     }
 
-    const config = getDeploymentConfig();
     set({ isSaving: true });
-    let savedCard = currentCard;
+    const savingSelection = selectionVersion;
 
     try {
-      // Client-side mode: save to IndexedDB
-      if (config.mode === 'light' || config.mode === 'static') {
-        const cardToSave = currentCard.meta.id
-          ? currentCard
-          : { ...currentCard, meta: { ...currentCard.meta, id: generateId() } };
-
-        await localDB.saveCard(cardToSave);
-
-        if (!currentCard.meta.id) {
-          set({ currentCard: cardToSave });
-        }
-        set(state => state.currentCard === cardToSave ? { isDirty: false } : {});
-        return;
+      const result = currentCard.meta.id ? await api.updateCard(currentCard.meta.id, currentCard) : await api.createCard(currentCard);
+      if (result.error || !result.data) throw new Error(result.error ?? 'Save returned no card');
+      const saved = result.data;
+      const latest = get().currentCard;
+      // Never replace another card opened while the request was in flight.
+      if (selectionVersion !== savingSelection || !latest || (latest.meta.id !== currentCard.meta.id || latest.meta.forkOf !== currentCard.meta.forkOf)) return;
+      const changedDuringSave = latest !== currentCard;
+      let merged = saved;
+      if (changedDuringSave) {
+        const data = structuredClone(latest.data) as unknown as Record<string, unknown>;
+        const inner = data.data as Record<string, unknown>;
+        const savedInner = (saved.data as unknown as { data: Record<string, unknown> }).data;
+        if (Object.hasOwn(savedInner, 'assets')) inner.assets = structuredClone(savedInner.assets);
+        else delete inner.assets;
+        const extensions = { ...(inner.extensions as Record<string, unknown> | undefined) };
+        const savedExtensions = savedInner.extensions as Record<string, unknown> | undefined;
+        const foundry = { ...(extensions.foundry as Record<string, unknown> | undefined) };
+        const savedFoundry = savedExtensions?.foundry as Record<string, unknown> | undefined;
+        if (savedFoundry?.lineage !== undefined) foundry.lineage = savedFoundry.lineage;
+        else delete foundry.lineage;
+        extensions.foundry = foundry; inner.extensions = extensions;
+        merged = { data: data as unknown as Card['data'], meta: { ...latest.meta, id: saved.meta.id, forkOf: undefined,
+          updatedAt: saved.meta.updatedAt, createdAt: saved.meta.createdAt } };
       }
-
-      // Server mode: save via API
-      if (currentCard.meta.id) {
-        // Update existing card
-        const result = await api.updateCard(currentCard.meta.id, currentCard);
-        if (result.error) {
-          throw new Error(result.error);
-        }
-      } else {
-        // Create new card
-        const { data, error } = await api.createCard(currentCard);
-        if (error) throw new Error(error);
-        if (data) {
-          savedCard = data;
-          set({ currentCard: data });
-        }
-      }
-
-      // Edits made while this request was in flight still need to be saved.
-      set(state => state.currentCard === savedCard ? { isDirty: false } : {});
-
-      // Clear draft from IndexedDB
-      if (currentCard.meta.id && get().currentCard === savedCard) {
-        await localDB.deleteDraft(currentCard.meta.id);
-      }
+      const dirty = changedDuringSave || editorAssets.hasChanges(merged);
+      set({ currentCard: merged, isDirty: dirty });
+      useTokenStore.getState().updateTokenCounts(merged);
+      if (dirty) await localDB.saveDraft(saved.meta.id, merged).catch(console.warn);
+      else if (currentCard.meta.id) await localDB.deleteDraft(currentCard.meta.id).catch(console.warn);
     } catch (err) {
       console.error('[saveCard] FAILED to save card:', err);
       throw err; // Re-throw so caller knows it failed
@@ -261,28 +213,15 @@ export const useCardStore = create<CardStore>((set, get) => ({
 
   // Load card from API or IndexedDB
   loadCard: async (id) => {
-    const config = getDeploymentConfig();
-
-    // Client-side mode: load from IndexedDB
-    if (config.mode === 'light' || config.mode === 'static') {
-      const card = await localDB.getCard(id);
-      if (card) {
-        set({ currentCard: card, isDirty: false });
-        useTokenStore.getState().updateTokenCounts(card);
-      }
-      return;
-    }
-
-    // Server mode: load from API
+    const loadingSelection = selectionVersion;
     const { data, error } = await api.getCard(id);
+    if (loadingSelection !== selectionVersion) return;
     if (error) {
-      console.error('Failed to load card:', error);
-      return;
+      throw new Error(error);
     }
 
     if (data) {
-      set({ currentCard: data, isDirty: false });
-      useTokenStore.getState().updateTokenCounts(data);
+      get().setCurrentCard(data);
 
       // Check for draft in IndexedDB
       const draft = await localDB.getDraft(id);
@@ -324,10 +263,8 @@ export const useCardStore = create<CardStore>((set, get) => ({
       } as CCv3Data,
     };
 
-    set({ currentCard: newCard, isDirty: true });
-
-    // Immediately save to API to get a real ID
-    await get().saveCard();
+    get().setCurrentCard(newCard);
+    set({ isDirty: true });
   },
 
   // Create new standalone lorebook
@@ -371,255 +308,30 @@ export const useCardStore = create<CardStore>((set, get) => ({
       } as CCv3Data,
     };
 
-    set({ currentCard: newCard, isDirty: true });
-
-    // Immediately save to API to get a real ID
-    await get().saveCard();
+    get().setCurrentCard(newCard);
+    set({ isDirty: true });
   },
 
   // Import card
   importCard: async (file) => {
-    const config = getDeploymentConfig();
-    console.log('[importCard] Mode:', config.mode, 'File:', file.name);
-
-    // Use client-side import for light/static modes
-    if (config.mode === 'light' || config.mode === 'static') {
-      try {
-        console.log('[importCard] Using client-side import');
-        const result = await importCardClientSide(file);
-        const card = result.card;
-        console.log('[importCard] Parsed card:', card.meta.name);
-
-        // Save to IndexedDB for persistence
-        await localDB.saveCard(card);
-
-        // Save full image for export (icon) and thumbnail for display
-        if (result.fullImageDataUrl) {
-          await localDB.saveImage(card.meta.id, 'icon', result.fullImageDataUrl);
-          console.log('[importCard] Saved full image (icon), size:', result.fullImageDataUrl.length);
-        }
-        if (result.thumbnailDataUrl) {
-          await localDB.saveImage(card.meta.id, 'thumbnail', result.thumbnailDataUrl);
-          console.log('[importCard] Saved thumbnail, size:', result.thumbnailDataUrl.length);
-        }
-
-        // Save extracted assets (from CHARX/Voxta) to IndexedDB
-        if (result.assets && result.assets.length > 0) {
-          console.log(`[importCard] Saving ${result.assets.length} extracted assets`);
-          for (const asset of result.assets) {
-            const assetId = generateId();
-            // Map string type to valid StoredAsset type
-            const validTypes = ['icon', 'background', 'emotion', 'sound', 'workflow', 'lorebook', 'custom'] as const;
-            const assetType = validTypes.includes(asset.type as any) ? asset.type as typeof validTypes[number] : 'custom';
-
-            await localDB.saveAsset({
-              id: assetId,
-              cardId: card.meta.id,
-              name: asset.name,
-              type: assetType,
-              ext: asset.ext,
-              mimetype: asset.mimetype,
-              data: asset.data,
-              size: asset.size,
-              width: asset.width,
-              height: asset.height,
-              isMain: asset.isMain ?? false,
-              actorIndex: asset.actorIndex,
-              tags: [],
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
-          }
-          console.log('[importCard] All assets saved to IndexedDB');
-        }
-
-        set({ currentCard: card, isDirty: false });
-        useTokenStore.getState().updateTokenCounts(card);
-        return card.meta.id;
-      } catch (err) {
-        console.error('[importCard] Client-side import failed:', err);
-        return null;
-      }
-    }
-
-    // Use server API for full mode
-    const { data, error } = await api.unifiedImport(file);
-    if (error) {
-      return null;
-    }
-
-    if (data && data.card) {
-      set({ currentCard: data.card, isDirty: false });
-      useTokenStore.getState().updateTokenCounts(data.card);
-      return data.card.meta.id;
-    }
-    return null;
+    const card = await importCharacterFile(file);
+    get().setCurrentCard(card);
+    return card.meta.id;
   },
 
-  // Import Voxta package
-  importVoxtaPackage: async (file) => {
-    const config = getDeploymentConfig();
-
-    // Client-side mode: use browser-based Voxta parsing
-    if (config.mode === 'light' || config.mode === 'static') {
-      try {
-        const buffer = await file.arrayBuffer();
-        const results = await importVoxtaPackageClientSide(new Uint8Array(buffer));
-
-        if (results.length === 0) {
-          alert('Voxta package contains no characters.');
-          return null;
-        }
-
-        // Save all characters to IndexedDB
-        for (const result of results) {
-          await localDB.saveCard(result.card);
-          if (result.fullImageDataUrl) {
-            await localDB.saveImage(result.card.meta.id, 'icon', result.fullImageDataUrl);
-          }
-          if (result.thumbnailDataUrl) {
-            await localDB.saveImage(result.card.meta.id, 'thumbnail', result.thumbnailDataUrl);
-          }
-          // Save extracted assets
-          if (result.assets && result.assets.length > 0) {
-            console.log(`[importVoxtaPackage] Saving ${result.assets.length} assets for ${result.card.meta.name}`);
-            for (const asset of result.assets) {
-              const assetId = generateId();
-              const validTypes = ['icon', 'background', 'emotion', 'sound', 'workflow', 'lorebook', 'custom'] as const;
-              const assetType = validTypes.includes(asset.type as any) ? asset.type as typeof validTypes[number] : 'custom';
-              await localDB.saveAsset({
-                id: assetId,
-                cardId: result.card.meta.id,
-                name: asset.name,
-                type: assetType,
-                ext: asset.ext,
-                mimetype: asset.mimetype,
-                data: asset.data,
-                size: asset.size,
-                width: asset.width,
-                height: asset.height,
-                isMain: asset.isMain ?? false,
-                actorIndex: asset.actorIndex,
-                tags: [],
-                createdAt: new Date().toISOString(),
-                updatedAt: new Date().toISOString(),
-              });
-            }
-          }
-        }
-
-        // Set the first card as active
-        const firstResult = results[0];
-        set({ currentCard: firstResult.card, isDirty: false });
-        useTokenStore.getState().updateTokenCounts(firstResult.card);
-
-        if (results.length > 1) {
-          alert(`Imported ${results.length} characters from Voxta package. "${firstResult.card.meta.name}" is now active.`);
-        }
-        return firstResult.card.meta.id;
-      } catch (err) {
-        alert(`Failed to import Voxta package: ${err instanceof Error ? err.message : String(err)}`);
-        return null;
-      }
-    }
-
-    // Server mode: use unified import API
-    const { data, error } = await api.unifiedImport(file);
-    if (error) {
-      alert(`Failed to import Voxta package: ${error}`);
-      return null;
-    }
-
-    if (data && data.card) {
-      const firstCard = data.card;
-
-      // Set the first card as active
-      set({ currentCard: firstCard, isDirty: false });
-      useTokenStore.getState().updateTokenCounts(firstCard);
-
-      const importedCount = Array.isArray(data.cardIds) ? data.cardIds.length : 1;
-      if (importedCount > 1) {
-        alert(
-          `Imported ${importedCount} cards from Voxta package. "${firstCard.meta.name}" is now active.`
-        );
-      }
-      return firstCard.meta.id;
-    } else {
-      alert('Voxta package imported but no characters were found.');
-      return null;
-    }
-  },
+  // Container support is owned by Foundry's server adapter, including explicit errors.
+  importVoxtaPackage: async (file) => get().importCard(file),
 
   importCardFromURL: async (url) => {
-    const config = getDeploymentConfig();
-
-    try {
-      if (config.mode === 'light' || config.mode === 'static') {
-        // Client-side URL import
-        const result = await importCardFromURLClientSide(url);
-        await localDB.saveCard(result.card);
-        if (result.fullImageDataUrl) {
-          await localDB.saveImage(result.card.meta.id, 'icon', result.fullImageDataUrl);
-        }
-        if (result.thumbnailDataUrl) {
-          await localDB.saveImage(result.card.meta.id, 'thumbnail', result.thumbnailDataUrl);
-        }
-        // Save extracted assets
-        if (result.assets && result.assets.length > 0) {
-          console.log(`[importCardFromURL] Saving ${result.assets.length} assets`);
-          for (const asset of result.assets) {
-            const assetId = generateId();
-            const validTypes = ['icon', 'background', 'emotion', 'sound', 'workflow', 'lorebook', 'custom'] as const;
-            const assetType = validTypes.includes(asset.type as any) ? asset.type as typeof validTypes[number] : 'custom';
-            await localDB.saveAsset({
-              id: assetId,
-              cardId: result.card.meta.id,
-              name: asset.name,
-              type: assetType,
-              ext: asset.ext,
-              mimetype: asset.mimetype,
-              data: asset.data,
-              size: asset.size,
-              width: asset.width,
-              height: asset.height,
-              isMain: asset.isMain ?? false,
-              actorIndex: asset.actorIndex,
-              tags: [],
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
-          }
-        }
-        set({ currentCard: result.card, isDirty: false });
-        useTokenStore.getState().updateTokenCounts(result.card);
-        return result.card.meta.id;
-      }
-
-      // Server mode
-      const { data, error } = await api.importCardFromURL(url);
-      if (error) {
-        alert(`Failed to import card: ${error}`);
-        return null;
-      }
-
-      if (data && data.card) {
-        set({ currentCard: data.card, isDirty: false });
-        useTokenStore.getState().updateTokenCounts(data.card);
-        return data.card.meta.id;
-      }
-      return null;
-    } catch (err) {
-      alert(`Failed to import card: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
-    }
+    const card = await importCharacterUrl(url);
+    get().setCurrentCard(card);
+    return card.meta.id;
   },
 
   // Export card
   exportCard: async (format) => {
     const { currentCard } = get();
     if (!currentCard || !currentCard.meta.id) return;
-
-    const config = getDeploymentConfig();
 
     // Save before exporting to ensure DB has latest data
     if (currentCard.meta.spec === 'collection') {
@@ -634,18 +346,10 @@ export const useCardStore = create<CardStore>((set, get) => ({
       // Regular character card: save before export
       try {
         await get().saveCard();
-        // Small delay to ensure database write completes
-        await new Promise(resolve => setTimeout(resolve, 150));
       } catch (err) {
         alert(`Failed to save card before export: ${err}`);
         return;
       }
-    }
-
-    // Client-side mode: use client export (supports all formats now)
-    if (config.mode === 'light' || config.mode === 'static') {
-      await exportCardClientSide(currentCard, format as 'json' | 'png' | 'charx' | 'voxta');
-      return;
     }
 
     // Server mode: use API
@@ -694,6 +398,7 @@ export const useCardStore = create<CardStore>((set, get) => ({
         // Wrapped V2: update data.data
         const wrapped = currentCard.data as CCv2Wrapped;
         newData = {
+          ...wrapped,
           spec: 'chara_card_v2',
           spec_version: '2.0',
           data: {

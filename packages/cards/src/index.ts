@@ -11,6 +11,7 @@ import { measureMissing, measureRevision } from './metrics.js';
 import { revisionIdentityOptions } from './revision-assets.js';
 import { exportRevision } from './export.js';
 import { saveAssetRevision } from './asset-edit.js';
+import { createAssetDraft } from './draft.js';
 import { CardError, importByteLimit } from './types.js';
 import type { Actor, ImportAsset, ExportFormat, HistoryOptions, HistoryPage, AssetBinding, AssetUpload } from './types.js';
 export { CardError } from './types.js';
@@ -178,6 +179,36 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     saveAssets: (actor: Actor, workspaceId: string, cardId: string, expectedHead: string, document: CardDocument,
       bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal) =>
       saveAssetRevision(store, assets, actor, workspaceId, cardId, expectedHead, document, bindings, uploads, signal),
+    createDraft: (actor: Actor, workspaceId: string, document: CardDocument, bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal) =>
+      createAssetDraft(store, assets, actor, workspaceId, document, bindings, uploads, signal).then(measured),
+    async forkAssets(actor: Actor, workspaceId: string, cardId: string, expectedHead: string, document: CardDocument,
+      bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal) {
+      const revision = await saveAssetRevision(store, assets, actor, workspaceId, cardId, expectedHead, document, bindings, uploads, signal, 'fork');
+      await measureRevision(store, workspaceId, revision.id).catch(() => undefined);
+      return { cardId: revision.cardId, revisionId: revision.id, revision };
+    },
+    async restore(actor: Actor, workspaceId: string, cardId: string, expectedHead: string, revisionId: string) {
+      actor = { ...actor };
+      const current = await open(actor, workspaceId, cardId);
+      if (current.revision.id !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before restoring');
+      const historical = await store.getRevision(workspaceId, revisionId);
+      if (historical.cardId !== cardId) throw new StoreError('NOT_FOUND', 'Revision does not belong to this card');
+      if (historical.id === expectedHead) return current.revision;
+      if (!current.card.originalHash) throw new CardError('INVALID_LINEAGE', 'Card has no accepted original root');
+      const options = await revisionIdentityOptions(store, historical);
+      const currentOptions = await revisionIdentityOptions(store, current.revision);
+      const previous = readCardLineage(current.revision.document);
+      const target = readCardLineage(historical.document);
+      if ((previous && !await verifyCardLineage(current.revision.document, currentOptions))
+        || (target && !await verifyCardLineage(historical.document, options))) throw new CardError('INVALID_LINEAGE', 'Stored lineage failed verification');
+      const saved = await createCardRevision(withLineage(historical.document, current.revision.document), { ...options,
+        originalHash: current.card.originalHash, parents: previous ? [previous] : [], operation: 'edit', author: actor.uri,
+        createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
+      const revision = await store.saveRevision({ workspaceId, cardId, expectedHead, authorId: actor.id,
+        document: saved.card, identity: saved.lineage.content, assets: historical.assets });
+      await measureRevision(store, workspaceId, revision.id).catch(() => undefined);
+      return revision;
+    },
     async export(actor: Actor, workspaceId: string, cardId: string, revisionId: string, format: ExportFormat, signal?: AbortSignal) {
       actor = { ...actor };
       await authorize(actor, workspaceId);

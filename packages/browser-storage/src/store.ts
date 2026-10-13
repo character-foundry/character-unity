@@ -125,11 +125,13 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
       if (syncContext) throw new StoreError('INVALID_INPUT', 'Signed sync writes require a SQL host');
       if (input.publication) throw new StoreError('INVALID_INPUT', 'Hub publication guards require the shared SQL store');
       const data = snapshot(input), source = sourceSnapshot(input.source);
-      const { workspaceId, sourceWorkspaceId, sourceRevisionId } = input;
+      const { workspaceId, sourceWorkspaceId, sourceRevisionId, expectedSourceHead } = input;
+      if (expectedSourceHead !== undefined) validate.text(expectedSourceHead, 'expectedSourceHead');
       return transaction(db, writeStores, 'readwrite', function* (tx) {
         yield* workspace(tx, workspaceId);
         const parent = yield* scoped<Revision>(tx, 'revisions', sourceWorkspaceId, sourceRevisionId);
         const original = yield* scoped<Card>(tx, 'cards', sourceWorkspaceId, parent.cardId);
+        if (expectedSourceHead !== undefined && original.headRevisionId !== expectedSourceHead) throw new StoreError('HEAD_CONFLICT', 'The source card has changed; reload before forking');
         const card: Card = { id: crypto.randomUUID(), workspaceId, headRevisionId: crypto.randomUUID(),
           originalHash: original.originalHash, forkedFromRevisionId: parent.id, createdAt: new Date().toISOString() };
         const value = revision(card, data, 1, parent.id);

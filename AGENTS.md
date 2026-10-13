@@ -10,14 +10,17 @@
   Do not point the separate native prototype at live Archive paths. Live writer
   takeover requires coordinating the old scheduler/index workers/optimizer first.
   See `docs/adr/0001-existing-archive-and-library-references.md`. Finish the Archive
-  foundation before further viewer/editor work; Unity favorites will be references
+  foundation before live takeover; editor/import cleanup is authorized while takeover is on hold. Unity favorites will be references
   and changed saves will create forks, without duplicating original files.
 - Architect and hub share `packages/api` and `packages/store`.
   `apps/api` hosts that API on Node or Workers; it is not a second implementation.
 - Browser and portable code must not import Node adapters or native modules.
-- `packages/architect` is Architect's editor ported verbatim with its global zustand stores
-  (one editor per page). It persists through the unity API facade in `src/lib/api.ts`.
-  Per-instance isolation is deferred (beads cu-1o2.5); do not "fix" the global stores ad hoc.
+- `packages/architect` retains useful Architect editor components but uses native Unity
+  revision/import/asset contracts in `src/lib/api.ts` and `src/unity/`. Do not restore
+  old server fallbacks or placeholder endpoints. Save commits document and staged
+  assets together; recovery drafts do not autosave immutable server revisions.
+  Global zustand stores still mean one editor per page; lifecycle isolation remains
+  a tracked followup. Viewer/Next-shim removal comes after this editor integration.
   `packages/editor` (scaffold form editor) is being retired. Host apps own auth and routing.
 - Do not kill processes you did not start, discard legacy working-tree changes,
   or modify archived original bytes.

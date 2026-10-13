@@ -1,5 +1,39 @@
 # Editor port status
 
+## Active unified editor — 2026-10-13
+
+`apps/web` mounts `packages/architect`, not the earlier `packages/editor`
+scaffold described below. Useful Architect components now use native Unity
+import/revision/asset contracts without an inherited old-server API client.
+Wrapped JSON, PNG and CharX imports send original bytes to Foundry on the backend;
+no browser reconstruction or duplicate IndexedDB card/asset store is used.
+
+Portraits and declared attachments are staged with the editor draft. Explicit
+Save commits text and asset bindings together. New/Fork creates one initial
+revision only on Save; unchanged inherited files reuse stored asset references.
+Failed/stale saves retain the draft. Recovery text drafts are browser-local, not
+automatic immutable server revisions; staged files remain in memory and are not
+crash-recovered. Discard releases staged object URLs. Historical Restore creates
+a new revision containing the historical text **and** asset references.
+
+Browser-local LLM providers, templates, presets, wizard prompts, themes and editor
+preferences remain. Nonexistent Architect-server RAG/ComfyUI/backup/name-tool
+paths and old dashboard/import/parser shells are retired, not replaced with
+fake endpoints. Native optional tools are tracked in `cu-1o2.5.13`.
+
+The editor still uses global Zustand stores (one editor per page); per-instance
+and workspace isolation is tracked in `cu-1o2.5.12`. The viewer still has Next
+compatibility shims; its native rewrite is the next phase (`cu-1o2.26`). General
+import deduplication and Archive-reference favorites/forks are separate remaining
+work (`cu-1o2.27`), not capabilities of this editor integration.
+
+`pnpm dev` starts API + unified web. `pnpm test:e2e:unity` builds the real unified
+web UI and runs its isolated production-bundle browser workflows. The legacy
+host tests below remain useful scaffold regressions but do not prove parity of
+the active editor.
+
+## Earlier scaffold implementation (historical)
+
 Architect has local Node API and browser-only IndexedDB profiles; hub mounts the
 same editor with authenticated account sessions. This is a staged port
 of the legacy editor, not feature parity. Source inspection used Architect commit

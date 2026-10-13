@@ -137,9 +137,10 @@ export function createStore(driver: StoreDriver) {
     await requireSyncWrite(driver, context, target);
     return { card, revision };
   }
-  async function forkCard(input: RevisionInput & { workspaceId: string; sourceWorkspaceId: string; sourceRevisionId: string; source?: CardSourceInput; publication?: PublicationForkGuard }, syncContext?: SyncWriteContext) {
+  async function forkCard(input: RevisionInput & { workspaceId: string; sourceWorkspaceId: string; sourceRevisionId: string; expectedSourceHead?: string; source?: CardSourceInput; publication?: PublicationForkGuard }, syncContext?: SyncWriteContext) {
     const context = snapshotSyncContext(syncContext);
-    const { workspaceId, sourceWorkspaceId, sourceRevisionId } = input;
+    const { workspaceId, sourceWorkspaceId, sourceRevisionId, expectedSourceHead } = input;
+    if (expectedSourceHead !== undefined) validate.text(expectedSourceHead, 'expectedSourceHead');
     const id = crypto.randomUUID();
     const revision = revisionStatements(workspaceId, id, sourceRevisionId, input);
     const sourceRows = sourceStatements(workspaceId, id, input.source);
@@ -157,9 +158,12 @@ export function createStore(driver: StoreDriver) {
     await workspace(workspaceId);
     const source = await getRevision(sourceWorkspaceId, sourceRevisionId);
     const parent = await getCard(sourceWorkspaceId, source.cardId);
+    if (expectedSourceHead !== undefined && parent.headRevisionId !== expectedSourceHead) throw new StoreError('HEAD_CONFLICT', 'The source card has changed; reload before forking');
     const statements: Statement[] = [
-      { sql: `INSERT INTO unity_cards(id, workspace_id, original_hash, forked_from_revision_id, created_at) VALUES (?, ?, ?, ?, ?)`,
-        params: [id, workspaceId, parent.originalHash, sourceRevisionId, new Date().toISOString()] },
+      { sql: `INSERT INTO unity_cards(id, workspace_id, original_hash, forked_from_revision_id, created_at)
+          SELECT ?, ?, ?, ?, ? ${expectedSourceHead === undefined ? '' : `WHERE EXISTS (SELECT 1 FROM unity_cards c WHERE c.workspace_id = ? AND c.id = ? AND c.head_revision_id = ? AND NOT EXISTS (SELECT 1 FROM unity_card_deletions d WHERE d.card_id = c.id))`}`,
+        params: [id, workspaceId, parent.originalHash, sourceRevisionId, new Date().toISOString(),
+          ...(expectedSourceHead === undefined ? [] : [sourceWorkspaceId, source.cardId, expectedSourceHead])] },
       ...sourceRows, ...revision.statements,
       ...(guard ? [{ sql: 'INSERT INTO unity_publication_forks(card_id, publication_id, actor_id, policy_version) VALUES (?, ?, ?, ?)',
         params: [id, guard.publicationId, guard.actorId, guard.policyVersion] }] : []),
@@ -169,7 +173,14 @@ export function createStore(driver: StoreDriver) {
       try { ids = await commitSyncMutation(driver, context, target, statements, [id, revision.id]); } catch (error) { translate(error); }
       return syncForkResult(context, target, ids);
     }
-    await batch(statements);
+    try { await batch(statements); }
+    catch (error) {
+      if (expectedSourceHead !== undefined) {
+        const latest = await getCard(sourceWorkspaceId, source.cardId).catch(() => null);
+        if (!latest || latest.headRevisionId !== expectedSourceHead) throw new StoreError('HEAD_CONFLICT', 'The source card has changed; reload before forking', { cause: error });
+      }
+      throw error;
+    }
     return { card: await insertedCard(workspaceId, id), revision: await getRevision(workspaceId, revision.id) };
   }
   return {

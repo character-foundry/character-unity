@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { readFile, access, mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { createHash } from 'node:crypto';
@@ -16,8 +16,10 @@ for (const [app, service, archiveMode] of [['api', 'unity-api', 'off'], ['archiv
     try { await createCopyFixture(blobDirectory); copiedDatabase = await readFile(join(blobDirectory, 'archive.sqlite')); }
     catch (error) { await rm(blobDirectory, { recursive: true, force: true }); throw error; }
   }
+  const env = { ...process.env, HOST: '127.0.0.1', PORT: '0', UNITY_PROFILE: 'local', UNITY_DB_PATH: ':memory:', UNITY_BLOB_DIR: blobDirectory, UNITY_WEB_DIR: app === 'api' ? resolve('apps/web/dist') : '', UNITY_ARCHIVE_MODE: archiveMode, UNITY_ARCHIVE_COPY_ROOT: archiveMode === 'copy' ? blobDirectory : '', UNITY_ARCHIVE_ORIGIN: '', UNITY_ARCHIVE_NATIVE_ORIGIN: '' };
+  delete env.UNITY_REMOTE_CONNECTIONS_FILE;
   const child = spawn(process.execPath, [`apps/${app}/dist/node.js`], {
-    env: { ...process.env, HOST: '127.0.0.1', PORT: '0', UNITY_PROFILE: 'local', UNITY_DB_PATH: ':memory:', UNITY_BLOB_DIR: blobDirectory, UNITY_ARCHIVE_MODE: archiveMode, UNITY_ARCHIVE_COPY_ROOT: archiveMode === 'copy' ? blobDirectory : '', UNITY_ARCHIVE_ORIGIN: '' },
+    env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   let stderr = '';
@@ -43,8 +45,15 @@ for (const [app, service, archiveMode] of [['api', 'unity-api', 'off'], ['archiv
     if (app === 'api') {
       const ready = await fetch(`http://127.0.0.1:${address.port}/api/ready`, { signal: AbortSignal.timeout(5_000) });
       assert.equal(ready.status, 200);
-      assert.deepEqual(await ready.json(), { status: 'ready', storage: { schemaVersion: 9 } });
+      assert.deepEqual(await ready.json(), { status: 'ready', storage: { schemaVersion: 12 } });
       const apiOrigin = `http://127.0.0.1:${address.port}`;
+      for (const path of ['/', '/new', '/card/example/edit', '/card/example/fork', '/archive']) {
+        const page = await fetch(`${apiOrigin}${path}`, { signal: AbortSignal.timeout(5_000) });
+        assert.equal(page.status, 200); assert.match(page.headers.get('content-type') ?? '', /text\/html/);
+      }
+      for (const path of ['/api/missing', '/runtime/unity.db', '/unexpected-file']) {
+        assert.equal((await fetch(`${apiOrigin}${path}`, { signal: AbortSignal.timeout(5_000) })).status, 404);
+      }
       const session = await fetch(`${apiOrigin}/api/local-session`, { method: 'POST', headers: { origin: apiOrigin, 'x-unity-session': 'local' }, signal: AbortSignal.timeout(5_000) });
       assert.equal(session.status, 200);
       const cookie = session.headers.get('set-cookie')?.split(';')[0];

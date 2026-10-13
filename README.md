@@ -3,6 +3,21 @@
 One repository for Archive, Architect and a character-sharing hub. Foundry remains
 an independent SDK for character formats and federation primitives.
 
+The active application is `apps/web`: one library/Archive/viewer/editor shell.
+Its Architect editor now uses native Unity imports, revisions and staged assets;
+portraits and attachments are committed together on explicit Save. New/Fork
+drafts create nothing until Save, and history restores include their assets.
+Browser-local AI settings, templates, presets and wizard remain supported;
+nonexistent old-server modules and duplicate import/storage paths are removed.
+See [current editor status and remaining gaps](docs/editor-port.md).
+
+Existing Archive database/files/LanceDB stay in place. Live writer takeover is
+on hold. Archive-reference favorites/import deduplication and the native viewer
+rewrite without Next shims are subsequent work, not completed features.
+
+The following foundation history describes the earlier standalone/scaffold
+profiles, which remain available for regression checks pending retirement:
+
 **Status: runnable foundation; feature migration remains staged.** Architect has a working core editor with two
 independent drafts; hub mounts the same editor with account sign-in and publishing.
 Both include embedded lorebook settings and entry editing, copying and ordering.
@@ -61,12 +76,13 @@ pnpm dev
 
 | Process | Address | Independent command |
 |---|---|---|
-| Architect | http://127.0.0.1:9310 | `pnpm dev:architect` |
-| Hub | http://127.0.0.1:9311 | `pnpm dev:hub` |
+| Unified application | http://127.0.0.1:9430 | `pnpm dev:web` |
 | Shared API | http://127.0.0.1:9312/api/health | `pnpm dev:api` |
 | Archive service | http://127.0.0.1:9313/api/health | `pnpm dev:archive` |
+| Legacy Architect scaffold | http://127.0.0.1:9310 | `pnpm dev:architect` |
+| Legacy hub scaffold | http://127.0.0.1:9311 | `pnpm dev:hub` |
 
-`pnpm dev` starts Architect, hub and one API process. Archive starts separately;
+`pnpm dev` starts the unified web application and one API process. Archive starts separately;
 its default mode opens no database or search/scraper jobs. Explicit copied-SQLite
 mode reads only an isolated manifest selection; see [copied Archive source](docs/archive-copied-source.md). Architect
 uses the API for sessions and persistence. This default command uses the local
@@ -85,10 +101,12 @@ For a built, same-origin local app, run from the repository root:
 
 ```sh
 pnpm build
-UNITY_WEB_DIR=apps/architect/dist node apps/api/dist/node.js
+UNITY_WEB_DIR=apps/web/dist node apps/api/dist/node.js
 ```
 
 Open `http://127.0.0.1:9312`. This is still the loopback, single-owner profile.
+Known client routes support direct reloads; API misses never fall back to HTML.
+Run `pnpm test:e2e:unity` to build and test the active application in Chromium.
 For the hub, create accounts and start the explicit account profile as described
 in [hub accounts](docs/hub-accounts.md). A dependency-locked Node container serves
 either profile; see [containers](docs/containers.md) for hub Compose, standalone

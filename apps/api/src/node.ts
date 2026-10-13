@@ -25,12 +25,15 @@ const services = await openLocalServices({ databasePath, blobDirectory, remoteCo
 const app = profile === 'hub'
   ? createAccountApi({ origin: publicOrigin!, accounts: services.accounts, store: services.store, forSession: services.forSession, ...(syncEnabled ? { sync: createSyncApi({ writes: syncWritesEnabled, origin: publicOrigin!, hub: services.hub, sync: services.sync }) } : {}) })
   : createLocalApi(services, { origin: () => origin });
-// Optional same-origin production UI. Only index and Vite assets are served;
+// Optional same-origin production UI. Only known client routes and Vite assets are served;
 // API misses must never become HTML and runtime storage must never be exposed.
 if (process.env.UNITY_WEB_DIR) {
   const root = resolve(process.env.UNITY_WEB_DIR);
   await access(resolve(root, 'index.html'));
   app.get('/', serveStatic({ path: resolve(root, 'index.html') }));
+  for (const route of ['/explore', '/archive', '/new', '/search', '/settings', '/chat-apps', '/card/:id', '/card/:id/edit', '/card/:id/fork']) {
+    app.get(route, serveStatic({ path: resolve(root, 'index.html') }));
+  }
   app.get('/assets/*', serveStatic({ root }));
 }
 // Local profile: rescan connected chat apps so "where it lives" stays current (UNITY_CHAT_SCAN_SECONDS=0 turns it off).

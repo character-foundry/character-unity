@@ -5,9 +5,7 @@ import { ModulesSettingsPanel } from './panels/ModulesSettingsPanel';
 import { EditorSettingsPanel } from './panels/EditorSettingsPanel';
 import { ThemeSettingsPanel } from './panels/ThemeSettingsPanel';
 import { ProvidersSettingsPanel } from './panels/ProvidersSettingsPanel';
-import { RagSettingsPanel } from './panels/RagSettingsPanel';
 import { PresetsSettingsPanel } from './panels/PresetsSettingsPanel';
-import { BackupRestorePanel } from './panels/BackupRestorePanel';
 import { TemplatesSettingsPanel } from './panels/TemplatesSettingsPanel';
 
 export function registerCoreSettingsPanels() {
@@ -57,15 +55,6 @@ export function registerCoreSettingsPanels() {
   });
 
   registry.registerSettingsPanel({
-    id: 'rag',
-    label: 'Knowledge & RAG',
-    group: 'ai',
-    component: RagSettingsPanel,
-    order: 50,
-    color: 'blue',
-  });
-
-  registry.registerSettingsPanel({
     id: 'templates',
     label: 'Templates',
     component: TemplatesSettingsPanel,
@@ -79,14 +68,6 @@ export function registerCoreSettingsPanels() {
     component: PresetsSettingsPanel,
     order: 70,
     color: 'blue',
-  });
-
-  registry.registerSettingsPanel({
-    id: 'backup',
-    label: 'Backup & Restore',
-    component: BackupRestorePanel,
-    order: 80,
-    color: 'green',
   });
 
   // Add more core settings panels here as they are extracted

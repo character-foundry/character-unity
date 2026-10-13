@@ -58,7 +58,8 @@ export interface Version {
   cardId: string;
   versionNumber: number;
   message?: string;
-  data: Card['data'];
+  /** Summaries omit the document until a version is selected. */
+  data?: Card['data'];
   createdAt: string;
 }
 
@@ -197,16 +198,6 @@ export interface PersistenceAdapter {
    * List versions for a card
    */
   listVersions(cardId: string): Promise<Version[]>;
-
-  /**
-   * Create a new version/snapshot
-   */
-  createVersion(cardId: string, data: Card['data'], message?: string): Promise<Version>;
-
-  /**
-   * Delete a version
-   */
-  deleteVersion(cardId: string, versionId: string): Promise<void>;
 
   // ============================================
   // Images

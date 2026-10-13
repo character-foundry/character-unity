@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Architect's editor, ported verbatim from character-architect/apps/web/src with its global stores. See docs/architect-port.md.",
+  "description": "Unity's character editor, with native revision persistence and Foundry imports.",
   "exports": {
     "./host": "./src/unity/host.tsx",
     "./styles.css": "./src/unity/architect.css"

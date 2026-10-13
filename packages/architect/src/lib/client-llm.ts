@@ -33,6 +33,7 @@ export interface ClientLLMRequest {
   maxTokens?: number;
   model?: string;
   stream?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface ClientLLMResponse {
@@ -91,6 +92,7 @@ async function callOpenRouter(request: ClientLLMRequest): Promise<ClientLLMRespo
 
   try {
     const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      signal: request.signal,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -137,6 +139,7 @@ async function callAnthropic(request: ClientLLMRequest): Promise<ClientLLMRespon
 
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
+      signal: request.signal,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -182,7 +185,7 @@ async function callOpenAICompatible(request: ClientLLMRequest): Promise<ClientLL
   const { provider, messages, temperature, maxTokens, model } = request;
 
   try {
-    const url = `${provider.baseURL.replace(/\/$/, '')}/v1/chat/completions`;
+    const url = `${provider.baseURL.replace(/\/$/, '').replace(/\/v1$/, '')}/v1/chat/completions`;
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -193,6 +196,7 @@ async function callOpenAICompatible(request: ClientLLMRequest): Promise<ClientLL
     }
 
     const response = await fetch(url, {
+      signal: request.signal,
       method: 'POST',
       headers,
       body: JSON.stringify({
@@ -280,7 +284,7 @@ export async function fetchClientLLMModels(provider: ClientLLMProvider): Promise
         ],
       };
     } else {
-      url = `${provider.baseURL.replace(/\/$/, '')}/v1/models`;
+      url = `${provider.baseURL.replace(/\/$/, '').replace(/\/v1$/, '')}/v1/models`;
       if (provider.apiKey) {
         headers['Authorization'] = `Bearer ${provider.apiKey}`;
       }
@@ -293,7 +297,8 @@ export async function fetchClientLLMModels(provider: ClientLLMProvider): Promise
 
     const data = await response.json();
     const models = Array.isArray(data.data)
-      ? data.data.map((m: any) => m.id || m.model || m.name).filter(Boolean).sort()
+      ? data.data.map((model: Record<string, unknown>) => model.id || model.model || model.name)
+        .filter((model: unknown): model is string => typeof model === 'string').sort()
       : [];
 
     return { success: true, models };

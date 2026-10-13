@@ -22,7 +22,7 @@ function descriptor(value: unknown): value is CardDocument & { uri: string } {
 /** Explicit full asset binding replacement. Existing sources can only name paths
  * in this card's expected revision, never arbitrary asset/storage identifiers. */
 export async function saveAssetRevision(store: UnityStore, assets: AssetService, actorInput: Actor, workspaceId: string, cardId: string,
-  expectedHead: string, input: CardDocument, bindingsInput: readonly AssetBinding[], uploadsInput: readonly AssetUpload[], signal?: AbortSignal) {
+  expectedHead: string, input: CardDocument, bindingsInput: readonly AssetBinding[], uploadsInput: readonly AssetUpload[], signal?: AbortSignal, operation: 'edit' | 'fork' = 'edit') {
   const actor = { ...actorInput };
   const document = JSON.parse(canonicalJson(input)) as CardDocument;
   if (new TextEncoder().encode(JSON.stringify(document)).byteLength > documentByteLimit) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
@@ -98,12 +98,12 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
     mediaType: originals.get(risuModulePath)!.mediaType, assetId: module.assetId });
   const existingDigests = [...originals].map(([path, asset]) => ({ path, hash: asset.hash })).sort((a, b) => a.path.localeCompare(b.path));
   const nextDigests = planned.map(({ path, hash }) => ({ path, hash })).sort((a, b) => a.path.localeCompare(b.path));
-  if (canonicalJson(document) === canonicalJson(current.document) && canonicalJson(existingDigests) === canonicalJson(nextDigests)) {
+  if (operation === 'edit' && canonicalJson(document) === canonicalJson(current.document) && canonicalJson(existingDigests) === canonicalJson(nextDigests)) {
     if ((await store.getCard(workspaceId, cardId)).headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before saving');
     check(); return current;
   }
   const saved = await createCardRevision(document, { ...options, originalHash: card.originalHash, parents: previous ? [previous] : [],
-    operation: 'edit', author: actor.uri, createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
+    operation, author: actor.uri, createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
   const uploaded = new Map<number, string>();
   const references: Revision['assets'] = [];
   for (const reference of planned) {
@@ -120,6 +120,8 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   check();
   // Domain batch checks the expected head and every ready asset atomically. Account
   // hosts additionally guard this batch against session revocation during uploads.
+  if (operation === 'fork') return (await store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: expectedHead,
+    expectedSourceHead: expectedHead, authorId: actor.id, document: saved.card, identity: saved.lineage.content, assets: references })).revision;
   return store.saveRevision({ workspaceId, cardId, expectedHead, authorId: actor.id,
     document: saved.card, identity: saved.lineage.content, assets: references });
 }

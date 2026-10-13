@@ -7,7 +7,9 @@
 
 import type { Card, Template, Snippet, CardAssetWithDetails } from '../../lib/types';
 import { api } from '../../lib/api';
-import { defaultTemplates, defaultSnippets } from '../../lib/default-templates';
+import { EditorPreferences } from './editor-preferences';
+import { editorAssets } from '../../unity/assets';
+import { useCardStore } from '../../store/card-store';
 import type {
   PersistenceAdapter,
   CardListItem,
@@ -17,7 +19,13 @@ import type {
   ImageType,
 } from './types';
 
-const API_BASE = '/api';
+const preferences = new EditorPreferences();
+function draft(cardId: string): Card {
+  const card = useCardStore.getState().currentCard;
+  if (!card || card.meta.id !== cardId) throw new Error('Open this card in the editor before changing its assets');
+  return card;
+}
+function dirty() { useCardStore.setState({ isDirty: true }); }
 
 export class ServerPersistenceAdapter implements PersistenceAdapter {
   readonly mode = 'server' as const;
@@ -77,12 +85,11 @@ export class ServerPersistenceAdapter implements PersistenceAdapter {
   // ============================================
 
   async listAssets(cardId: string): Promise<CardAssetWithDetails[]> {
-    const { data, error } = await api.getCardAssets(cardId);
-    if (error || !data) {
-      console.error('[ServerAdapter] listAssets error:', error);
-      return [];
-    }
-    return data;
+    const card = draft(cardId);
+    const assets = await editorAssets.list(card);
+    return assets.map((asset, order) => ({ id: asset.id, assetId: asset.id, cardId, name: asset.name, type: asset.type,
+      ext: asset.ext ?? '', order, isMain: asset.main, tags: asset.tags, createdAt: card.meta.createdAt, updatedAt: card.meta.updatedAt,
+      asset: { id: asset.id, filename: asset.name, mimetype: asset.mediaType, size: asset.byteLength, url: asset.url, createdAt: card.meta.createdAt } }));
   }
 
   async saveAsset(options: AssetSaveOptions): Promise<CardAssetWithDetails> {
@@ -103,20 +110,25 @@ export class ServerPersistenceAdapter implements PersistenceAdapter {
       file = new File([blob], `${name}.${options.ext}`, { type: options.mimetype });
     }
 
-    const result = await api.uploadAsset(cardId, file, type, name, isMain, tags);
-    return result.asset;
+    const card = draft(cardId);
+    const id = await editorAssets.add(card, file, { type, name, main: isMain, tags });
+    dirty();
+    const values = await this.listAssets(cardId);
+    const saved = values.find((asset) => asset.id === id);
+    if (!saved) throw new Error('The asset draft could not be opened');
+    return saved;
   }
 
   async updateAsset(cardId: string, assetId: string, updates: AssetUpdateOptions): Promise<void> {
-    await api.updateAsset(cardId, assetId, updates);
+    editorAssets.update(draft(cardId), assetId, updates); dirty();
   }
 
   async deleteAsset(cardId: string, assetId: string): Promise<void> {
-    await api.deleteAsset(cardId, assetId);
+    editorAssets.remove(draft(cardId), assetId); dirty();
   }
 
   async setAssetAsMain(cardId: string, assetId: string): Promise<void> {
-    await api.setAssetAsMain(cardId, assetId);
+    editorAssets.setMainBackground(draft(cardId), assetId); dirty();
   }
 
   // ============================================
@@ -124,50 +136,26 @@ export class ServerPersistenceAdapter implements PersistenceAdapter {
   // ============================================
 
   async listTemplates(): Promise<Template[]> {
-    const response = await fetch(`${API_BASE}/templates`);
-    if (!response.ok) {
-      console.error('[ServerAdapter] listTemplates error:', response.status);
-      return defaultTemplates;
-    }
-    const data = await response.json();
-    return data.templates || [];
+    return preferences.listTemplates();
   }
 
   async createTemplate(template: Omit<Template, 'id' | 'createdAt' | 'updatedAt'>): Promise<Template> {
-    const response = await fetch(`${API_BASE}/templates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(template),
-    });
-    if (!response.ok) throw new Error('Failed to create template');
-    const data = await response.json();
-    return data.template;
+    return preferences.createTemplate(template);
   }
 
   async updateTemplate(
     id: string,
     updates: Partial<Omit<Template, 'id' | 'createdAt' | 'updatedAt'>>
   ): Promise<Template> {
-    const response = await fetch(`${API_BASE}/templates/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (!response.ok) throw new Error('Failed to update template');
-    const data = await response.json();
-    return data.template;
+    return preferences.updateTemplate(id, updates);
   }
 
   async deleteTemplate(id: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/templates/${id}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error('Failed to delete template');
+    return preferences.deleteTemplate(id);
   }
 
   async resetTemplates(): Promise<Template[]> {
-    const response = await fetch(`${API_BASE}/templates/reset`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to reset templates');
-    const data = await response.json();
-    return data.templates || defaultTemplates;
+    return preferences.resetTemplates();
   }
 
   // ============================================
@@ -175,50 +163,26 @@ export class ServerPersistenceAdapter implements PersistenceAdapter {
   // ============================================
 
   async listSnippets(): Promise<Snippet[]> {
-    const response = await fetch(`${API_BASE}/snippets`);
-    if (!response.ok) {
-      console.error('[ServerAdapter] listSnippets error:', response.status);
-      return defaultSnippets;
-    }
-    const data = await response.json();
-    return data.snippets || [];
+    return preferences.listSnippets();
   }
 
   async createSnippet(snippet: Omit<Snippet, 'id' | 'createdAt' | 'updatedAt'>): Promise<Snippet> {
-    const response = await fetch(`${API_BASE}/snippets`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(snippet),
-    });
-    if (!response.ok) throw new Error('Failed to create snippet');
-    const data = await response.json();
-    return data.snippet;
+    return preferences.createSnippet(snippet);
   }
 
   async updateSnippet(
     id: string,
     updates: Partial<Omit<Snippet, 'id' | 'createdAt' | 'updatedAt'>>
   ): Promise<Snippet> {
-    const response = await fetch(`${API_BASE}/snippets/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updates),
-    });
-    if (!response.ok) throw new Error('Failed to update snippet');
-    const data = await response.json();
-    return data.snippet;
+    return preferences.updateSnippet(id, updates);
   }
 
   async deleteSnippet(id: string): Promise<void> {
-    const response = await fetch(`${API_BASE}/snippets/${id}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error('Failed to delete snippet');
+    return preferences.deleteSnippet(id);
   }
 
   async resetSnippets(): Promise<Snippet[]> {
-    const response = await fetch(`${API_BASE}/snippets/reset`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to reset snippets');
-    const data = await response.json();
-    return data.snippets || defaultSnippets;
+    return preferences.resetSnippets();
   }
 
   // ============================================
@@ -231,28 +195,20 @@ export class ServerPersistenceAdapter implements PersistenceAdapter {
       console.error('[ServerAdapter] listVersions error:', error);
       return [];
     }
-    return data as Version[];
-  }
-
-  async createVersion(cardId: string, _data: Card['data'], message?: string): Promise<Version> {
-    const { data: result, error } = await api.createVersion(cardId, message);
-    if (error) throw new Error(error);
-    return result as Version;
-  }
-
-  async deleteVersion(cardId: string, versionId: string): Promise<void> {
-    const { error } = await api.deleteVersion(cardId, versionId);
-    if (error) throw new Error(error);
+    return data.map((version) => ({ id: version.id, cardId, versionNumber: version.version, createdAt: version.createdAt,
+      message: version.message, data: version.data }));
   }
 
   // ============================================
   // Images
   // ============================================
 
-  async saveImage(_cardId: string, _type: ImageType, _data: string): Promise<void> {
-    // Server manages images through the card/asset endpoints
-    // This is primarily used by LocalAdapter; server handles this automatically
-    console.warn('[ServerAdapter] saveImage called - server handles images automatically');
+  async saveImage(cardId: string, type: ImageType, data: string): Promise<void> {
+    if (type !== 'icon' && type !== 'thumbnail') throw new Error('Use the asset panel to add attachments');
+    const response = await fetch(data);
+    if (!response.ok) throw new Error('Portrait could not be read');
+    const image = await response.blob();
+    await editorAssets.setPortrait(draft(cardId), new File([image], 'portrait', { type: image.type })); dirty();
   }
 
   async getImage(cardId: string, type: ImageType): Promise<string | null> {
@@ -271,14 +227,11 @@ export class ServerPersistenceAdapter implements PersistenceAdapter {
   // Settings (not implemented - API doesn't have generic KV store)
   // ============================================
 
-  async getSetting<T>(_key: string): Promise<T | null> {
-    // Note: The API only has specific settings endpoints (/api/settings, /api/settings/sillytavern)
-    // Generic KV settings are stored client-side in localStorage via settings-store
-    return null;
+  async getSetting<T>(key: string): Promise<T | null> {
+    return preferences.getSetting<T>(key);
   }
 
-  async saveSetting<T>(_key: string, _value: T): Promise<void> {
-    // Note: Generic settings are stored client-side in localStorage via settings-store
-    // This is a no-op for the server adapter
+  async saveSetting<T>(key: string, value: T): Promise<void> {
+    return preferences.saveSetting(key, value);
   }
 }

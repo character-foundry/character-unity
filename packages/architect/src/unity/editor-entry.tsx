@@ -57,6 +57,7 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
   const currentCard = useCardStore((state) => state.currentCard);
   const isDirty = useCardStore((state) => state.isDirty);
   const isSaving = useCardStore((state) => state.isSaving);
+  const isRestoring = useCardStore((state) => state.isRestoring);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<{ savedAt: string } | null>(null);
@@ -67,6 +68,13 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
   useEffect(() => {
     let active = true;
     setLoading(true); setError(null); setDraft(null);
+    // First Save assigns an id and changes the route. Keep any changes typed
+    // while that Save was in flight rather than reloading over the draft.
+    const existing = useCardStore.getState();
+    if (!isDraft && existing.currentCard?.meta.id === cardId && existing.isDirty) {
+      setLoading(false);
+      return () => { active = false; };
+    }
     useCardStore.getState().setCurrentCard(null);
     if (isDraft && forkOf) {
       // A fork draft is the original's current version without an id, so it is held in memory like a new card.
@@ -77,7 +85,11 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
         if (!loaded || loaded.meta.id !== forkOf) { setError('The card to fork could not be opened.'); setLoading(false); return; }
         useCardStore.setState({ currentCard: { ...loaded, meta: { ...loaded.meta, id: '', forkOf } }, isDirty: false });
         setLoading(false);
-      })();
+      })().catch((failure) => {
+        if (!active) return;
+        setError(failure instanceof Error ? failure.message : 'The card to fork could not be opened.');
+        setLoading(false);
+      });
       return () => { active = false; };
     }
     if (isDraft) {
@@ -94,7 +106,11 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
       const stored = await localDB.getDraft(cardId).catch(() => null);
       if (active && stored && stored.lastSaved > loaded.meta.updatedAt) setDraft({ savedAt: stored.lastSaved });
       if (active) setLoading(false);
-    })();
+    })().catch((failure) => {
+      if (!active) return;
+      setError(failure instanceof Error ? failure.message : 'This card could not be opened.');
+      setLoading(false);
+    });
     return () => {
       active = false;
       const state = useCardStore.getState();
@@ -143,15 +159,37 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
     setDraft(null);
   }
 
-  const status = isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? 'Unsaved changes (autosaves after 30s idle)' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
+  async function discardChanges() {
+    if (!window.confirm('Discard unsaved changes to this card and its assets?')) return;
+    setError(null);
+    try {
+      if (isDraft) {
+        useCardStore.getState().setCurrentCard(null);
+        onExit?.();
+      } else {
+        await localDB.deleteDraft(cardId).catch(() => undefined);
+        await useCardStore.getState().loadCard(cardId);
+        setDraft(null);
+      }
+    } catch (failure) { setError(failure instanceof Error ? failure.message : 'Could not discard changes'); }
+  }
+
+  function exit() {
+    if (useCardStore.getState().isDirty && !window.confirm('Leave without saving changes to this card and its assets?')) return;
+    useCardStore.getState().setCurrentCard(null);
+    onExit?.();
+  }
+
+  const status = loading ? 'Loading card…' : error && !currentCard ? 'Card unavailable' : isRestoring ? 'Restoring saved revision…' : isSaving ? 'Saving…' : isDraft ? (forkOf ? 'Fork — not in the library until you save' : 'New card — not in the library until you save') : isDirty ? 'Unsaved changes — Save creates a revision' : savedAt ? `Saved ${savedAt}` : 'All changes saved';
 
   return (
     <div ref={root} className="architect-root dark rounded-xl overflow-hidden border border-[var(--color-border)] flex flex-col" style={{ height: 'calc(100vh - 7rem)' }}>
-      <div className="flex items-center gap-3 px-4 py-2 border-b" style={{ background: 'var(--color-surface)' }}>
-        <span className="text-sm opacity-80 flex-1">{status}</span>
+      <div className="flex flex-wrap items-center gap-3 px-4 py-2 border-b" style={{ background: 'var(--color-surface)' }}>
+        <span className="text-sm opacity-80 flex-1 min-w-40">{status}</span>
         <SettingsButton onClick={() => setShowSettings(true)} />
-        {onExit && <button className="btn-secondary text-sm" onClick={onExit}>Done</button>}
-        <button className="btn-primary text-sm" disabled={isSaving || (!isDirty && !isDraft)} onClick={() => { void save(); }} title="Save a new revision (Ctrl+S)">Save</button>
+        {isDirty && <button className="btn-secondary text-sm" disabled={isSaving || isRestoring} onClick={() => { void discardChanges(); }}>Discard changes</button>}
+        {onExit && <button className="btn-secondary text-sm" disabled={isSaving || isRestoring} onClick={exit}>Done</button>}
+        <button className="btn-primary text-sm" disabled={isSaving || isRestoring || (!isDirty && !isDraft)} onClick={() => { void save(); }} title="Save a new revision (Ctrl+S)">Save</button>
       </div>
       {draft && (
         <div className="flex items-center gap-3 px-4 py-2 text-sm bg-yellow-900/40 border-b">
@@ -162,7 +200,7 @@ export function ArchitectEditor({ cardId, forkOf, onExit, onCreated }: {
       )}
       {error && <div className="px-4 py-2 text-sm bg-red-900/50 border-b" role="alert">{error}</div>}
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0" inert={isRestoring}>
         {loading ? <div className="p-12 text-center opacity-60">Loading card…</div> : currentCard && <CardEditor />}
       </div>
     </div>

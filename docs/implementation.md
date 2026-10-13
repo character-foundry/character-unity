@@ -1,12 +1,40 @@
 # Implementation status and acceptance gates
 
+## Native editor integration, 2026-10-13
+
+Owner authorized editor/import cleanup while live Archive takeover remains on
+hold. The active `apps/web` editor is `packages/architect`; sections below about
+the per-instance `packages/editor` describe the earlier scaffold, not this host.
+See [current editor capabilities and explicit remaining gaps](editor-port.md).
+Native file imports, staged portrait/attachment edits, atomic first Save/forks,
+assets-aware immutable Restore and supported browser-local AI/settings replace
+old-server fallbacks. Viewer/Next-shim removal follows the editor phase.
+
+Verification: type-check, expanded native-editor lint, all 571 tests across 69
+files, every conformance report (including 38/38 SQLite/D1 store checks), builds,
+and nine production-bundle Chromium workflows pass. Browser checks cover
+original JSON/PNG/CharX imports and opaque data, exact attachments/exports,
+New/Fork first Save, failures/conflicts/discard, edits during first Save, initial
+read failures, restored historical portraits and mobile interaction. Built Node
+smoke also checks client deep links without serving HTML for missing API paths.
+Independent standards/spec review findings were fixed and regression-tested.
+All 45 earlier scaffold/browser/account workflows also pass, for 54 passing
+Chromium workflows across the old profiles and active unified application.
+
+Closed editor beads: `cu-1o2.5.8`, `.5.9`, `.5.10`, `.5.11`. Wizard workflow QA
+(`.5.5`), instance isolation (`.5.12`), native optional tools (`.5.13`), scaffold
+retirement (`.5.6`, `.15`), viewer/shims (`.26`) and reference/deduplication (`.27`)
+remain explicit work. The one external-image Risu card is deferred (`.9.10`);
+Foundry publishing remains on hold (`.25`). No live Archive processes or data
+were changed during editor integration.
+
 ## Archive-first correction, 2026-10-13
 
 The [owner direction](../../1013_archive_foundation.md) and
 [accepted storage decision](adr/0001-existing-archive-and-library-references.md)
 supersede the separate native-store rollout. Existing Archive schema/file storage
 and LanceDB stay authoritative; new scrapes must write into that same database.
-Complete and verify that foundation before further editor/viewer work.
+Live takeover and real-source acceptance remain on hold; editor cleanup is now authorized separately.
 
 At the start of this correction, existing-storage reads/writes and LanceDB reuse
 were not implemented. The native prototype uses a different schema and database.
