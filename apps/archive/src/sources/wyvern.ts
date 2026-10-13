@@ -117,7 +117,9 @@ export const wyvern: ScraperPlugin = {
     const createdAt = text(character.created_at), updatedAt = updatedOf(character) ?? listing.updatedAt;
     return {
       provider: 'wyvern', recordId: id, url: `${app}/characters/${encodeURIComponent(id)}`,
-      name: text(character.name), creator: text(creator.displayName) || text(creator.uid), tags: list(character.tags),
+      // Wyvern rates cards instead of tagging them; explicit ones get the shared NSFW tag so Settings can blur or hide them.
+      name: text(character.name), creator: text(creator.displayName) || text(creator.uid),
+      tags: [...list(character.tags), ...(character.rating === 'explicit' && !list(character.tags).some((tag) => tag.toLowerCase() === 'nsfw') ? ['NSFW'] : [])],
       ...(createdAt ? { createdAt } : {}), ...(updatedAt ? { updatedAt } : {}),
       stats: { ...listing.stats, ...statsOf(character) },
       flags: { gallery: Array.isArray(character.gallery) && character.gallery.length > 0,

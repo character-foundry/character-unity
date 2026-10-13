@@ -56,7 +56,7 @@ describe('Wyvern source', () => {
     expect(await run(fake)).toMatchObject({ status: 'done', listed: 2, added: 2, errors: 0 });
     const [first] = archive.list({ sort: 'name' }).cards;
     expect(first).toMatchObject({ id: 'wyvern:w1', name: 'Card w1', creator: 'Warden', url: 'https://app.wyvern.chat/characters/w1',
-      tags: ['Fantasy', 'Knight'], altGreetings: 1, lorebookEntries: 2, stats: { stars: 5, favorites: 6, chats: 7, messages: 8 },
+      tags: ['Fantasy', 'Knight', 'NSFW'], altGreetings: 1, lorebookEntries: 2, stats: { stars: 5, favorites: 6, chats: 7, messages: 8 },
       flags: { gallery: true, expressions: true, systemPrompt: true, exampleDialogues: true } });
     const detail = await archive.card('wyvern:w1');
     const data = (detail.document as { data: Record<string, unknown> }).data;

@@ -36,6 +36,10 @@ describe('native Archive store', () => {
   it('adds a card, keeps unchanged bytes as one version and appends a version when the card changes', async () => {
     expect(await archive.put(scraped('1', { alternate_greetings: ['Hi again'], character_book: { entries: [{ keys: ['a'], content: 'b' }] } }))).toBe('added');
     expect(await archive.put(scraped('1', { alternate_greetings: ['Hi again'], character_book: { entries: [{ keys: ['a'], content: 'b' }] } }, { stats: { stars: 9 } }))).toBe('unchanged');
+    // Same files with new source tags: no version, but the tags follow the source.
+    expect(await archive.put(scraped('1', { alternate_greetings: ['Hi again'], character_book: { entries: [{ keys: ['a'], content: 'b' }] } }, { stats: { stars: 9 }, tags: ['Fantasy', 'NSFW'] }))).toBe('unchanged');
+    expect(archive.list({ tags: ['nsfw'] }).total).toBe(1);
+    await archive.put(scraped('1', { alternate_greetings: ['Hi again'], character_book: { entries: [{ keys: ['a'], content: 'b' }] } }, { stats: { stars: 9 } }));
     let [card] = archive.list().cards;
     expect(card).toMatchObject({ id: 'chub:1', name: 'Aster', creator: 'ash', tags: ['Fantasy'], altGreetings: 1, lorebookEntries: 1, versions: 1, stats: { stars: 9 } });
     expect(card!.tokens).toBeGreaterThan(0);

@@ -185,7 +185,14 @@ export async function openNativeArchive(directory: string, options: { now?: () =
       for (const ref of refs) db.prepare('INSERT OR IGNORE INTO objects (sha256, byte_length, media_type, created_at) VALUES (?, ?, ?, ?)').run(ref.sha256, ref.byteLength, ref.mediaType, at);
       if (existing && (statements.fingerprint.get(existing.version_id) as { fingerprint: string }).fingerprint === fingerprint) {
         statsUpdate(existing.id, card.stats, at);
-        if (remoteUpdated) db.prepare('UPDATE cards SET remote_updated_at = ? WHERE id = ?').run(remoteUpdated, existing.id);
+        // Same files, but the source's own metadata (tags, tagline, creator, page) may have moved on.
+        db.prepare(`UPDATE cards SET name = ?, creator = ?, tagline = ?, tags = ?, tags_json = ?, url = ?, remote_updated_at = coalesce(?, remote_updated_at)
+          WHERE id = ? AND (name, creator, tagline, tags_json, url) IS NOT (?, ?, ?, ?, ?)`)
+          .run(described.name, described.creator, (card.tagline ?? '').slice(0, 1000), described.tags.join(', '), JSON.stringify(described.tags), card.url.slice(0, 2000), remoteUpdated,
+            existing.id, described.name, described.creator, (card.tagline ?? '').slice(0, 1000), JSON.stringify(described.tags), card.url.slice(0, 2000));
+        db.prepare('DELETE FROM card_tags WHERE card_id = ?').run(existing.id);
+        const tag = db.prepare('INSERT OR IGNORE INTO card_tags (card_id, tag, folded) VALUES (?, ?, ?)');
+        for (const value of described.tags) tag.run(existing.id, value, value.toLowerCase());
         return 'unchanged';
       }
       const versionId = randomUUID(), sequence = (existing?.versions ?? 0) + 1;

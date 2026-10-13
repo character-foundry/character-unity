@@ -120,7 +120,8 @@ export const ct: ScraperPlugin = {
     const card = record(page.character);
     const cardId = text(card.id);
     if (!cardId) throw new Error(`Character Tavern returned no card for ${path}`);
-    const tags = names(page.tags);
+    // CT marks adult cards with a flag, not a tag; the shared NSFW tag lets Settings blur or hide them.
+    const tags = [...names(page.tags), ...(card.isNSFW === true && !names(page.tags).some((tag) => tag.toLowerCase() === 'nsfw') ? ['NSFW'] : [])];
     const alternate = (Array.isArray(page.alternativeGreetings) ? page.alternativeGreetings : [])
       .map((value) => typeof value === 'string' ? value : text(record(value).greeting) || text(record(value).content) || text(record(value).text))
       .filter((value) => !!value.trim());
