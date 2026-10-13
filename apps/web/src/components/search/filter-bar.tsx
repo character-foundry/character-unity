@@ -3,10 +3,10 @@ import { cn } from '@/lib/utils/cn';
 import { useSettings } from '@/lib/settings';
 import type { UserSettings } from '@/lib/settings';
 import {
-  emptySearch, flagOptions, isFiltered, loadSavedSearches, readSearch, sortOptions, sourceOptions, storeSavedSearches,
-  useCardTags, useDebouncedText, useFollowedCreators, writeSearch,
+  archiveSortOptions, emptySearch, flagOptions, isFiltered, loadSavedSearches, readSearch, sortOptions, sourceOptions, storeSavedSearches,
+  useDebouncedText, useFollowedCreators, writeSearch,
 } from '@/lib/library-search';
-import type { LibrarySearch, SavedSearch } from '@/lib/library-search';
+import type { LibrarySearch, SavedSearch, SearchPage } from '@/lib/library-search';
 import { HeartIcon } from '@/components/ui';
 import { TagPicker } from './tag-picker';
 
@@ -71,25 +71,31 @@ const syntax = [
   ['tag:fantasy', 'exact tag'],
 ];
 
-/** The library's filter bar (after Archive's filters, laid out as one row plus a Filters drawer). */
-export function FilterBar({ search, update, replace, count, total }: {
+/**
+ * The filter bar of the library and the Archive (after Archive's filters, laid out as one row plus a Filters
+ * drawer). The Archive has no forks or favorites; it sorts by the sources' popularity too.
+ */
+export function FilterBar({ page = 'library', tags, search, update, replace, count, total }: {
+  page?: SearchPage;
+  /** Tag counts for the pickers (the library's or the Archive's). */
+  tags: readonly { tag: string; count: number }[];
   search: LibrarySearch;
   update: (changes: Partial<LibrarySearch>) => void;
   replace: (search: LibrarySearch) => void;
   /** Cards matching, or null while the first page loads. */
   count: number | null;
-  /** Cards in the library, less those Settings hides. */
+  /** Cards in the library (or Archive), less those Settings hides. */
   total: number | null;
 }) {
-  const tags = useCardTags();
+  const archive = page === 'archive';
   const followed = useFollowedCreators();
   const { settings, updateSettings } = useSettings();
   const [minTokens, setMinTokens] = useDebouncedText(search.minTokens, useCallback((value: string) => update({ minTokens: value }), [update]), 500);
   const [expr, setExpr, flushExpr] = useDebouncedText(search.expr, useCallback((value: string) => update({ expr: value }), [update]), 600);
   const [open, setOpen] = useState(() => !!search.expr.trim());
   const [help, setHelp] = useState(false);
-  const [saved, setSaved] = useState<SavedSearch[]>(loadSavedSearches);
-  const keep = (next: SavedSearch[]) => { setSaved(next); storeSavedSearches(next); };
+  const [saved, setSaved] = useState<SavedSearch[]>(() => loadSavedSearches(page));
+  const keep = (next: SavedSearch[]) => { setSaved(next); storeSavedSearches(next, page); };
   const params = writeSearch(search).toString();
   const applied = saved.find((item) => item.params === params);
 
@@ -110,16 +116,17 @@ export function FilterBar({ search, update, replace, count, total }: {
           onChange={(next) => update({ tags: next })} placeholder="Filter by tag…"
           icon={<svg className="h-3.5 w-3.5 shrink-0 text-starlight/40" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>} />
 
-        <Select label="Sort" value={search.sort} options={sortOptions} onChange={(sort) => update({ sort })} />
+        <Select label="Sort" value={search.sort || (archive ? 'updated' : 'edited')} options={archive ? archiveSortOptions : sortOptions} onChange={(sort) => update({ sort })} />
 
-        <Segmented label="Cards" value={search.fork} onChange={(fork) => update({ fork })}
-          options={[{ value: '', label: 'All' }, { value: 'none', label: 'Originals' }, { value: 'only', label: 'Forks' }]} />
-
-        <button type="button" aria-pressed={search.favorite === 'fav'} onClick={() => update({ favorite: search.favorite === 'fav' ? '' : 'fav' })}
-          className={cn(box, 'gap-1.5 px-2.5 text-[12px] font-medium transition-colors', search.favorite === 'fav' ? 'border-nebula/60 bg-nebula/15 text-nebula' : 'text-starlight/50 hover:text-starlight')}>
-          <HeartIcon className="h-3.5 w-3.5" filled={search.favorite === 'fav'} />
-          Favorites
-        </button>
+        {!archive && (<>
+          <Segmented label="Cards" value={search.fork} onChange={(fork) => update({ fork })}
+            options={[{ value: '', label: 'All' }, { value: 'none', label: 'Originals' }, { value: 'only', label: 'Forks' }]} />
+          <button type="button" aria-pressed={search.favorite === 'fav'} onClick={() => update({ favorite: search.favorite === 'fav' ? '' : 'fav' })}
+            className={cn(box, 'gap-1.5 px-2.5 text-[12px] font-medium transition-colors', search.favorite === 'fav' ? 'border-nebula/60 bg-nebula/15 text-nebula' : 'text-starlight/50 hover:text-starlight')}>
+            <HeartIcon className="h-3.5 w-3.5" filled={search.favorite === 'fav'} />
+            Favorites
+          </button>
+        </>)}
 
         <button type="button" aria-expanded={open} aria-controls="library-filters" onClick={() => setOpen(!open)}
           className={cn(box, 'gap-1.5 px-2.5 text-[12px] font-medium transition-colors', open || advanced ? 'bg-surface-2 text-starlight' : 'text-starlight/50 hover:text-starlight')}>
@@ -168,7 +175,7 @@ export function FilterBar({ search, update, replace, count, total }: {
               onChange={(next) => update({ exclude: next })} placeholder="Exclude tags…" />
             <Segmented label="Tag match mode" value={search.tagMode} onChange={(tagMode) => update({ tagMode })}
               options={[{ value: 'any', label: 'Match any' }, { value: 'all', label: 'Match all' }]} />
-            <Select label="Source" prefix="Source" value={search.source} options={sourceOptions} onChange={(source) => update({ source })} />
+            <Select label="Source" prefix="Source" value={search.source} options={archive ? sourceOptions.filter((option) => option.value !== 'file') : sourceOptions} onChange={(source) => update({ source })} />
             <label className={cn(box, 'gap-1.5 px-2.5')}>
               <span className="text-starlight/50">Min tokens</span>
               <input type="number" min={0} step={100} inputMode="numeric" value={minTokens} placeholder="0" style={bare}
@@ -189,7 +196,7 @@ export function FilterBar({ search, update, replace, count, total }: {
             )}
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-1">
-            {flagOptions.map((flag) => {
+            {flagOptions.filter((flag) => !archive || flag.value !== 'chat').map((flag) => {
               const on = search.has.includes(flag.value);
               const disabled = flag.value === 'followed' && followed.length === 0 && !on;
               return (
@@ -200,8 +207,10 @@ export function FilterBar({ search, update, replace, count, total }: {
                 </button>
               );
             })}
-            <button type="button" aria-pressed={search.favorite === 'not_fav'} onClick={() => update({ favorite: search.favorite === 'not_fav' ? '' : 'not_fav' })}
-              className={pill(search.favorite === 'not_fav')}>Not favorited</button>
+            {!archive && (
+              <button type="button" aria-pressed={search.favorite === 'not_fav'} onClick={() => update({ favorite: search.favorite === 'not_fav' ? '' : 'not_fav' })}
+                className={pill(search.favorite === 'not_fav')}>Not favorited</button>
+            )}
           </div>
         </div>
       )}

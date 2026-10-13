@@ -7,9 +7,9 @@ import { importFile } from '@/lib/unity';
 import { libraryChanged, readSearch, useDebouncedText, writeSearch } from '@/lib/library-search';
 import { cn } from '@/lib/utils/cn';
 
-const libraryPaths = new Set(['/', '/explore']);
+const libraryPaths = new Set(['/', '/explore', '/archive']);
 // Stats, presets and lorebooks join this list as they are ported.
-const nav = [{ name: 'Library', href: '/' }];
+const nav = [{ name: 'Library', href: '/' }, { name: 'Archive', href: '/archive' }];
 
 const action = 'flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-starlight/60 transition-colors hover:bg-cosmic-teal hover:text-starlight disabled:opacity-50';
 // The global input rule is unlayered and outranks utilities; the field draws its own frame.
@@ -67,7 +67,7 @@ export function Header() {
 
       <nav aria-label="Primary" className="ml-2 hidden items-center gap-0.5 md:flex">
         {nav.map((item) => {
-          const active = item.href === '/' ? onLibrary : location.pathname.startsWith(item.href);
+          const active = item.href === '/' ? location.pathname === '/' || location.pathname === '/explore' : location.pathname.startsWith(item.href);
           return (
             // Colors sit on the inner span: the global link color is unlayered and outranks utilities on the link.
             <Link key={item.href} href={item.href} aria-current={active ? 'page' : undefined}

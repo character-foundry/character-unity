@@ -6,6 +6,7 @@ import { useSettings } from '@/lib/settings';
 import { useCardTags } from '@/lib/library-search';
 import { TagPicker } from '@/components/search/tag-picker';
 import { ChatAppsSettings } from '@/components/chat/chat-apps-settings';
+import { ArchiveSettings } from '@/components/archive/archive-settings';
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
@@ -56,6 +57,9 @@ export default function SettingsPage() {
         <Section id="hidden-tags" title="Hidden tags">
           <TagPicker label="Cards with any of these tags never show up in the library or search" tone="hidden" value={settings.bannedTags}
             options={tags} onChange={(bannedTags) => updateSettings({ bannedTags })} placeholder="Add tag" />
+        </Section>
+        <Section id="archive" title="Archive sources">
+          <ArchiveSettings />
         </Section>
         <Section id="chat-apps" title="Chat apps">
           <ChatAppsSettings />

@@ -1,6 +1,6 @@
 import { AppShell } from '@/components/layout';
 import { useSettings } from '@/lib/settings';
-import { emptySearch, isFiltered, useLibraryFeed, useLibraryTotal, useSearchState } from '@/lib/library-search';
+import { emptySearch, isFiltered, useCardTags, useLibraryFeed, useLibraryTotal, useSearchState } from '@/lib/library-search';
 import { FilterBar } from '@/components/search/filter-bar';
 import { LibraryResults } from '@/components/search/library-results';
 
@@ -11,9 +11,10 @@ export default function LibraryPage() {
   const hidden = { tags: settings.bannedTags, hideNsfw: settings.hideNsfw };
   const feed = useLibraryFeed(search, hidden);
   const total = useLibraryTotal(hidden);
+  const tags = useCardTags();
   return (
     <AppShell flush>
-      <FilterBar search={search} update={update} replace={replace} total={total}
+      <FilterBar tags={tags} search={search} update={update} replace={replace} total={total}
         count={feed.loading && feed.cards.length === 0 ? null : feed.total} />
       <div className="px-3 py-3 sm:px-4">
         <LibraryResults feed={feed} empty={

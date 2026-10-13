@@ -6,6 +6,7 @@ import LibraryPage from '@/app/library';
 import CardDetailPage from '@/app/card/[slug]/page';
 import EditPage from '@/app/edit';
 import NewCardPage from '@/app/new';
+import ArchivePage from '@/app/archive';
 import SettingsPage from '@/app/settings';
 import '@character-unity/editor/styles.css';
 import './styles.css';
@@ -25,6 +26,7 @@ createRoot(root).render(
         <Routes>
           <Route path="/" element={<LibraryPage />} />
           <Route path="/explore" element={<LibraryPage />} />
+          <Route path="/archive" element={<ArchivePage />} />
           <Route path="/card/:id" element={<CardDetailPage />} />
           <Route path="/card/:id/edit" element={<EditPage />} />
           <Route path="/new" element={<NewCardPage />} />

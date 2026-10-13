@@ -18,9 +18,10 @@ export interface LibrarySearch {
   favorite: '' | 'fav' | 'not_fav';
   source: string;
   minTokens: string;
+  /** '' = the page's default order (library: recently edited; Archive: recently updated). */
   sort: string;
 }
-export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', favorite: '', source: '', minTokens: '', sort: 'edited' };
+export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', favorite: '', source: '', minTokens: '', sort: '' };
 
 export const sortOptions = [
   { value: 'edited', label: 'Recently edited' },
@@ -34,6 +35,23 @@ export const sortOptions = [
   { value: 'lorebook', label: 'Biggest lorebook' },
   { value: 'revisions', label: 'Most revisions' },
   { value: 'forks', label: 'Most forks' },
+] as const;
+/** The Archive's orders, including the sources' popularity counts. */
+export const archiveSortOptions = [
+  { value: 'updated', label: 'Recently updated' },
+  { value: 'added', label: 'Recently archived' },
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'stars', label: 'Most stars' },
+  { value: 'favorites', label: 'Most favorited' },
+  { value: 'chats', label: 'Most chats' },
+  { value: 'downloads', label: 'Most downloads' },
+  { value: 'name', label: 'Name A–Z' },
+  { value: 'name_desc', label: 'Name Z–A' },
+  { value: 'tokens_desc', label: 'Most tokens' },
+  { value: 'tokens_asc', label: 'Fewest tokens' },
+  { value: 'greetings', label: 'Most greetings' },
+  { value: 'lorebook', label: 'Biggest lorebook' },
 ] as const;
 export const flagOptions = [
   { value: 'greetings', label: 'Alternate greetings' },
@@ -71,7 +89,7 @@ export function readSearch(params: URLSearchParams): LibrarySearch {
     favorite: favorite === 'fav' || favorite === 'not_fav' ? favorite : '',
     source: sourceOptions.some((option) => option.value && option.value === params.get('source')) ? params.get('source')! : '',
     minTokens: /^[1-9][0-9]{0,6}$/.test(tokens) ? tokens : '',
-    sort: sortOptions.some((option) => option.value === params.get('sort')) ? params.get('sort')! : 'edited',
+    sort: [...sortOptions, ...archiveSortOptions].some((option) => option.value === params.get('sort')) ? params.get('sort')! : '',
   };
 }
 export function writeSearch(search: LibrarySearch): URLSearchParams {
@@ -86,7 +104,7 @@ export function writeSearch(search: LibrarySearch): URLSearchParams {
   if (search.favorite) params.set('favorite', search.favorite);
   if (search.source) params.set('source', search.source);
   if (search.minTokens) params.set('minTokens', search.minTokens);
-  if (search.sort !== 'edited') params.set('sort', search.sort);
+  if (search.sort) params.set('sort', search.sort);
   return params;
 }
 /**
@@ -167,50 +185,40 @@ export function useLibraryTotal(hidden: { tags: readonly string[]; hideNsfw: boo
 // ---- Infinite list with place-keeping ------------------------------------------------------------
 
 export const PAGE_SIZE = 48;
-interface View { cards: CardListItem[]; total: number; scrollY: number }
+interface View { cards: unknown[]; total: number; scrollY: number }
 /** Loaded results and scroll position per query, so returning from a card lands where you left. */
 const views = new Map<string, View>();
 
-export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
-  const exclude = [...new Set([...search.exclude.map((tag) => tag.toLowerCase()), ...hiddenTags(hidden)])];
-  const text = [search.q.trim(), search.expr.trim()].filter(Boolean);
-  const query: LibraryQuery = { q: text.length > 1 ? text.map((part) => `(${part})`).join(' ') : text[0] ?? '', tags: search.tags, tagMode: search.tagMode, exclude, has: search.has,
-    ...(search.fork ? { fork: search.fork } : {}), ...(search.favorite ? { favorite: search.favorite } : {}),
-    ...(search.source ? { source: search.source } : {}), ...(search.minTokens ? { minTokens: Number(search.minTokens) } : {}), sort: search.sort };
-  const key = JSON.stringify(query);
+/**
+ * An infinite list for one query `key` (namespace it per page). Pages come from `fetchRange`; a remembered
+ * query shows its loaded range and scroll position at once, then refreshes that range.
+ */
+export function useFeed<T extends { id: string }>(key: string, fetchRange: (offset: number, count: number) => Promise<{ cards: T[]; total: number }>) {
   const version = useLibraryVersion();
-  const cached = views.get(key);
-  const [state, setState] = useState<{ key: string; cards: CardListItem[]; total: number }>(
+  const cachedView = () => views.get(key) as { cards: T[]; total: number; scrollY: number } | undefined;
+  const cached = cachedView();
+  const [state, setState] = useState<{ key: string; cards: T[]; total: number }>(
     () => ({ key, cards: cached?.cards ?? [], total: cached?.total ?? 0 }));
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
   const request = useRef(0);
   const busy = useRef(false);
-  const queryRef = useRef(query); queryRef.current = query;
-  const current = state.key === key ? state : { key, cards: views.get(key)?.cards ?? [], total: views.get(key)?.total ?? 0 };
-
-  const fetchRange = useCallback(async (offset: number, count: number) => {
-    const [workspace, ...pages] = await Promise.all([libraryId(),
-      ...Array.from({ length: Math.max(1, Math.ceil(count / 100)) }, (_, index) =>
-        listCards({ ...queryRef.current, offset: offset + index * 100, limit: Math.min(100, count - index * 100) || PAGE_SIZE }))]);
-    const seen = new Set<string>(), cards: CardListItem[] = [];
-    for (const page of pages) for (const summary of page.cards) if (!seen.has(summary.id)) { seen.add(summary.id); cards.push(toListItem(workspace, summary)); }
-    return { cards, total: pages[0]?.total ?? 0 };
-  }, []);
+  const fetcher = useRef(fetchRange); fetcher.current = fetchRange;
+  const current = state.key === key ? state : { key, cards: cachedView()?.cards ?? [], total: cachedView()?.total ?? 0 };
 
   // A new query starts over; a remembered one refreshes the range it had loaded, keeping its height.
   useEffect(() => {
     const id = ++request.current, remembered = views.get(key);
     busy.current = true; setError(null);
     if (!remembered) { setLoading(true); setState({ key, cards: [], total: 0 }); }
-    fetchRange(0, Math.max(PAGE_SIZE, remembered?.cards.length ?? 0)).then((result) => {
+    fetcher.current(0, Math.max(PAGE_SIZE, remembered?.cards.length ?? 0)).then((result) => {
       if (id !== request.current) return;
       setState({ key, ...result });
       views.set(key, { ...result, scrollY: views.get(key)?.scrollY ?? 0 });
     }).catch((failure: unknown) => {
-      if (id === request.current) setError(failure instanceof Error ? failure.message : 'The library could not be loaded.');
+      if (id === request.current) setError(failure instanceof Error ? failure.message : 'Cards could not be loaded.');
     }).finally(() => { if (id === request.current) { busy.current = false; setLoading(false); } });
-  }, [key, version, fetchRange]);
+  }, [key, version]);
 
   const hasMore = current.cards.length < current.total;
   const loadMore = useCallback(async () => {
@@ -218,7 +226,7 @@ export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly s
     const id = ++request.current, offset = current.cards.length;
     busy.current = true; setLoading(true); setError(null);
     try {
-      const result = await fetchRange(offset, PAGE_SIZE);
+      const result = await fetcher.current(offset, PAGE_SIZE);
       if (id !== request.current) return;
       const seen = new Set(current.cards.map((card) => card.id));
       const cards = [...current.cards, ...result.cards.filter((card) => !seen.has(card.id))];
@@ -231,7 +239,7 @@ export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly s
     } finally {
       if (id === request.current) { busy.current = false; setLoading(false); }
     }
-  }, [current.cards, hasMore, key, fetchRange]);
+  }, [current.cards, hasMore, key]);
 
   // Remember the scroll position for this query and put it back when the page is revisited.
   useLayoutEffect(() => {
@@ -260,19 +268,55 @@ export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly s
   const retry = () => { if (current.cards.length) void loadMore(); else libraryChanged(); };
   return { cards: current.cards, total: current.total, loading, error, hasMore, loadMore, retry, sentinel };
 }
+export type Feed<T extends { id: string }> = ReturnType<typeof useFeed<T>>;
+
+/** Pages of `count` cards from `offset`, fetched 100 at a time (the API's page limit). */
+export async function fetchPages<T extends { id: string }>(offset: number, count: number, page: (offset: number, limit: number) => Promise<{ items: T[]; total: number }>) {
+  const pages = await Promise.all(Array.from({ length: Math.max(1, Math.ceil(count / 100)) }, (_, index) =>
+    page(offset + index * 100, Math.min(100, count - index * 100) || PAGE_SIZE)));
+  const seen = new Set<string>(), cards: T[] = [];
+  for (const result of pages) for (const item of result.items) if (!seen.has(item.id)) { seen.add(item.id); cards.push(item); }
+  return { cards, total: pages[0]?.total ?? 0 };
+}
+
+/** The search text the API gets: the top box and the advanced box, both required. */
+export function searchText(search: Pick<LibrarySearch, 'q' | 'expr'>) {
+  const text = [search.q.trim(), search.expr.trim()].filter(Boolean);
+  return text.length > 1 ? text.map((part) => `(${part})`).join(' ') : text[0] ?? '';
+}
+/** Tags a search leaves out: its own exclusions plus what Settings hides. */
+export function excludedTags(search: Pick<LibrarySearch, 'exclude'>, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  return [...new Set([...search.exclude.map((tag) => tag.toLowerCase()), ...hiddenTags(hidden)])];
+}
+
+export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  const query: LibraryQuery = { q: searchText(search), tags: search.tags, tagMode: search.tagMode, exclude: excludedTags(search, hidden), has: search.has,
+    ...(search.fork ? { fork: search.fork } : {}), ...(search.favorite ? { favorite: search.favorite } : {}),
+    ...(search.source ? { source: search.source } : {}), ...(search.minTokens ? { minTokens: Number(search.minTokens) } : {}), sort: sortOptions.some((option) => option.value === search.sort) ? search.sort : 'edited' };
+  return useFeed<CardListItem>(`library:${JSON.stringify(query)}`, async (offset, count) => {
+    const workspace = await libraryId();
+    return fetchPages(offset, count, async (from, limit) => {
+      const page = await listCards({ ...query, offset: from, limit });
+      return { items: page.cards.map((summary) => toListItem(workspace, summary)), total: page.total };
+    });
+  });
+}
 
 // ---- Saved searches -------------------------------------------------------------------------------
 
 export interface SavedSearch { name: string; params: string }
-const savedKey = 'unity-saved-searches';
-export function loadSavedSearches(): SavedSearch[] {
+/** Saved searches per page: a library search's fork and favorite filters mean nothing in the Archive. */
+const savedKeys = { library: 'unity-saved-searches', archive: 'unity-saved-archive-searches' } as const;
+export type SearchPage = keyof typeof savedKeys;
+export function loadSavedSearches(page: SearchPage = 'library'): SavedSearch[] {
+  const savedKey = savedKeys[page];
   try {
     const value = JSON.parse(localStorage.getItem(savedKey) ?? '[]') as unknown;
     return Array.isArray(value) ? value.filter((item): item is SavedSearch => typeof item?.name === 'string' && typeof item?.params === 'string') : [];
   } catch { return []; }
 }
-export function storeSavedSearches(searches: SavedSearch[]) {
-  try { localStorage.setItem(savedKey, JSON.stringify(searches)); } catch { /* private mode: searches last for this visit */ }
+export function storeSavedSearches(searches: SavedSearch[], page: SearchPage = 'library') {
+  try { localStorage.setItem(savedKeys[page], JSON.stringify(searches)); } catch { /* private mode: searches last for this visit */ }
 }
 
 // ---- Inputs --------------------------------------------------------------------------------------
