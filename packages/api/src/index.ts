@@ -20,7 +20,9 @@ import { NativeArchiveUnavailable } from '@character-unity/cards/native-archive'
 import { nativeArchiveRoutes } from './archive-native.js';
 
 /** Shared Architect/hub API. Hosts supply storage, card operations and authentication. */
-export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; nativeArchive?: NativeArchiveService; hub?: HubService; remotes?: RemoteConnectionsService; chat?: ChatService; authenticate?: Authenticate } = {}) {
+export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; nativeArchive?: NativeArchiveService; hub?: HubService;
+  /** Largest upload body (card file or asset form); hosted profiles pass hostedUploadByteLimit. */
+  uploadByteLimit?: number; remotes?: RemoteConnectionsService; chat?: ChatService; authenticate?: Authenticate } = {}) {
   const app = new Hono();
   app.onError((error, c) => {
     if (error instanceof SyncCommandError || error instanceof SyncReadError) {

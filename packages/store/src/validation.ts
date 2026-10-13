@@ -43,7 +43,9 @@ function json(value: unknown, seen: Set<object>, depth = 0): void {
   seen.delete(value);
 }
 
-export function document(value: CardDocument, maxBytes = 262_144): string {
+/** Largest card document (big RisuAI lorebooks and scripts). The D1 driver holds hosted libraries to 2 MB. */
+export const documentByteLimit = 16 * 1024 * 1024;
+export function document(value: CardDocument, maxBytes = documentByteLimit): string {
   if (!value || Array.isArray(value) || typeof value !== 'object') invalid('Expected a document object');
   json(value, new Set());
   const encoded = JSON.stringify(value);
@@ -56,7 +58,8 @@ export function revision(input: RevisionInput): string {
   hash(input.identity.hash);
   const encoded = document(input.document);
   const assets = input.assets ?? [];
-  if (assets.length > 64) invalid('A revision can reference at most 64 assets');
+  // Portrait, up to 8191 declared assets (large RisuAI packages) and a RisuAI module.
+  if (assets.length > 8193) invalid('A revision can reference at most 8193 assets');
   const paths = new Set<string>();
   for (const asset of assets) {
     text(asset.assetId, 'assetId');

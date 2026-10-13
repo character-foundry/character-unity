@@ -208,6 +208,28 @@ for (const adapter of ['native', 'indexeddb']) describe(`card service with Found
     expect(await receive(await service.original(alice, workspaceId, imported.card.id))).toEqual(original);
   });
 
+  it('keeps a RisuAI module through import, edits, forks and CharX export, and leaves it out of PNG', async () => {
+    const image = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
+    const module = new Uint8Array([0x52, 0x49, 0x53, 0x55, 1, 2, 3, 4, 250, 251]); // opaque bytes, as Foundry treats module.risum
+    const input = document() as unknown as CCv3Data;
+    (input as unknown as { data: CardDocument }).data.assets = [{ type: 'icon', uri: 'ccdefault:', name: 'main', ext: 'png' }];
+    const charx = writeCharX(input, [{ type: 'icon', name: 'main', ext: 'png', data: image, isMain: true }], { preserveDescriptors: true, moduleRisum: module }).buffer;
+    const imported = await service.import(alice, workspaceId, charx);
+    expect(imported.revision.assets.map((asset) => asset.path).sort()).toEqual(['declared/0', 'module.risum', 'portrait']);
+    const draft = structuredClone(imported.revision.document); (draft.data as CardDocument).description = 'Edited with a module';
+    const saved = await service.save(alice, workspaceId, imported.card.id, imported.revision.id, draft);
+    expect(saved.assets.map((asset) => asset.path).sort()).toEqual(['declared/0', 'module.risum', 'portrait']);
+    const forked = await service.fork(alice, workspaceId, imported.card.id);
+    expect(forked.revision.assets.some((asset) => asset.path === 'module.risum')).toBe(true);
+
+    const exported = await service.export(alice, workspaceId, imported.card.id, saved.id, 'charx');
+    const { parseCard } = await import('@character-foundry/character-foundry/loader');
+    expect(new Uint8Array(parseCard(exported.bytes, { extractAssets: true }).metadata!.moduleRisum!)).toEqual(module);
+    const png = await service.export(alice, workspaceId, imported.card.id, saved.id, 'png');
+    expect(parseCard(png.bytes, { extractAssets: true }).metadata?.moduleRisum).toBeUndefined();
+    expect(await receive(await service.original(alice, workspaceId, imported.card.id))).toEqual(charx);
+  });
+
   it('exports verified PNG and CharX assets with opaque descriptors, rejecting missing JSON bytes', async () => {
     const image = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
     for (const opaque of [false, true]) {

@@ -1,5 +1,6 @@
 import { canonicalJson, createCardRevision, readCardLineage, verifyCardLineage } from '@character-foundry/character-foundry/identity';
 import { StoreError } from '@character-unity/store';
+import { documentByteLimit } from '@character-unity/store/validation';
 import type { CardDocument, CardSummaryQuery, UnityStore } from '@character-unity/store';
 import { summarizeCard } from './summary.js';
 import type { CardSummaryList } from './summary.js';
@@ -14,7 +15,7 @@ import { CardError, importByteLimit } from './types.js';
 import type { Actor, ImportAsset, ExportFormat, HistoryOptions, HistoryPage, AssetBinding, AssetUpload } from './types.js';
 export { CardError } from './types.js';
 export type { Actor, ImportAsset, ExportFormat, HistoryOptions, HistoryPage, AssetBinding, AssetUpload } from './types.js';
-export { importByteLimit } from './types.js';
+export { importByteLimit, declaredAssetLimit } from './types.js';
 
 export function createCardService(store: UnityStore, assets: AssetService) {
   async function authorize(actor: Actor, workspaceId: string) {
@@ -188,7 +189,7 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     },
     async import(actor: Actor, workspaceId: string, input: Uint8Array, provenance: CardDocument = { kind: 'file' }, supplied: readonly ImportAsset[] = []) {
       // Own both inputs before any await, then check access before parsing or storing bytes.
-      if (input.byteLength > importByteLimit) throw new CardError('TOO_LARGE', 'Card import exceeds 32 MiB');
+      if (input.byteLength > importByteLimit) throw new CardError('TOO_LARGE', `Card import exceeds ${importByteLimit / 1024 / 1024} MiB`);
       actor = { ...actor };
       const bytes = new Uint8Array(input);
       if (supplied.length > 64 || supplied.reduce((size, asset) => size + asset.bytes.byteLength, 0) > importByteLimit) throw new CardError('TOO_LARGE', 'Supplied assets exceed import limits');
@@ -210,7 +211,7 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     async save(actor: Actor, workspaceId: string, cardId: string, expectedHead: string, input: CardDocument) {
       actor = { ...actor };
       const document = JSON.parse(canonicalJson(input)) as CardDocument;
-      if (new TextEncoder().encode(JSON.stringify(document)).length > 250_000) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
+      if (new TextEncoder().encode(JSON.stringify(document)).length > documentByteLimit) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
       const current = await open(actor, workspaceId, cardId);
       if (current.card.headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before saving');
       if (!current.card.originalHash) throw new CardError('INVALID_LINEAGE', 'Card has no accepted original root');

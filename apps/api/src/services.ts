@@ -7,6 +7,7 @@ import { createArchiveClient } from '@character-unity/archive-client';
 import type { SessionProof } from '@character-unity/store/accounts';
 import { composeServices } from './compose.js';
 import { createNativeArchiveService } from '@character-unity/cards/native-archive';
+import { importByteLimit } from '@character-unity/cards';
 
 /** Local composition root. No Archive paths or remote bindings are inferred here. */
 export async function openLocalServices(options: { databasePath: string; blobDirectory: string; archiveOrigin?: string; remoteConnections?: readonly ConfiguredRemote[];
@@ -15,10 +16,11 @@ export async function openLocalServices(options: { databasePath: string; blobDir
   if (options.databasePath !== ':memory:') await mkdir(dirname(options.databasePath), { recursive: true });
   const database = await openNodeStore(options.databasePath);
   try {
-    const blobs = await createNodeBlobStore(options.blobDirectory);
+    // A local library keeps cards as large as the importer takes (big RisuAI CharX assets included).
+    const blobs = await createNodeBlobStore(options.blobDirectory, { maxBytes: importByteLimit });
     const archiveClient = options.archiveOrigin ? createArchiveClient(options.archiveOrigin) : undefined;
     function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'> & { chat?: typeof database.chat }) {
-      return composeServices(storage, blobs, archiveClient, options.remoteConnections);
+      return composeServices(storage, blobs, archiveClient, options.remoteConnections, undefined, importByteLimit);
     }
     const local = compose(database);
     const nativeArchive = options.nativeArchive ? createNativeArchiveService(local.cards, options.nativeArchive) : undefined;

@@ -9,7 +9,7 @@ import type { CardDocument, Revision, UnityStore } from '@character-unity/store'
 import { StoreError } from '@character-unity/store';
 import { prepareImport } from './import.js';
 import { revisionIdentityOptions } from './revision-assets.js';
-import { CardError, importByteLimit } from './types.js';
+import { CardError, importByteLimit, risuModulePath } from './types.js';
 import type { ExportFormat } from './types.js';
 
 /** Export is a read of one pinned revision. Only SDK primitives write containers. */
@@ -27,7 +27,7 @@ export async function exportRevision(store: UnityStore, assets: AssetService, re
   for (const reference of revision.assets) {
     deadline.throwIfAborted();
     const object = await assets.download(revision.workspaceId, reference.assetId);
-    if (total + object.byteLength > importByteLimit) { await object.body.cancel(); throw new CardError('TOO_LARGE', 'Export assets exceed 32 MiB'); }
+    if (total + object.byteLength > importByteLimit) { await object.body.cancel(); throw new CardError('TOO_LARGE', `Export assets exceed ${importByteLimit / 1024 / 1024} MiB`); }
     const reader = object.body.getReader(); const chunks: Uint8Array[] = []; let size = 0;
     const cancel = () => { void reader.cancel().catch(() => undefined); };
     deadline.addEventListener('abort', cancel, { once: true });
@@ -46,6 +46,9 @@ export async function exportRevision(store: UnityStore, assets: AssetService, re
       resources.set(reference.path, bytes); total += size;
     } finally { deadline.removeEventListener('abort', cancel); await reader.cancel().catch(() => undefined); reader.releaseLock(); }
   }
+  // A RisuAI module only travels in CharX; JSON and PNG readers have no place for it (the original stays in the library).
+  const moduleRisum = resources.get(risuModulePath);
+  resources.delete(risuModulePath);
   let bytes: Uint8Array;
   let transport: Record<string, unknown> | undefined;
   if (format === 'json' || format === 'sillytavern-json') {
@@ -77,10 +80,10 @@ export async function exportRevision(store: UnityStore, assets: AssetService, re
     });
     // Preserve authored descriptor metadata; the SDK allocates distinct safe paths.
     // Re-import still verifies all output bytes, portrait identity and lineage.
-    bytes = writeCharX(document as unknown as CCv3Data, inputs, { preserveDescriptors: true }).buffer;
+    bytes = writeCharX(document as unknown as CCv3Data, inputs, { preserveDescriptors: true, ...(moduleRisum ? { moduleRisum } : {}) }).buffer;
   }
   deadline.throwIfAborted();
-  if (bytes.byteLength > importByteLimit) throw new CardError('TOO_LARGE', 'Generated export exceeds 32 MiB');
+  if (bytes.byteLength > importByteLimit) throw new CardError('TOO_LARGE', `Generated export exceeds ${importByteLimit / 1024 / 1024} MiB`);
   let restored: Awaited<ReturnType<typeof prepareImport>>;
   try { restored = await prepareImport(bytes); }
   catch { throw new CardError('EXPORT_LOSS', 'This format cannot preserve the revision’s content, assets and lineage. No export was produced.'); }

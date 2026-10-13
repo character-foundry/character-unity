@@ -6,6 +6,7 @@ import { createStore, StoreError } from '../../src/index.js';
 import type { CardDocument, RevisionInput, UnityStore } from '../../src/index.js';
 import { createNodeDriver } from '../../src/node.js';
 import { createD1Driver } from '../../src/d1.js';
+import { documentByteLimit } from '../../src/validation.js';
 import { inspectSchema, migrate } from '../../src/migrations.js';
 import { librarySearchCases } from './library-search.cases.js';
 import { migrations } from '../../src/schema.js';
@@ -277,18 +278,22 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
 
     it('[S11] bounds payloads and rejects values that JSON would silently change', async () => {
       const invalidDocuments = [
-        { data: Number.NaN }, { data: Number.POSITIVE_INFINITY }, { data: 'x'.repeat(262_145) },
+        { data: Number.NaN }, { data: Number.POSITIVE_INFINITY }, { data: 'x'.repeat(documentByteLimit) },
       ];
       for (const document of invalidDocuments) {
         await expect(store.createCard({ ...input, workspaceId, document })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
       }
+      // Big RisuAI documents fit a local library; Cloudflare D1 holds a value to 2 MB and says so.
+      const large = { data: { description: 'x'.repeat(2_100_000) } };
+      if (adapter === 'd1') await expect(store.createCard({ ...input, workspaceId, document: large })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+      else expect((await store.createCard({ ...input, workspaceId, document: large })).revision.document).toEqual(large);
       const cyclic: CardDocument = {}; cyclic.self = cyclic;
       await expect(store.createCard({ ...input, workspaceId, document: cyclic })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
       await expect(store.createCard({ ...input, workspaceId, assets: [{ path: '../portrait.png', assetId: 'missing' }] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
       await expect(store.createCard({ ...input, workspaceId, identity: { algorithm: 'test', hash: 'bad' } })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
       await expect(store.createCard({ ...input, workspaceId, identity: { algorithm: 'test', hash: `${'a'.repeat(64)}\n` } })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
       await expect(store.listCards(workspaceId, { limit: 101 })).rejects.toBeInstanceOf(StoreError);
-      expect(await store.listCards(workspaceId)).toEqual([]);
+      expect((await store.listCards(workspaceId)).length).toBe(adapter === 'd1' ? 0 : 1);
     });
 
     it('[S12] pages cards and revision history deterministically without dropping equal timestamps', async () => {

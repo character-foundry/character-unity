@@ -18,8 +18,10 @@ import type { BlobStore } from '@character-unity/blob-store';
 
 /** Hosts supply adapters; both runtimes use the same domain composition. */
 export function composeServices(storage: { store: UnityStore; hub: ReturnType<typeof createHubStore>; outbox: SyncOutboxStore; chat?: ChatStore },
-  blobs: BlobStore, archiveClient?: ReturnType<typeof createArchiveClient>, connections: readonly ConfiguredRemote[] = [], archiveOptions?: ArchiveImportOptions) {
-  const assets = createAssetService(storage.store, blobs);
+  blobs: BlobStore, archiveClient?: ReturnType<typeof createArchiveClient>, connections: readonly ConfiguredRemote[] = [], archiveOptions?: ArchiveImportOptions,
+  /** Local hosts take whole RisuAI packages; hosted ones keep the blob store's default. */
+  assetMaxBytes?: number) {
+  const assets = createAssetService(storage.store, blobs, assetMaxBytes ? { maxBytes: assetMaxBytes } : {});
   const cards = createCardService(storage.store, assets);
   const archive = archiveClient ? createArchiveImportService(cards, archiveClient, archiveOptions) : undefined;
   const hub = createHubService(storage.store, storage.hub, assets);

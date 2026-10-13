@@ -5,14 +5,15 @@ import type { AssetService } from '@character-unity/assets';
 import { StoreError } from '@character-unity/store';
 import type { CardDocument, Revision, UnityStore } from '@character-unity/store';
 import { revisionIdentityOptions } from './revision-assets.js';
-import { CardError, importByteLimit } from './types.js';
+import { documentByteLimit } from '@character-unity/store/validation';
+import { CardError, declaredAssetLimit, importByteLimit, risuModulePath } from './types.js';
 import type { Actor, AssetBinding, AssetUpload } from './types.js';
 
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 function bindingPath(value: unknown): value is string {
-  return typeof value === 'string' && (value === 'portrait' || /^declared\/(0|[1-9][0-9]?)$/.test(value));
+  return typeof value === 'string' && (value === 'portrait' || /^declared\/(0|[1-9][0-9]{0,3})$/.test(value));
 }
 function descriptor(value: unknown): value is CardDocument & { uri: string } {
   return object(value) && typeof value.uri === 'string';
@@ -24,10 +25,10 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   expectedHead: string, input: CardDocument, bindingsInput: readonly AssetBinding[], uploadsInput: readonly AssetUpload[], signal?: AbortSignal) {
   const actor = { ...actorInput };
   const document = JSON.parse(canonicalJson(input)) as CardDocument;
-  if (new TextEncoder().encode(JSON.stringify(document)).byteLength > 250_000) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
-  if (!Array.isArray(bindingsInput) || bindingsInput.length > 64 || !Array.isArray(uploadsInput) || uploadsInput.length > 64
+  if (new TextEncoder().encode(JSON.stringify(document)).byteLength > documentByteLimit) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
+  if (!Array.isArray(bindingsInput) || bindingsInput.length > declaredAssetLimit + 1 || !Array.isArray(uploadsInput) || uploadsInput.length > 64
     || uploadsInput.some((upload) => !object(upload) || !(upload.bytes instanceof Uint8Array))
-    || uploadsInput.reduce((size, upload) => size + upload.bytes.byteLength, 0) > importByteLimit) throw new CardError('TOO_LARGE', 'Asset uploads exceed 32 MiB or 64 files');
+    || uploadsInput.reduce((size, upload) => size + upload.bytes.byteLength, 0) > importByteLimit) throw new CardError('TOO_LARGE', `Asset uploads exceed ${importByteLimit / 1024 / 1024} MiB or 64 files`);
   const bindings = JSON.parse(canonicalJson(bindingsInput)) as AssetBinding[];
   const uploads = uploadsInput.map((upload) => {
     if (typeof upload.mediaType !== 'string' || upload.mediaType.length > 128 || !/^[\w!#$&^_.+-]+\/[\w!#$&^_.+-]+$/.test(upload.mediaType)) throw new CardError('INVALID_INPUT', 'Invalid upload media type');
@@ -51,8 +52,8 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   const data = document.data;
   if (!object(data)) throw new CardError('INVALID_INPUT', 'Expected a wrapped character document');
   const declared = Object.hasOwn(data, 'assets') ? data.assets : [];
-  if (!Array.isArray(declared) || declared.length > 63 || !declared.every(descriptor)) {
-    throw new CardError('INVALID_INPUT', 'Expected up to 63 declared asset descriptors');
+  if (!Array.isArray(declared) || declared.length > declaredAssetLimit || !declared.every(descriptor)) {
+    throw new CardError('INVALID_INPUT', `Expected up to ${declaredAssetLimit} declared asset descriptors`);
   }
   const paths = new Set<string>(), usedUploads = new Set<number>();
   const originals = new Map(await Promise.all(current.assets.map(async (reference) => [reference.path,
@@ -76,7 +77,7 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   }
   if (usedUploads.size !== uploads.length || paths.size !== declared.length + (paths.has('portrait') ? 1 : 0)
     || declared.some((_, index) => !paths.has(`declared/${index}`))) throw new CardError('INVALID_INPUT', 'Every descriptor and upload must have an exact asset binding');
-  if (planned.reduce((size, reference) => size + reference.byteLength, 0) > 64 * 1024 * 1024) throw new CardError('TOO_LARGE', 'Revision assets exceed 64 MiB');
+  if (planned.reduce((size, reference) => size + reference.byteLength, 0) > importByteLimit) throw new CardError('TOO_LARGE', `Revision assets exceed ${importByteLimit / 1024 / 1024} MiB`);
   const portrait = planned.find((reference) => reference.path === 'portrait');
   for (const [index, descriptor] of declared.entries()) {
     // ccdefault explicitly aliases the container portrait; it cannot bind other bytes.
@@ -91,6 +92,10 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   // Ask the SDK to validate the complete document/binding combination before writes.
   await computeCardContentIdentity(document, options);
   check();
+  // A RisuAI module is not an editable binding; it rides along unchanged.
+  const module = current.assets.find((reference) => reference.path === risuModulePath);
+  if (module) planned.push({ path: risuModulePath, hash: originals.get(risuModulePath)!.hash, byteLength: originals.get(risuModulePath)!.byteLength,
+    mediaType: originals.get(risuModulePath)!.mediaType, assetId: module.assetId });
   const existingDigests = [...originals].map(([path, asset]) => ({ path, hash: asset.hash })).sort((a, b) => a.path.localeCompare(b.path));
   const nextDigests = planned.map(({ path, hash }) => ({ path, hash })).sort((a, b) => a.path.localeCompare(b.path));
   if (canonicalJson(document) === canonicalJson(current.document) && canonicalJson(existingDigests) === canonicalJson(nextDigests)) {

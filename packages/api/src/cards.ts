@@ -8,10 +8,12 @@ import { isLibraryFlag, isLibrarySort, librarySources } from '@character-unity/s
 import type { ArchiveImportService } from '@character-unity/cards/archive';
 import { input, parseSearchQuery, isSearchSort, parseSnapshot } from '@character-unity/archive-client/contract';
 import { assetRevisionBody } from './asset-body.js';
+import { documentByteLimit } from '@character-unity/store/validation';
 
 export type Authenticate = (request: Request) => Actor | null | Promise<Actor | null>;
 type Env = { Variables: { actor: Actor } };
-export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImportService; authenticate?: Authenticate }) {
+export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImportService; authenticate?: Authenticate; uploadByteLimit?: number }) {
+  const uploadLimit = options.uploadByteLimit ?? importByteLimit;
   const routes = new Hono<Env>();
   routes.use('*', async (c, next) => {
     c.header('cache-control', 'no-store');
@@ -105,7 +107,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
     const { cards, actor } = await required(c);
     const filename = c.req.header('x-file-name') ?? 'original';
     if (filename.length > 512) throw new CardError('INVALID_INPUT', 'File name is too long');
-    return c.json(await cards.import(actor, c.req.param('workspaceId'), await bytes(c, importByteLimit), { kind: 'file', filename }), 201);
+    return c.json(await cards.import(actor, c.req.param('workspaceId'), await bytes(c, uploadLimit), { kind: 'file', filename }), 201);
   });
   routes.get('/:workspaceId/archive/status', async (c) => {
     const { actor } = await required(c);
@@ -162,7 +164,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
     const { cards, actor } = await required(c);
     // An empty body copies the card as is; `{ expectedHead, document }` saves an edited fork draft in one step.
     if (!c.req.header('content-type')?.includes('json')) return c.json(await cards.fork(actor, c.req.param('workspaceId'), c.req.param('cardId')), 201);
-    const input = await json(c, 262_144);
+    const input = await json(c, documentByteLimit + 65_536);
     if (typeof input.expectedHead !== 'string' || !input.document || typeof input.document !== 'object' || Array.isArray(input.document)
       || Object.keys(input).some((key) => !['expectedHead', 'document'].includes(key))) throw new CardError('INVALID_INPUT', 'Expected a document and revision head');
     return c.json(await cards.fork(actor, c.req.param('workspaceId'), c.req.param('cardId'), { expectedHead: input.expectedHead, document: input.document as CardDocument }), 201);
@@ -173,7 +175,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   });
   routes.post('/:workspaceId/cards/:cardId/revisions', async (c) => {
     const { cards, actor } = await required(c);
-    const input = await json(c, 262_144);
+    const input = await json(c, documentByteLimit + 65_536);
     if (typeof input.expectedHead !== 'string' || !input.document || typeof input.document !== 'object' || Array.isArray(input.document)
       || Object.keys(input).some((key) => !['expectedHead', 'document'].includes(key))) throw new CardError('INVALID_INPUT', 'Expected a document and revision head');
     return c.json(await cards.save(actor, c.req.param('workspaceId'), c.req.param('cardId'), input.expectedHead, input.document as CardDocument));
@@ -192,7 +194,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   });
   routes.post('/:workspaceId/cards/:cardId/asset-revisions', async (c) => {
     const { cards, actor } = await required(c);
-    const value = await assetRevisionBody(c);
+    const value = await assetRevisionBody(c, uploadLimit);
     return c.json(await cards.saveAssets(actor, c.req.param('workspaceId'), c.req.param('cardId'), value.expectedHead,
       value.document, value.bindings, value.uploads, c.req.raw.signal));
   });

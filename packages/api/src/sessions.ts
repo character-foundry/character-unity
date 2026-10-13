@@ -1,6 +1,6 @@
 import type { createSyncReadApi } from './sync.js';
 import { Hono } from 'hono';
-import { CardError } from '@character-unity/cards/contract';
+import { CardError, hostedUploadByteLimit } from '@character-unity/cards/contract';
 import { StoreError } from '@character-unity/store';
 import { sessionLifetimeMs, validSessionToken } from '@character-unity/store/accounts';
 import type { AccountStore, SessionProof } from '@character-unity/store/accounts';
@@ -98,7 +98,7 @@ export function createAccountApi(options: {
     const expected = c.req.header('x-unity-actor');
     if (expected && expected !== session.account.id) return c.json({ error: { code: 'ACCOUNT_CHANGED', message: 'This browser is signed in as another account; reconnect before continuing' } }, 409);
     const actor = Object.freeze({ id: session.account.id, uri: session.account.uri });
-    return createApi({ ...options.forSession(session.proof), authenticate: () => actor }).fetch(c.req.raw);
+    return createApi({ ...options.forSession(session.proof), authenticate: () => actor, uploadByteLimit: hostedUploadByteLimit }).fetch(c.req.raw);
   });
   return app;
 }

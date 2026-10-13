@@ -2,12 +2,13 @@ import { parseCard } from '@character-foundry/character-foundry/loader';
 import { parseURI, getMimeTypeFromExt } from '@character-foundry/character-foundry/core';
 import { canonicalJson, computeCardContentIdentity, hashBytes, readCardLineage, restoreSillyTavernTransport, verifyCardLineage } from '@character-foundry/character-foundry/identity';
 import type { AssetDigestBinding, CardEnvelope } from '@character-foundry/character-foundry/identity';
-import { CardError, importByteLimit } from './types.js';
+import { documentByteLimit } from '@character-unity/store/validation';
+import { CardError, declaredAssetLimit, importByteLimit, risuModulePath } from './types.js';
 import type { ImportAsset } from './types.js';
 
 /** Container parsing, URI interpretation and identity all come from the external SDK. */
 export async function prepareImport(input: Uint8Array, supplied: readonly ImportAsset[] = []) {
-  if (input.byteLength > importByteLimit) throw new CardError('TOO_LARGE', 'Card import exceeds 32 MiB');
+  if (input.byteLength > importByteLimit) throw new CardError('TOO_LARGE', `Card import exceeds ${importByteLimit / 1024 / 1024} MiB`);
   const bytes = new Uint8Array(input);
   if (supplied.length > 64 || supplied.reduce((size, asset) => size + asset.bytes.byteLength, 0) > importByteLimit) {
     throw new CardError('TOO_LARGE', 'Supplied assets exceed import limits');
@@ -16,18 +17,19 @@ export async function prepareImport(input: Uint8Array, supplied: readonly Import
   const keys = external.map((asset) => asset.binding.kind === 'portrait' ? 'portrait' : `uri:${asset.binding.uri}`);
   if (new Set(keys).size !== keys.length) throw new CardError('INVALID_INPUT', 'Duplicate source asset bindings');
   const parsed = parseCard(bytes, { maxFileSize: importByteLimit, maxAssetSize: importByteLimit, maxTotalSize: importByteLimit, extractAssets: true });
-  if (!['json', 'png', 'charx'].includes(parsed.containerFormat) || parsed.metadata?.moduleRisum) {
+  // Foundry reads RisuAI's module.risum as an opaque blob; it is kept below and written back on CharX export.
+  if (!['json', 'png', 'charx'].includes(parsed.containerFormat)) {
     throw new CardError('UNSUPPORTED_FORMAT', 'This container needs a loss-preserving import adapter before editing');
   }
   // Retain the original opaque document. The SDK identity function checks its wrapped format.
   let document = JSON.parse(canonicalJson(parsed.originalShape)) as CardEnvelope;
-  if (new TextEncoder().encode(JSON.stringify(document)).byteLength > 262_144) throw new CardError('TOO_LARGE', 'Card document exceeds 256 KiB');
+  if (new TextEncoder().encode(JSON.stringify(document)).byteLength > documentByteLimit) throw new CardError('TOO_LARGE', `Card document exceeds ${documentByteLimit / 1024 / 1024} MiB`);
   // Validate the basic wrapper before examining asset descriptors.
   if (!document || typeof document.data !== 'object' || !document.data || Array.isArray(document.data)) {
     throw new CardError('UNSUPPORTED_FORMAT', 'The editor currently requires wrapped CCv2 or CCv3 data');
   }
   const declared = document.data.assets ?? [];
-  if (!Array.isArray(declared) || declared.length > 63) throw new CardError('TOO_LARGE', 'A card can use at most 63 declared assets plus its portrait');
+  if (!Array.isArray(declared) || declared.length > declaredAssetLimit) throw new CardError('TOO_LARGE', `A card can use at most ${declaredAssetLimit} declared assets plus its portrait`);
   const portrait = parsed.assets.find((asset) => asset.isMain && asset.type === 'icon');
   const externalPortrait = external.find((asset) => asset.binding.kind === 'portrait');
   const resources: { path: string; bytes: Uint8Array; hash: string; mediaType: string }[] = [];
@@ -57,6 +59,8 @@ export async function prepareImport(input: Uint8Array, supplied: readonly Import
     portraitHash = await hashBytes(resolvedPortrait.bytes);
     resources.push({ path: 'portrait', bytes: new Uint8Array(resolvedPortrait.bytes), hash: portraitHash, mediaType: resolvedPortrait.mediaType });
   }
+  const module = parsed.metadata?.moduleRisum;
+  if (module) resources.push({ path: risuModulePath, bytes: new Uint8Array(module), hash: await hashBytes(module), mediaType: 'application/octet-stream' });
   if (parsed.assets.some((asset) => !used.has(asset))) throw new CardError('UNSUPPORTED_FORMAT', 'Import contains assets that need an explicit portable binding');
   if (external.some((asset) => !used.has(asset))) throw new CardError('INVALID_INPUT', 'Supplied asset binding is not used by this card');
   const options = { assets: bindings, ...(portraitHash ? { portraitHash } : {}) };

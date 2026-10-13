@@ -100,18 +100,27 @@ describe('native Archive through the API', () => {
     expect((await (await call('/cards')).json() as { total: number }).total).toBe(1);
   });
 
-  it('explains why an Archive card is too large for the library before downloading it', async () => {
+  it('adds large cards (past the old 32 MB limit) and refuses ones over the library limit before downloading', async () => {
     const { scheduler, call } = setup();
     await call('/sources/chub/runs', { method: 'POST' });
     await scheduler.settled('chub');
-    // A 33 MB portrait on top of the card: over the library's 32 MB import limit.
+    // A 33 MB portrait on top of the card: RisuAI-sized, and it goes in whole.
     const big = new Uint8Array(33 * 1024 * 1024); big.set(portrait);
     await archive.put({ provider: 'chub', recordId: '103', url: 'https://chub.ai/characters/ash/103',
       objects: [{ role: 'card', bytes: card('Card 103'), mediaType: 'application/json' }, { role: 'portrait', bytes: big, mediaType: 'image/png' }] });
-    const response = await call('/cards/chub:103/import', { method: 'POST' });
-    expect(response.status).toBe(413);
-    expect(await response.json()).toMatchObject({ error: { code: 'TOO_LARGE', message: expect.stringContaining('stays in the Archive only') } });
-    expect((await services.cards.summaries(actor, workspace, {})).total).toBe(0);
+    const added = await call('/cards/chub:103/import', { method: 'POST' });
+    expect(await added.json()).toMatchObject({ created: true });
+
+    // Over the limit: refused from the card's file list, so nothing is downloaded.
+    const downloads: string[] = [];
+    const detail = { id: 'risuai:huge', provider: 'risuai', recordId: 'huge', url: 'https://realm.risuai.net/character/huge', versionId: 'v1',
+      versionList: [{ id: 'v1', objects: [{ role: 'card', name: 'card.charx', sha256: 'a'.repeat(64), mediaType: 'application/zip', byteLength: 600 * 1024 * 1024 }] }] };
+    const huge = createNativeArchiveService(services.cards, { origin: 'http://archive.test', fetch: async (url) => {
+      if (url.includes('/objects/')) downloads.push(url);
+      return Response.json(detail);
+    } });
+    await expect(huge.import(actor, workspace, 'risuai:huge')).rejects.toMatchObject({ code: 'TOO_LARGE', message: expect.stringContaining('stays in the Archive only') });
+    expect(downloads).toEqual([]);
   });
 
   it('reports an unreachable Archive as unavailable', async () => {
