@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { Modal, ModalBody } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
 import { formatCount, formatDate } from '@/lib/utils/format';
@@ -72,7 +72,7 @@ export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCa
             </div>
 
             <div className="flex flex-wrap gap-1.5">
-              {card.tags.map((tag) => <Link key={tag} href={`/archive?tags=${encodeURIComponent(tag)}`} onClick={onClose} className="rounded bg-aurora/20 px-2 py-0.5 text-xs text-blue-200 hover:bg-nebula/40">{tag}</Link>)}
+              {card.tags.map((tag) => <Link key={tag} to={`/archive?tags=${encodeURIComponent(tag)}`} onClick={onClose} className="rounded bg-aurora/20 px-2 py-0.5 text-xs text-blue-200 hover:bg-nebula/40">{tag}</Link>)}
             </div>
 
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-starlight/60">

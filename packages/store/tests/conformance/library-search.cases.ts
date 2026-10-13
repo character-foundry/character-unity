@@ -76,11 +76,16 @@ export async function librarySearchCases(store: UnityStore, workspaceId: string)
   expect(await store.listCardTags(workspaceId, { limit: 2 })).toHaveLength(2);
 
   // Local favorites and followed creators (creator match is trimmed and case-insensitive).
+  expect(await store.getFavorite(workspaceId, ember.card.id)).toBe(false);
   await store.setFavorite(workspaceId, ember.card.id, true);
   await store.setFavorite(workspaceId, ember.card.id, true);
   expect(await ids({ favorite: 'fav' })).toEqual([ember.card.id]);
   expect(await ids({ favorite: 'not_fav' })).toEqual(sorted(wolf.card.id, zed.card.id, fork.card.id));
   expect((await store.listCardSummaries(workspaceId, { ids: [ember.card.id] })).items[0]).toMatchObject({ favorite: true });
+  expect(await store.getFavorite(workspaceId, ember.card.id)).toBe(true);
+  expect(await store.getFavorite(workspaceId, wolf.card.id)).toBe(false);
+  const foreign = await store.createWorkspace({ ownerId: 'someone-else', name: 'Private favorites' });
+  await expect(store.getFavorite(foreign.id, ember.card.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   await store.followCreator(workspaceId, ' ASH ', true);
   expect(await store.listFollowedCreators(workspaceId)).toEqual(['ASH']);
   expect(await ids({ has: ['followed'] })).toEqual(sorted(ember.card.id, zed.card.id));

@@ -1,8 +1,6 @@
-'use client';
-
 import { cn } from '@/lib/utils/cn';
 
-export type Section = 'notes' | 'character' | 'greetings' | 'lorebook' | 'assets' | 'forks' | 'comments';
+export type Section = 'notes' | 'character' | 'greetings' | 'lorebook' | 'assets' | 'forks';
 
 interface SectionConfig {
   id: Section;
@@ -18,11 +16,13 @@ interface SectionTabsProps {
 
 export function SectionTabs({ sections, activeSection, onSectionChange }: SectionTabsProps) {
   return (
-    <div className="glass rounded-none border-y border-nebula/20 mb-6 -mx-4 sm:-mx-6 lg:-mx-8 px-4 sm:px-6 lg:px-8">
-      <nav className="flex overflow-x-auto">
+    <div className="glass mb-6 min-w-0 max-w-full rounded-xl border border-nebula/20">
+      <nav aria-label="Card sections" className="flex overflow-x-auto">
         {sections.filter(s => s.available).map((section) => (
           <button
             key={section.id}
+            type="button"
+            aria-pressed={activeSection === section.id}
             onClick={() => onSectionChange(section.id)}
             className={cn(
               'px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors',

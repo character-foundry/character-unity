@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { cn } from '@/lib/utils/cn';
 import { formatCount, formatRelative } from '@/lib/utils/format';
 import { useSettings } from '@/lib/settings';
@@ -16,7 +16,7 @@ export function AddToLibrary({ card, onAdded, className }: { card: Pick<ArchiveC
   const [busy, setBusy] = useState(false);
   if (libraryId) {
     return (
-      <Link href={`/card/${libraryId}`} onClick={(event: React.MouseEvent) => event.stopPropagation()} title="Open the library copy"
+      <Link to={`/card/${libraryId}`} onClick={(event: React.MouseEvent) => event.stopPropagation()} title="Open the library copy"
         className={cn('pointer-events-auto relative z-10 rounded px-1.5 py-0.5 text-[10px] font-semibold text-emerald-300 hover:text-emerald-200', className)}>
         In library ✓
       </Link>
@@ -44,12 +44,13 @@ export function ArchiveCardItem({ card, size, onOpen }: { card: ArchiveCard; siz
   const maxTags = size === 'large' ? 3 : 2;
   const nsfw = card.tags.some((tag) => tag.toLowerCase() === 'nsfw');
   return (
-    <div role="button" tabIndex={0} onClick={() => onOpen(card)} onKeyDown={(event) => { if (event.key === 'Enter') onOpen(card); }}
-      className="group relative block aspect-[3/4] cursor-pointer overflow-hidden rounded-lg bg-cosmic-teal ring-1 ring-nebula/15 transition-shadow hover:ring-nebula/70">
+    <article className="group relative block aspect-[3/4] overflow-hidden rounded-lg bg-cosmic-teal ring-1 ring-nebula/15 transition-shadow hover:ring-nebula/70">
+      <button type="button" aria-label={`Quick view ${card.name}`} onClick={() => onOpen(card)}
+        className="absolute inset-0 cursor-pointer rounded-lg focus-visible:outline-2 focus-visible:outline-nebula" />
       {image ? (
-        <img src={image} alt={card.name} loading="lazy"
-          className={cn('absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.03]', settings.blurNsfwContent && nsfw && 'blur-xl')} />
-      ) : <div className="flex h-full items-center justify-center text-4xl text-starlight/20">?</div>}
+        <img src={image} alt={card.name} loading="lazy" decoding="async"
+          className={cn('pointer-events-none absolute inset-0 h-full w-full object-cover transition-transform duration-300 ease-out group-hover:scale-[1.03]', settings.blurNsfwContent && nsfw && 'blur-xl')} />
+      ) : <div className="pointer-events-none flex h-full items-center justify-center text-4xl text-starlight/20">?</div>}
 
       <div className="pointer-events-none absolute inset-x-1.5 top-1.5 flex items-start justify-between gap-1">
         <div className="flex flex-wrap gap-1">
@@ -62,7 +63,7 @@ export function ArchiveCardItem({ card, size, onOpen }: { card: ArchiveCard; siz
         </div>
       </div>
 
-      <div className={cn('absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur-sm', small ? 'px-2 py-1.5' : 'px-2.5 py-2')}>
+      <div className={cn('pointer-events-none absolute inset-x-0 bottom-0 bg-black/75 backdrop-blur-sm', small ? 'px-2 py-1.5' : 'px-2.5 py-2')}>
         <h3 className={cn('truncate font-semibold leading-tight text-white group-hover:text-nebula', small ? 'text-[12px]' : 'text-[13px]')}>{card.name}</h3>
         <p className="truncate text-[11px] leading-tight text-white/60">by {card.creator || 'Anonymous'}</p>
         {!small && card.tags.length > 0 && (
@@ -80,6 +81,6 @@ export function ArchiveCardItem({ card, size, onOpen }: { card: ArchiveCard; siz
           <span className="ml-auto shrink-0 tabular-nums text-amber-300" title="Tokens">{formatCount(card.tokens)} tk</span>
         </div>
       </div>
-    </div>
+    </article>
   );
 }

@@ -22,13 +22,13 @@ paths and old dashboard/import/parser shells are retired, not replaced with
 fake endpoints. Native optional tools are tracked in `cu-1o2.5.13`.
 
 The editor still uses global Zustand stores (one editor per page); per-instance
-and workspace isolation is tracked in `cu-1o2.5.12`. The viewer still has Next
-compatibility shims; its native rewrite is the next phase (`cu-1o2.26`). General
+and workspace isolation is tracked in `cu-1o2.5.12` and is next. The viewer and
+shell now use native React Router/HTML without Next shims (`cu-1o2.26`). General
 import deduplication and Archive-reference favorites/forks are separate remaining
 work (`cu-1o2.27`), not capabilities of this editor integration.
 
-Owner work order: native viewer/Next-shim removal first, editor isolation
-second. Wizard workflow QA (`cu-1o2.5.5`) is low priority, not a prerequisite.
+Owner work order: native viewer/Next-shim removal is complete; editor isolation
+follows. Wizard workflow QA (`cu-1o2.5.5`) is low priority, not a prerequisite.
 
 `pnpm dev` starts API + unified web. `pnpm test:e2e:unity` builds the real unified
 web UI and runs its isolated production-bundle browser workflows. The legacy

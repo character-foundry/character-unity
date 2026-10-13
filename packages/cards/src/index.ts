@@ -31,7 +31,10 @@ export function createCardService(store: UnityStore, assets: AssetService) {
     await authorize(actor, workspaceId);
     const card = await store.getCard(workspaceId, cardId);
     const revision = await store.getRevision(workspaceId, card.headRevisionId);
-    return { card, revision, source: await store.getSource(workspaceId, cardId) };
+    const [source, favorite] = await Promise.all([store.getSource(workspaceId, cardId), store.getFavorite(workspaceId, cardId)]);
+    const original = source ? await store.getAsset(workspaceId, source.assetId) : null;
+    return { card, revision, source: source && original ? { ...source, mediaType: original.mediaType,
+      byteLength: original.byteLength, hash: original.hash } : null, favorite };
   }
   async function measured<T extends { revision: { id: string; workspaceId: string } }>(result: T): Promise<T> {
     await measureRevision(store, result.revision.workspaceId, result.revision.id).catch(() => undefined);

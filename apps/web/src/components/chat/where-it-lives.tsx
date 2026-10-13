@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { cn } from '@/lib/utils/cn';
 import { formatRelative } from '@/lib/utils/format';
 import { chatApi, chatChanged, kindInfo, sendCard, statusInfo, useChatTargets, usePlacements } from '@/lib/chat';
@@ -43,7 +43,7 @@ export function WhereItLives({ cardId }: { cardId: string }) {
               {busy === 'scan' ? 'Checking…' : 'Check now'}
             </button>
           )}
-          <Link href="/settings#chat-apps" className="rounded-lg border border-nebula/30 px-3 py-1.5 text-xs text-starlight/80 hover:bg-cosmic-teal/30">
+          <Link to="/settings#chat-apps" className="rounded-lg border border-nebula/30 px-3 py-1.5 text-xs text-starlight/80 hover:bg-cosmic-teal/30">
             {targets.length ? 'Manage apps' : 'Connect a chat app'}
           </Link>
         </div>

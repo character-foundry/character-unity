@@ -2,7 +2,7 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "types": ["vite/client", "node"],
-    "paths": { "@/*": ["./src/*"], "next/link": ["./src/shims/next-link.tsx"], "next/image": ["./src/shims/next-image.tsx"], "next/navigation": ["./src/shims/next-navigation.ts"] },
+    "paths": { "@/*": ["./src/*"] },
     "noUncheckedIndexedAccess": false,
     "exactOptionalPropertyTypes": false,
     "verbatimModuleSyntax": false

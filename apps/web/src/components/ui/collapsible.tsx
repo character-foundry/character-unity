@@ -1,6 +1,4 @@
-'use client';
-
-import { useState, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 import { cn } from '@/lib/utils/cn';
 
 interface CollapsibleProps {
@@ -25,6 +23,7 @@ export function Collapsible({
   disabled = false,
 }: CollapsibleProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
+  const contentId = useId();
 
   return (
     <div className={cn('border border-nebula/20 rounded-lg overflow-hidden', className)} data-collapsible data-open={isOpen}>
@@ -32,6 +31,8 @@ export function Collapsible({
         type="button"
         onClick={() => !disabled && setIsOpen(!isOpen)}
         disabled={disabled}
+        aria-expanded={isOpen}
+        aria-controls={contentId}
         className={cn(
           'w-full flex items-center justify-between px-4 py-3 text-left',
           'bg-surface-1/50 hover:bg-surface-2/50 transition-colors',
@@ -57,10 +58,8 @@ export function Collapsible({
         </svg>
       </button>
       <div
-        className={cn(
-          'overflow-hidden transition-all duration-200',
-          isOpen ? 'max-h-[5000px] opacity-100' : 'max-h-0 opacity-0'
-        )}
+        id={contentId}
+        hidden={!isOpen}
         data-collapsible-content
       >
         <div className={cn('p-4 bg-surface-1/30', contentClassName)}>

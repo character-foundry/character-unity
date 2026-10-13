@@ -92,7 +92,7 @@ test('failed and stale saves keep the draft and uploaded portrait available for 
   await page.unroute(pattern);
   const competing = structuredClone(imported.revision.document);
   (competing.data as Record<string, unknown>).name = 'Another editor saved first';
-  const response = await page.request.post(`${imported.path}/revisions`, { data: { expectedHead: imported.revision.id, document: competing } });
+  const response = await page.request.post(`${imported.path}/revisions`, { headers: { origin: new URL(page.url()).origin }, data: { expectedHead: imported.revision.id, document: competing } });
   expect(response.ok(), await response.text()).toBe(true);
   diagnostics.expectedStatuses.add(409);
   diagnostics.expectedConsole.push('[saveCard] FAILED to save card: Error: The card has changed; reload before saving');
@@ -131,7 +131,7 @@ test('New and Fork with uploads create nothing until Save', async ({ page }, inf
   const count = async () => ((await (await page.request.get(`${workspacePath}/cards`)).json()).cards as unknown[]).length;
   const initialCount = await count();
   await page.getByRole('button', { name: 'Done', exact: true }).click();
-  await page.getByRole('button', { name: 'Fork', exact: true }).click();
+  await page.getByRole('link', { name: 'Fork', exact: true }).click();
   await expect(page.getByText('Fork — not in the library until you save', { exact: true })).toBeVisible();
   await page.getByLabel('Name', { exact: true }).fill('Saved fork');
   await page.getByLabel('Choose portrait', { exact: true }).setInputFiles({ name: 'fork.gif', mimeType: 'image/gif', buffer: gif });
@@ -183,7 +183,7 @@ test('New and Fork retain changes made while their first Save is in flight', asy
     if (mode === 'new') await page.getByTitle('Create a new card in the editor').click();
     else {
       await page.goto(`/card/${source.card.id}`);
-      await page.getByRole('button', { name: 'Fork', exact: true }).click();
+      await page.getByRole('link', { name: 'Fork', exact: true }).click();
     }
     await page.getByLabel('Name', { exact: true }).fill(`Delayed first Save ${mode}`);
     await page.getByLabel('Choose portrait', { exact: true }).setInputFiles({ name: 'first.gif', mimeType: 'image/gif', buffer: gif });

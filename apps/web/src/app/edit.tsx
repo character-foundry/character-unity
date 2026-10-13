@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router';
-import Link from 'next/link';
+import { Link, useNavigate, useParams } from 'react-router';
 import { ArchitectEditorHost } from '@character-unity/architect/host';
 import { AppShell } from '@/components/layout';
 import { libraryId, reconnectSession } from '@/lib/unity';
@@ -15,7 +14,7 @@ export default function EditPage() {
   return (
     <AppShell>
       <div className="mb-3">
-        <Link href={`/card/${id}`} className="text-sm text-starlight/60 hover:text-nebula">← Back to profile</Link>
+        <Link to={`/card/${id}`} className="text-sm text-starlight/60 hover:text-nebula">← Back to profile</Link>
       </div>
       {error && <div className="bg-red-500/20 border border-red-500/40 rounded-lg px-4 py-3 text-red-200/90" role="alert">{error}</div>}
       {workspaceId && (

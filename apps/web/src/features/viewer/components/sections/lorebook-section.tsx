@@ -1,24 +1,6 @@
-'use client';
-
 import { useState } from 'react';
 import { Badge } from '@/components/ui';
-
-interface LorebookEntry {
-  keys?: string[] | null;
-  content?: string | null;
-  enabled?: boolean | null;
-  name?: string | null;
-  comment?: string | null;
-  insertion_order?: number | null;
-}
-
-interface CharacterBook {
-  name?: string | null;
-  scan_depth?: number | null;
-  token_budget?: number | null;
-  recursive_scanning?: boolean | null;
-  entries: LorebookEntry[];
-}
+import type { CharacterBook } from '@/types/card';
 
 interface LorebookSectionProps {
   characterBook: CharacterBook;
@@ -64,9 +46,9 @@ export function LorebookSection({ characterBook }: LorebookSectionProps) {
       {characterBook.entries.length === 0 ? (
         <p className="text-starlight/50 italic">No lorebook entries.</p>
       ) : (
-        <div className="flex gap-4 min-h-[400px]">
+        <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(180px,1fr)_3fr]">
           {/* Left column - Entry list (1/4) */}
-          <div className="w-1/4 min-w-[200px] bg-cosmic-teal/20 rounded-lg overflow-hidden">
+          <div className="min-w-0 bg-cosmic-teal/20 rounded-lg overflow-hidden">
             <div className="p-2 border-b border-nebula/20">
               <span className="text-xs text-starlight/50 uppercase font-semibold">Entries</span>
             </div>
@@ -84,7 +66,8 @@ export function LorebookSection({ characterBook }: LorebookSectionProps) {
                       isSelected
                         ? 'bg-nebula/30 text-starlight'
                         : 'text-starlight/70 hover:bg-cosmic-teal/30'
-                    } ${!entry.enabled ? 'opacity-50' : ''}`}
+                    } ${entry.enabled === false ? 'opacity-50' : ''}`}
+                    aria-pressed={isSelected}
                   >
                     <div className="flex items-center gap-2">
                       <span className="text-xs text-starlight/40">#{index + 1}</span>
@@ -97,7 +80,7 @@ export function LorebookSection({ characterBook }: LorebookSectionProps) {
           </div>
 
           {/* Right column - Entry details (3/4) */}
-          <div className="flex-1 bg-cosmic-teal/20 rounded-lg p-4 overflow-y-auto max-h-[400px]">
+          <div className="min-w-0 bg-cosmic-teal/20 rounded-lg p-4 overflow-y-auto max-h-[400px]">
             {selectedEntry ? (
               <div className="space-y-4">
                 {/* Entry name/comment */}

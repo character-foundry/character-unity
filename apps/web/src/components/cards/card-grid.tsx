@@ -1,5 +1,3 @@
-'use client';
-
 import { CardItem } from './card-item';
 import type { CardListItem } from '@/types/card';
 import { useSettings } from '@/lib/settings';

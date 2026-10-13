@@ -202,6 +202,12 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
         yield* request(tx.objectStore('favorites').delete(cardId));
       });
     },
+    async getFavorite(workspaceId, cardId) {
+      return transaction(db, ['cards', 'deletions', 'favorites'], 'readonly', function* (tx) {
+        yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
+        return !!(yield* get(tx, 'favorites', cardId));
+      });
+    },
     async setFavorite(workspaceId, cardId, favorite) {
       await transaction(db, ['cards', 'deletions', 'favorites'], 'readwrite', function* (tx) {
         yield* scoped<Card>(tx, 'cards', workspaceId, cardId);

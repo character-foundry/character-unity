@@ -1,7 +1,4 @@
-'use client';
-
-import { useEffect, useCallback, type ReactNode } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useRef, type ReactNode } from 'react';
 import { cn } from '@/lib/utils/cn';
 
 interface ModalProps {
@@ -10,31 +7,22 @@ interface ModalProps {
   children: ReactNode;
   className?: string;
   size?: 'sm' | 'md' | 'lg' | 'xl' | 'full';
+  label?: string;
 }
 
-export function Modal({ isOpen, onClose, children, className, size = 'md' }: ModalProps) {
-  const handleEscape = useCallback(
-    (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        onClose();
-      }
-    },
-    [onClose]
-  );
-
+export function Modal({ isOpen, onClose, children, className, size = 'md', label = 'Card details' }: ModalProps) {
+  const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    if (isOpen) {
-      document.addEventListener('keydown', handleEscape);
-      document.body.style.overflow = 'hidden';
-    }
-
+    if (!isOpen || !dialog.current) return;
+    const element = dialog.current;
+    const previousOverflow = document.body.style.overflow;
+    element.showModal();
+    document.body.style.overflow = 'hidden';
     return () => {
-      document.removeEventListener('keydown', handleEscape);
-      document.body.style.overflow = 'auto';
+      element.close();
+      document.body.style.overflow = previousOverflow;
     };
-  }, [isOpen, handleEscape]);
-
-  if (!isOpen) return null;
+  }, [isOpen]);
 
   const sizes = {
     sm: 'max-w-md',
@@ -44,33 +32,18 @@ export function Modal({ isOpen, onClose, children, className, size = 'md' }: Mod
     full: 'max-w-[95vw]',
   };
 
-  const modalContent = (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/80 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
-      <div
-        className={cn(
-          'relative z-10 w-full bg-cosmic-teal/95 backdrop-blur-lg rounded-2xl border border-nebula/30 shadow-2xl max-h-[90vh] overflow-y-auto',
-          sizes[size],
-          className
-        )}
-      >
-        {children}
-      </div>
-    </div>
+  return (
+    <dialog ref={dialog} aria-label={label}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) onClose();
+      }}
+      className={cn('m-auto w-[calc(100%_-_2rem)] max-h-[90dvh] overflow-y-auto rounded-2xl border border-nebula/30 bg-cosmic-teal/95 p-0 text-starlight shadow-2xl backdrop:bg-black/80 backdrop:backdrop-blur-sm', sizes[size], className)}>
+      {isOpen ? children : null}
+    </dialog>
   );
-
-  // Use portal to render outside the normal DOM hierarchy
-  if (typeof window !== 'undefined') {
-    return createPortal(modalContent, document.body);
-  }
-
-  return null;
 }
 
 interface ModalHeaderProps {

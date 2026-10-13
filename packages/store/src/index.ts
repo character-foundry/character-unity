@@ -270,6 +270,11 @@ export function createStore(driver: StoreDriver) {
         { sql: 'DELETE FROM unity_chat_placements WHERE card_id = ? AND workspace_id = ?', params: [cardId, workspaceId] },
       ]);
     },
+    async getFavorite(workspaceId: string, cardId: string) {
+      await getCard(workspaceId, cardId);
+      const rows = await driver.query({ sql: 'SELECT 1 FROM unity_card_favorites WHERE workspace_id = ? AND card_id = ?', params: [workspaceId, cardId] });
+      return rows.length !== 0;
+    },
     async setFavorite(workspaceId: string, cardId: string, favorite: boolean) {
       await getCard(workspaceId, cardId);
       await batch([favorite

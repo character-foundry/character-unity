@@ -61,8 +61,8 @@ export async function importCard(page: Page, name: string, format: 'json' | 'png
   expect(received.status(), await received.text()).toBe(201);
   const imported: Imported = await received.json();
   await expect(page.getByRole('status')).toContainText('Imported 1 card');
-  await page.getByText(name, { exact: true }).first().click();
-  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await page.getByRole('button', { name: `Quick view ${name}`, exact: true }).click();
+  await page.getByRole('link', { name: 'Edit', exact: true }).click();
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue(name);
   return { ...imported, bytes, path: `/api/workspaces/${imported.card.workspaceId}/cards/${imported.card.id}` };
 }

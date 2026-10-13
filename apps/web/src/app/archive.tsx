@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import Link from 'next/link';
+import { Link } from 'react-router';
 import { AppShell } from '@/components/layout';
 import { Button } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
@@ -39,7 +39,7 @@ export default function ArchivePage() {
             <p className="mt-1 text-[13px] text-starlight/50">{feed.error}</p>
             <div className="mt-3 flex justify-center gap-2">
               <Button size="sm" variant="secondary" onClick={feed.retry}>Try again</Button>
-              <Link href="/settings#archive" className="rounded-lg border border-nebula/30 px-3 py-1.5 text-sm text-starlight/80 hover:border-nebula">Archive settings</Link>
+              <Link to="/settings#archive" className="rounded-lg border border-nebula/30 px-3 py-1.5 text-sm text-starlight/80 hover:border-nebula">Archive settings</Link>
             </div>
           </div>
         ) : !feed.loading && feed.cards.length === 0 ? (
@@ -47,7 +47,7 @@ export default function ArchivePage() {
             <p className="text-sm font-medium">{isFiltered(search) ? 'No Archive cards match these filters' : 'The Archive is empty'}</p>
             {isFiltered(search)
               ? <button type="button" onClick={() => replace({ ...emptySearch, sort: search.sort })} className="mt-2 text-[13px] font-medium text-nebula hover:underline">Clear all filters</button>
-              : <Link href="/settings#archive" className="mt-2 inline-block text-[13px] font-medium text-nebula hover:underline">Turn on a source in Settings</Link>}
+              : <Link to="/settings#archive" className="mt-2 inline-block text-[13px] font-medium text-nebula hover:underline">Turn on a source in Settings</Link>}
           </div>
         ) : (
           <>

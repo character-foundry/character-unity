@@ -230,7 +230,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
     const params = new URL(c.req.url).searchParams;
     const revisionId = params.get('revisionId'), path = params.get('path');
     if (!revisionId || revisionId.length > 200 || [...params.keys()].some((key) => !(action === 'asset' ? ['revisionId', 'path'] : ['revisionId']).includes(key) || params.getAll(key).length !== 1)
-      || (action === 'asset' && (!path || !/^(portrait|declared\/(0|[1-9][0-9]{0,3}))$/.test(path) || (path.startsWith('declared/') && Number(path.slice(9)) >= 8191)))) throw new CardError('INVALID_INPUT', 'Expected an explicit revision and asset path');
+      || (action === 'asset' && (!path || !/^(portrait|module\.risum|declared\/(0|[1-9][0-9]{0,3}))$/.test(path) || (path.startsWith('declared/') && Number(path.slice(9)) >= 8191)))) throw new CardError('INVALID_INPUT', 'Expected an explicit revision and asset path');
     if (action === 'assets') return c.json(await cards.assetList(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId));
     const value = await cards.asset(actor, c.req.param('workspaceId'), c.req.param('cardId'), revisionId, path!);
     return new Response(value.body, { headers: { 'content-type': value.mediaType, 'content-length': String(value.byteLength),

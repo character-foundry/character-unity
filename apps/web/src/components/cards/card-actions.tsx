@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils/cn';
 import { HeartIcon } from '@/components/ui';
 import { deleteCard, followCreator, setFavorite } from '@/lib/unity';
@@ -8,16 +8,29 @@ import { libraryChanged, useFollowedCreators } from '@/lib/library-search';
 export function FavoriteButton({ cardId, initial, className, iconClassName = 'h-3.5 w-3.5' }: { cardId: string; initial: boolean; className?: string; iconClassName?: string }) {
   const [favorite, setValue] = useState(initial);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef(0);
+  useEffect(() => {
+    request.current++; setValue(initial); setError(null); setBusy(false);
+    return () => { request.current++; };
+  }, [cardId, initial]);
   return (
+    <span className="relative inline-flex">
     <button type="button" disabled={busy} aria-pressed={favorite} title={favorite ? 'Remove from favorites' : 'Add to favorites'}
       onClick={async (event) => {
         event.stopPropagation(); event.preventDefault();
-        setBusy(true); setValue(!favorite);
-        try { await setFavorite(cardId, !favorite); } catch { setValue(favorite); } finally { setBusy(false); }
+        const generation = ++request.current;
+        setError(null); setBusy(true); setValue(!favorite);
+        try { await setFavorite(cardId, !favorite); libraryChanged(); }
+        catch (failure) {
+          if (request.current === generation) { setValue(favorite); setError(failure instanceof Error ? failure.message : 'Favorite could not be changed'); }
+        } finally { if (request.current === generation) setBusy(false); }
       }}
       className={cn('flex items-center transition-colors hover:text-pink-400', favorite ? 'text-pink-400' : 'text-white/70', className)}>
       <HeartIcon className={iconClassName} filled={favorite} />
     </button>
+    {error && <span role="alert" className="absolute bottom-full right-0 z-20 mb-1 w-52 rounded border border-red-500/40 bg-slate-950 p-2 text-xs text-red-200">{error}</span>}
+    </span>
   );
 }
 
@@ -26,31 +39,43 @@ export function FollowButton({ creator }: { creator: string }) {
   const followed = useFollowedCreators();
   const following = followed.some((name) => name.trim().toLowerCase() === creator.trim().toLowerCase());
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const request = useRef(0);
+  useEffect(() => { request.current++; setBusy(false); setError(null); return () => { request.current++; }; }, [creator]);
   // Cards without a creator read as Anonymous; that is not one person to follow.
   if (creator.trim().toLowerCase() === 'anonymous') return null;
   return (
+    <span className="inline-flex flex-wrap items-center">
     <button type="button" disabled={busy}
       onClick={async (event) => {
         event.stopPropagation(); event.preventDefault(); setBusy(true);
-        try { await followCreator(creator, !following); libraryChanged(); } finally { setBusy(false); }
+        const generation = ++request.current; setError(null);
+        try { await followCreator(creator, !following); libraryChanged(); }
+        catch (failure) { if (request.current === generation) setError(failure instanceof Error ? failure.message : 'Creator could not be followed'); }
+        finally { if (request.current === generation) setBusy(false); }
       }}
       className={cn('ml-2 rounded-full border px-2 py-0.5 text-xs align-middle transition-colors disabled:opacity-50',
         following ? 'border-nebula/50 bg-nebula/20 text-nebula' : 'border-nebula/30 text-starlight/60 hover:border-nebula hover:text-nebula')}>
       {following ? 'Following' : '+ Follow'}
     </button>
+    {error && <span role="alert" className="ml-2 text-xs text-red-300">{error}</span>}
+    </span>
   );
 }
 
 /** Deletes a card from the library after confirmation. */
 export function DeleteCardButton({ cardId, name, onDeleted, className }: { cardId: string; name: string; onDeleted: () => void; className?: string }) {
   const [busy, setBusy] = useState(false);
+  const request = useRef(0);
+  useEffect(() => { request.current++; setBusy(false); return () => { request.current++; }; }, [cardId]);
   return (
     <button type="button" disabled={busy}
       onClick={async () => {
         if (!window.confirm(`Delete “${name}” from the library? Copies already sent to chat apps stay there.`)) return;
         setBusy(true);
-        try { await deleteCard(cardId); libraryChanged(); onDeleted(); }
-        catch (error) { window.alert(error instanceof Error ? error.message : 'The card could not be deleted'); setBusy(false); }
+        const generation = ++request.current;
+        try { await deleteCard(cardId); libraryChanged(); if (request.current === generation) onDeleted(); }
+        catch (error) { if (request.current === generation) { window.alert(error instanceof Error ? error.message : 'The card could not be deleted'); setBusy(false); } }
       }}
       className={cn('inline-flex items-center justify-center gap-1.5 rounded-lg border border-red-500/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-50', className)}>
       <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

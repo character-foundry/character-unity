@@ -1,5 +1,3 @@
-'use client';
-
 import { cn } from '@/lib/utils/cn';
 import { ChatIcon, BookIcon, ImageIcon, FolderIcon } from './icons';
 

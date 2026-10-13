@@ -9,13 +9,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: [
-      // CardsHub components were written for Next.js; these small adapters keep them unchanged.
-      { find: 'next/link', replacement: src('shims/next-link.tsx') },
-      { find: 'next/image', replacement: src('shims/next-image.tsx') },
-      { find: 'next/navigation', replacement: src('shims/next-navigation.ts') },
       { find: /^@\//, replacement: `${src('')}/` },
-      // Architect's import-core lazy-loads sharp under Node only.
-      { find: /^sharp$/, replacement: src('shims/sharp.ts') },
     ],
     dedupe: ['react', 'react-dom', 'zustand'],
   },

@@ -6,7 +6,8 @@ export type ExportFormat = 'json' | 'png' | 'charx' | 'sillytavern-json' | 'sill
 export interface OpenedCard {
   card: { id: string; headRevisionId: string; originalHash: string | null; forkedFromRevisionId: string | null; createdAt: string };
   revision: { id: string; sequence: number; document: CardDocument; createdAt: string; assets: { path: string; assetId: string }[] };
-  source: { provenance: { format?: string; filename?: string } } | null;
+  source: { provenance: { kind?: string; format?: string; filename?: string }; mediaType?: string; byteLength?: number; hash?: string } | null;
+  favorite: boolean;
 }
 
 export class UnityError extends Error {
@@ -17,7 +18,9 @@ export async function call<T>(path: string, init: RequestInit = {}, retried = fa
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   // The local API issues a new session secret when it restarts; reconnect once and retry.
   if (response.status === 401 && !retried && path !== '/api/local-session') {
-    await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' } });
+    init.signal?.throwIfAborted();
+    await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' }, signal: init.signal });
+    init.signal?.throwIfAborted();
     return call<T>(path, init, true);
   }
   if (!response.ok) {
@@ -36,7 +39,9 @@ export async function reconnectSession() {
 export async function fetchWithSession(path: string, init: RequestInit = {}) {
   const response = await fetch(path, { credentials: 'same-origin', ...init });
   if (response.status !== 401) return response;
-  await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' } });
+  init.signal?.throwIfAborted();
+  await fetch('/api/local-session', { method: 'POST', credentials: 'same-origin', headers: { 'x-unity-session': 'local' }, signal: init.signal });
+  init.signal?.throwIfAborted();
   return fetch(path, { credentials: 'same-origin', ...init });
 }
 
@@ -75,55 +80,72 @@ export async function listCards(query: LibraryQuery): Promise<CardSummaryList> {
   if (query.sort && query.sort !== 'edited') params.set('sort', query.sort);
   if (query.offset) params.set('offset', String(query.offset));
   if (query.limit) params.set('limit', String(query.limit));
-  return call(`/api/workspaces/${workspace}/card-summaries?${params}`);
+  return call(`/api/workspaces/${encodeURIComponent(workspace)}/card-summaries?${params}`);
 }
 
 const json = (value: unknown): RequestInit => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(value) });
 export async function setFavorite(cardId: string, favorite: boolean) {
-  await call(`/api/workspaces/${await libraryId()}/cards/${encodeURIComponent(cardId)}/favorite`, { method: favorite ? 'PUT' : 'DELETE' });
+  await call(`/api/workspaces/${encodeURIComponent(await libraryId())}/cards/${encodeURIComponent(cardId)}/favorite`, { method: favorite ? 'PUT' : 'DELETE' });
 }
 export async function deleteCard(cardId: string) {
-  await call(`/api/workspaces/${await libraryId()}/cards/${encodeURIComponent(cardId)}`, { method: 'DELETE' });
+  await call(`/api/workspaces/${encodeURIComponent(await libraryId())}/cards/${encodeURIComponent(cardId)}`, { method: 'DELETE' });
 }
 export async function followCreator(creator: string, follow: boolean) {
-  await call(`/api/workspaces/${await libraryId()}/followed-creators`, { method: follow ? 'PUT' : 'DELETE', ...json({ creator }) });
+  await call(`/api/workspaces/${encodeURIComponent(await libraryId())}/followed-creators`, { method: follow ? 'PUT' : 'DELETE', ...json({ creator }) });
 }
 export async function listFollowedCreators(): Promise<string[]> {
-  return (await call<{ creators: string[] }>(`/api/workspaces/${await libraryId()}/followed-creators`)).creators;
+  return (await call<{ creators: string[] }>(`/api/workspaces/${encodeURIComponent(await libraryId())}/followed-creators`)).creators;
 }
 
 export async function listCardTags(): Promise<{ tag: string; count: number }[]> {
-  return (await call<{ tags: { tag: string; count: number }[] }>(`/api/workspaces/${await libraryId()}/card-tags`)).tags;
+  return (await call<{ tags: { tag: string; count: number }[] }>(`/api/workspaces/${encodeURIComponent(await libraryId())}/card-tags`)).tags;
 }
 
-export async function openCard(id: string): Promise<OpenedCard> {
-  return call(`/api/workspaces/${await libraryId()}/cards/${encodeURIComponent(id)}`);
+export async function openCard(id: string, options: { signal?: AbortSignal } = {}): Promise<OpenedCard> {
+  return call(`/api/workspaces/${encodeURIComponent(await libraryId())}/cards/${encodeURIComponent(id)}`, options);
 }
 
 export async function importFile(file: File) {
-  return call<{ card: { id: string } }>(`/api/workspaces/${await libraryId()}/imports`, {
+  return call<{ card: { id: string } }>(`/api/workspaces/${encodeURIComponent(await libraryId())}/imports`, {
     method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name), 'x-file-name-encoding': 'uri' }, body: file,
   });
 }
 
-export function portraitUrl(workspace: string, cardId: string, revisionId: string) {
-  return `/api/workspaces/${workspace}/cards/${cardId}/asset?${new URLSearchParams({ revisionId, path: 'portrait' })}`;
+export function assetUrl(workspace: string, cardId: string, revisionId: string, path: string) {
+  return `/api/workspaces/${encodeURIComponent(workspace)}/cards/${encodeURIComponent(cardId)}/asset?${new URLSearchParams({ revisionId, path })}`;
 }
-
-export async function downloadExport(cardId: string, revisionId: string, format: ExportFormat, filename: string) {
-  const response = await fetchWithSession(`/api/workspaces/${await libraryId()}/cards/${cardId}/export?${new URLSearchParams({ format, revisionId })}`);
+export function portraitUrl(workspace: string, cardId: string, revisionId: string) {
+  return assetUrl(workspace, cardId, revisionId, 'portrait');
+}
+export function originalUrl(workspace: string, cardId: string) {
+  return `/api/workspaces/${encodeURIComponent(workspace)}/cards/${encodeURIComponent(cardId)}/original`;
+}
+export interface SavedAssetMetadata { path: string; hash: string; byteLength: number; mediaType: string }
+export interface RevisionAssets { revisionId: string; assets: SavedAssetMetadata[] }
+export async function listAssets(cardId: string, revisionId: string, signal?: AbortSignal) {
+  return call<RevisionAssets>(`${await cardPath(cardId)}/assets?${new URLSearchParams({ revisionId })}`, signalInit(signal));
+}
+async function download(path: string, filename: string, action: string) {
+  const response = await fetchWithSession(path);
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
-    throw new Error(body?.error?.message ?? `Export failed (${response.status})`);
+    throw new Error(body?.error?.message ?? `${action} failed (${response.status})`);
   }
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement('a');
   link.href = url; link.download = filename; link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+export async function downloadOriginal(cardId: string, filename: string) {
+  return download(originalUrl(await libraryId(), cardId), filename, 'Original download');
+}
+
+export async function downloadExport(cardId: string, revisionId: string, format: ExportFormat, filename: string) {
+  return download(`${await cardPath(cardId)}/export?${new URLSearchParams({ format, revisionId })}`, filename, 'Export');
+}
 
 // Editor host ports (same endpoints as the current Architect host).
-const cardPath = async (card: string) => `/api/workspaces/${await libraryId()}/cards/${encodeURIComponent(card)}`;
+const cardPath = async (card: string) => `/api/workspaces/${encodeURIComponent(await libraryId())}/cards/${encodeURIComponent(card)}`;
 const signalInit = (signal?: AbortSignal): RequestInit => (signal ? { signal } : {});
 export interface SavedRevision { id: string; sequence: number; document: CardDocument; createdAt: string }
 export const editorApi = {
@@ -152,6 +174,6 @@ export const editorApi = {
 };
 
 export interface CardFamily { parent: CardSummary | null; forks: CardSummary[]; forkTotal: number }
-export async function cardFamily(id: string) {
-  return call<CardFamily>(`${await cardPath(id)}/family`);
+export async function cardFamily(id: string, options: { signal?: AbortSignal } = {}) {
+  return call<CardFamily>(`${await cardPath(id)}/family`, options);
 }

@@ -1,5 +1,24 @@
 # Implementation status and acceptance gates
 
+## Native viewer checkpoint, 2026-10-13
+
+`cu-1o2.26` is implemented: native React Router shell and viewer, no Next/sharp
+shims or inert client directives. Profile and quick view use native favorites,
+forks, editing, chat placement and downloads; no fabricated social counters or
+nonexistent CardsHub endpoints remain. Stored assets are bound to the displayed
+revision, accepted originals retain their actual format metadata, and authored
+remote image URLs do not auto-fetch. Native dialogs, accessible uncapped content
+collapse, mobile navigation and bounded section tabs replace lifted behaviors.
+
+585 tests across 73 files, all conformance reports, lint, full type-check and
+production web build pass. Seventeen production Node/browser workflows pass
+(nine editor, eight viewer), including original/container/attachment bytes,
+read/export/favorite failures, canceled routes and 401 recovery, URL navigation,
+mobile fit and long content beyond the former 5000px clipping cap. Independent
+review findings were fixed. Live Archive and Foundry publishing remain untouched.
+
+Editor isolation (`cu-1o2.5.12`) is next; wizard QA stays low priority.
+
 ## Native editor integration, 2026-10-13
 
 Owner authorized editor/import cleanup while live Archive takeover remains on

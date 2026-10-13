@@ -20,7 +20,8 @@
   old server fallbacks or placeholder endpoints. Save commits document and staged
   assets together; recovery drafts do not autosave immutable server revisions.
   Global zustand stores still mean one editor per page; lifecycle isolation remains
-  a tracked followup. Viewer/Next-shim removal comes after this editor integration.
+  the next implementation pass. The active viewer/shell is native React Router
+  and browser HTML; do not add Next aliases, shims or old CardsHub endpoints.
   `packages/editor` (scaffold form editor) is being retired. Host apps own auth and routing.
 - Do not kill processes you did not start, discard legacy working-tree changes,
   or modify archived original bytes.
