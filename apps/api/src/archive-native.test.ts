@@ -47,7 +47,7 @@ describe('native Archive through the API', () => {
     const connection = { origin: 'http://archive.test', adminToken: token,
       fetch: async (url: string, init?: RequestInit) => archiveApp.fetch(new Request(url, init)) };
     services.cards = createCardService(services.store, services.assets, { archive: createNativeArchiveReader(connection) });
-    const nativeArchive = createNativeArchiveService(services.cards, connection);
+    const nativeArchive = createNativeArchiveService(services.cards, connection, { admin: true });
     const api = createApi({ cards: services.cards, nativeArchive, authenticate: () => actor });
     const call = (path: string, init?: RequestInit) => api.request(`/api/workspaces/${workspace}/archive/v2${path}`, init);
     return { scheduler, call };

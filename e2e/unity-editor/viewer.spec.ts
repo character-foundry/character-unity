@@ -174,7 +174,7 @@ test('native downloads preserve original and stored attachment bytes and display
   await page.getByRole('button', { name: 'Assets', exact: true }).click();
   const row = page.locator('li, article').filter({ has: page.getByText('notes', { exact: true }) }).last();
   const pending = page.waitForEvent('download');
-  await row.getByRole('link', { name: 'Download asset', exact: true }).click();
+  await row.getByRole('button', { name: 'Download asset', exact: true }).click();
   expect(await readFile((await (await pending).path())!)).toEqual(notes);
   diagnostics.expectedStatuses.add(503);
   const pattern = `**/cards/${imported.card.id}/export?*`;
@@ -279,15 +279,15 @@ test('native quick view and reader fit mobile while keeping tab navigation and d
   await page.getByRole('button', { name: 'Assets', exact: true }).click();
   const row = page.locator('li, article').filter({ has: page.getByText('notes', { exact: true }) }).last();
   const pending = page.waitForEvent('download');
-  await row.getByRole('link', { name: 'Download asset', exact: true }).click();
+  await row.getByRole('button', { name: 'Download asset', exact: true }).click();
   expect(await readFile((await (await pending).path())!)).toEqual(notes);
   await screenshot(page, info, 'native-mobile-assets');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), 'No page-level horizontal overflow').toBe(true);
   const portrait = page.getByRole('img', { name: imported.name, exact: true }).first();
-  if (await portrait.count()) {
-    const source = (await portrait.getAttribute('src'))!;
-    expect(await (await page.request.get(source)).body()).toEqual(png);
-  }
+  await expect(portrait).toHaveJSProperty('naturalWidth', 1);
+  await expect(portrait).toHaveAttribute('src', /^blob:/);
+  const displayedPortrait = await portrait.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch((element as HTMLImageElement).src)).arrayBuffer())));
+  expect(Buffer.from(displayedPortrait), 'The authenticated portrait blob retains the exact accepted PNG bytes').toEqual(png);
   await page.getByRole('button', { name: 'Open navigation', exact: true }).click();
   await expect(page.getByRole('link', { name: 'Archive', exact: true })).toBeInViewport();
   await page.keyboard.press('Escape');

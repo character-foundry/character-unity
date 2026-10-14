@@ -18,6 +18,7 @@ import { useCardStore, extractCardData } from '../../../store/card-store';
 import { useSettingsStore } from '../../../store/settings-store';
 import { useTokenStore } from '../../../store/token-store';
 import { useLLMStore } from '../../../store/llm-store';
+import { EditorImage } from '../../../unity/media';
 import {
   normalizeSpec,
   type FocusField,
@@ -105,7 +106,7 @@ function AvatarUpload() {
     <div className="flex flex-col items-center">
       <div className="w-[300px] bg-dark-bg border border-dark-border rounded overflow-hidden mb-2">
         {imageUrl && !imageFailed ? (
-          <img
+          <EditorImage
             src={imageUrl}
             alt="Character Avatar"
             className="w-full h-auto"

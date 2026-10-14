@@ -34,7 +34,7 @@ export class UnityApiClient {
     if (!config.workspaceId.trim()) throw new Error('An editor workspace is required');
     this.config = Object.freeze({ ...config });
     this.workspaceId = config.workspaceId;
-    this.signal = AbortSignal.any([this.lifetime.signal, ...(options.signal ? [options.signal] : [])]);
+    this.signal = AbortSignal.any([this.lifetime.signal, ...(options.signal ? [options.signal] : []), ...(config.signal ? [config.signal] : [])]);
     this.assets = new EditorAssetService({
       head: (cardId) => this.headRevision(cardId),
       list: async (cardId, revisionId) => {
@@ -54,13 +54,24 @@ export class UnityApiClient {
   private async send(path: string, init: RequestInit = {}, retried = false): Promise<Response> {
     const signal = AbortSignal.any([this.signal, ...(init.signal ? [init.signal] : [])]);
     signal.throwIfAborted();
-    const response = await fetch(path, { credentials: 'same-origin', ...init, signal });
+    const response = await (this.config.fetch ?? fetch)(path, { credentials: 'same-origin', ...init, signal });
     signal.throwIfAborted();
-    if (response.status === 401 && !retried && this.config.reconnect) {
+    if (response.status === 401 && !retried && this.config.reconnect && !this.config.fetch) {
       await this.config.reconnect(signal); signal.throwIfAborted();
       return this.send(path, { ...init, signal }, true);
     }
     return response;
+  }
+  async resource(path: string, signal?: AbortSignal): Promise<Blob> {
+    if (!path.startsWith(`${this.base()}/`)) throw new Error('The resource belongs to another editor workspace');
+    const response = await this.send(path, { ...(signal ? { signal } : {}) });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null) as { error?: { message?: string } } | null;
+      throw new Error(body?.error?.message ?? `Resource unavailable (${response.status})`);
+    }
+    const blob = await response.blob();
+    this.signal.throwIfAborted(); signal?.throwIfAborted();
+    return blob;
   }
   private async unity<T>(path: string, init: RequestInit = {}): Promise<Result<T>> {
     try {

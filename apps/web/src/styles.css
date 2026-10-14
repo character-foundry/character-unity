@@ -5,11 +5,20 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 :root {
-  /* Bisexual Lighting Color System - Pink/Blue Neon */
-  --deep-space: #0d0d1a;       /* Primary background - deep blue-black */
-  --cosmic-teal: #151528;      /* Secondary background - slightly lighter */
-  --starlight: #f0f0ff;        /* Primary text - soft white with blue tint */
-  --text-muted: #a0a0c0;       /* Muted text - readable on dark */
+  /* Native shell palette from the supplied library design. */
+  color-scheme: dark;
+  --canvas: #0d0c14;
+  --surface: #14131d;
+  --raised: #1c1a28;
+  --line: #2a2838;
+  --ink: #ecebf3;
+  --muted: #8f8ca3;
+  --accent-ink: #1a0420;
+  --tag: #60a5fa;
+  --deep-space: var(--canvas);
+  --cosmic-teal: var(--raised);
+  --starlight: var(--ink);
+  --text-muted: var(--muted);
 
   /* Bisexual flag inspired accents */
   --bi-pink: #d946ef;          /* Hot pink/magenta - primary accent */
@@ -28,9 +37,9 @@
   --purple-light: #c4b5fd;     /* Light purple */
 
   /* Surface colors - lifted for contrast */
-  --surface-1: #1a1a2e;        /* Card backgrounds */
-  --surface-2: #252542;        /* Elevated surfaces */
-  --surface-3: #2f2f52;        /* Highest elevation */
+  --surface-1: var(--surface);
+  --surface-2: var(--raised);
+  --surface-3: #252233;
 
   /* Semantic mappings */
   --background: var(--deep-space);
@@ -43,11 +52,19 @@
 
   /* Card specific */
   --card-bg: var(--surface-1);
-  --card-border: rgba(139, 92, 246, 0.3);
+  --card-border: var(--line);
   --card-border-hover: var(--bi-pink);
 }
 
 @theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-accent-ink: var(--accent-ink);
+  --color-tag: var(--tag);
   --color-dark-bg: #0f172a;
   --color-dark-surface: #1e293b;
   --color-dark-border: #334155;
@@ -62,10 +79,10 @@
   --color-warning: var(--warning);
 
   /* Bisexual lighting colors as Tailwind classes */
-  --color-deep-space: #0d0d1a;
-  --color-cosmic-teal: #151528;
-  --color-starlight: #f0f0ff;
-  --color-text-muted: #a0a0c0;
+  --color-deep-space: var(--deep-space);
+  --color-cosmic-teal: var(--cosmic-teal);
+  --color-starlight: var(--starlight);
+  --color-text-muted: var(--text-muted);
 
   /* Accent colors */
   --color-nebula: #d946ef;
@@ -82,17 +99,18 @@
   --color-purple-light: #c4b5fd;
 
   /* Surface colors */
-  --color-surface-1: #1a1a2e;
-  --color-surface-2: #252542;
-  --color-surface-3: #2f2f52;
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
 
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: Inter, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
 }
 
 /* Base styles */
 body {
-  background: linear-gradient(135deg, var(--deep-space) 0%, #12102a 40%, #0f1a2e 60%, var(--cosmic-teal) 100%);
+  margin: 0;
+  background: var(--canvas);
   min-height: 100vh;
   color: var(--foreground);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
@@ -104,10 +122,7 @@ body {
 }
 
 .gradient-text {
-  background: linear-gradient(135deg, var(--bi-pink) 0%, var(--bi-purple) 50%, var(--bi-blue) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  color: var(--ink);
 }
 
 /* Bisexual lighting glow effects */
@@ -126,24 +141,18 @@ body {
 }
 
 .glass {
-  background: rgba(26, 26, 46, 0.8);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  background: var(--surface);
+  border: 1px solid var(--line);
 }
 
 .glass-card {
   background: var(--surface-1);
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(139, 92, 246, 0.25);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid var(--line);
+  transition: border-color 0.15s ease;
 }
 
 .glass-card:hover {
-  transform: translateY(-4px);
   background: var(--surface-2);
-  box-shadow:
-    0 20px 40px rgba(217, 70, 239, 0.2),
-    0 10px 20px rgba(59, 130, 246, 0.15);
   border-color: var(--bi-pink);
 }
 
@@ -187,21 +196,20 @@ body {
 }
 
 .filter-tag.active {
-  background: linear-gradient(135deg, var(--bi-pink), var(--bi-purple));
+  background: var(--bi-pink);
   border-color: transparent;
   color: white;
 }
 
 /* Button styles */
 .btn-primary {
-  background: linear-gradient(135deg, var(--bi-pink), var(--bi-purple));
-  color: white;
+  background: var(--bi-pink);
+  color: var(--accent-ink);
   transition: all 0.2s ease;
 }
 
 .btn-primary:hover {
-  box-shadow: 0 0 20px rgba(217, 70, 239, 0.4);
-  transform: translateY(-1px);
+  filter: brightness(1.1);
 }
 
 .btn-secondary {
@@ -249,7 +257,7 @@ a:hover {
 /* Input styles */
 input, textarea, select {
   background: var(--surface-1);
-  border: 1px solid rgba(139, 92, 246, 0.3);
+  border: 1px solid var(--line);
   color: var(--starlight);
   transition: all 0.2s ease;
 }
@@ -261,5 +269,10 @@ input:focus, textarea:focus, select:focus {
 
 input::placeholder, textarea::placeholder {
   color: var(--text-muted);
+}
+
+.density-option:has(input:focus-visible) {
+  outline: 2px solid var(--nebula);
+  outline-offset: 2px;
 }
 

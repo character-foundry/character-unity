@@ -18,12 +18,15 @@ import type { BlobStore } from '@character-unity/blob-store';
 import { createNativeArchiveReader, NativeArchiveUnavailable } from '@character-unity/cards/native-reader';
 import type { NativeArchiveOptions } from '@character-unity/cards/native-reader';
 import type { LibraryIndexDispatcher } from './library-index.js';
+import { createNativeArchiveService } from '@character-unity/cards/native-archive';
 
 /** Hosts supply adapters; both runtimes use the same domain composition. */
 export function composeServices(storage: { store: UnityStore; hub: ReturnType<typeof createHubStore>; outbox: SyncOutboxStore; chat?: ChatStore },
   blobs: BlobStore, archiveClient?: ReturnType<typeof createArchiveClient>, connections: readonly ConfiguredRemote[] = [], archiveOptions?: ArchiveImportOptions,
   /** Local hosts take whole RisuAI packages; hosted ones keep the blob store's default. */
-  assetMaxBytes?: number, nativeArchive?: NativeArchiveOptions, libraryIndex?: LibraryIndexDispatcher) {
+  assetMaxBytes?: number, nativeArchive?: NativeArchiveOptions, libraryIndex?: LibraryIndexDispatcher,
+  /** Only the local single-owner host grants scraper/settings administration. */
+  archiveAdmin = false) {
   const store = libraryIndex?.wrap(storage.store) ?? storage.store;
   const reader = nativeArchive ? createNativeArchiveReader(nativeArchive) : undefined;
   const assets = createAssetService(storage.store, blobs, { ...(assetMaxBytes ? { maxBytes: assetMaxBytes } : {}), external: {
@@ -35,6 +38,7 @@ export function composeServices(storage: { store: UnityStore; hub: ReturnType<ty
     },
   } });
   const cards = createCardService(store, assets, { ...(reader ? { archive: reader } : {}) });
+  const native = nativeArchive ? createNativeArchiveService(cards, nativeArchive, { admin: archiveAdmin }) : undefined;
   const archive = archiveClient ? createArchiveImportService(cards, archiveClient, archiveOptions) : undefined;
   const hub = createHubService(store, storage.hub, assets);
   const remote = (connection: RemoteCardConnection) => {
@@ -43,5 +47,5 @@ export function composeServices(storage: { store: UnityStore; hub: ReturnType<ty
   };
   // Chat apps are reached from the owner's machine only; hosts without a chat store never get the service.
   const chat = storage.chat ? createChatService(store, storage.chat, assets, undefined, { ...(reader ? { archive: reader } : {}) }) : undefined;
-  return { store, assets, cards, ...(libraryIndex ? { libraryIndex: libraryIndex.service(store) } : {}), ...(chat ? { chat } : {}), ...(archive ? { archive } : {}), hub, remote, remotes: createRemoteConnectionsService(store, storage.outbox, connections, remote) };
+  return { store, assets, cards, ...(native ? { nativeArchive: native } : {}), ...(libraryIndex ? { libraryIndex: libraryIndex.service(store) } : {}), ...(chat ? { chat } : {}), ...(archive ? { archive } : {}), hub, remote, remotes: createRemoteConnectionsService(store, storage.outbox, connections, remote) };
 }

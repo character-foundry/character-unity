@@ -11,10 +11,14 @@ const readPrefix = '/api/archive/v2', adminPrefix = '/api/archive/admin/v1';
  * the library), admin pass-through for Settings, and adding a reference to the library. The Archive
  * itself is never written from here except through its admin routes.
  */
-export function createNativeArchiveService(cards: CardService, options: NativeArchiveOptions) {
+export function createNativeArchiveService(cards: CardService, options: NativeArchiveOptions, access: { admin?: boolean } = {}) {
   const reader = createNativeArchiveReader(options);
   const { call, json } = reader;
   const authorize = (actor: Actor, workspaceId: string) => cards.list(actor, workspaceId, { limit: 1 });
+  const authorizeAdmin = async (actor: Actor, workspaceId: string) => {
+    if (access.admin !== true) throw new CardError('FORBIDDEN', 'Archive administration is available only to the local operator');
+    await authorize(actor, workspaceId);
+  };
 
   return {
     async status(actor: Actor, workspaceId: string, signal?: AbortSignal) {
@@ -54,12 +58,15 @@ export function createNativeArchiveService(cards: CardService, options: NativeAr
     },
     async tags(actor: Actor, workspaceId: string) {
       await authorize(actor, workspaceId);
-      return json<{ tags: { tag: string; count: number }[] }>(`${readPrefix}/tags`);
+      const result = await json<{ tags: { tag: string; count: number }[] }>(`${readPrefix}/tags`);
+      await authorize(actor, workspaceId); return result;
     },
     async object(actor: Actor, workspaceId: string, hash: string) {
       await authorize(actor, workspaceId);
       if (!/^[a-f0-9]{64}$/.test(hash)) throw new CardError('INVALID_INPUT', 'Invalid object hash');
-      return call(`${readPrefix}/objects/${hash}`);
+      const response = await call(`${readPrefix}/objects/${hash}`);
+      try { await authorize(actor, workspaceId); return response; }
+      catch (error) { await response.body?.cancel(); throw error; }
     },
     /** Only membership/projection rows are stored; no original or asset bytes. */
     async import(actor: Actor, workspaceId: string, id: string, versionId?: string, favorite = false) {
@@ -72,27 +79,27 @@ export function createNativeArchiveService(cards: CardService, options: NativeAr
     },
     admin: {
       async sources(actor: Actor, workspaceId: string) {
-        await authorize(actor, workspaceId);
+        await authorizeAdmin(actor, workspaceId);
         return json<Record<string, unknown>>(`${adminPrefix}/sources`, {}, true);
       },
       async saveSource(actor: Actor, workspaceId: string, provider: string, body: unknown) {
-        await authorize(actor, workspaceId);
+        await authorizeAdmin(actor, workspaceId);
         return json<Record<string, unknown>>(`${adminPrefix}/sources/${encodeURIComponent(provider)}`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }, true);
       },
       async run(actor: Actor, workspaceId: string, provider: string) {
-        await authorize(actor, workspaceId);
+        await authorizeAdmin(actor, workspaceId);
         return json<{ runId: number }>(`${adminPrefix}/sources/${encodeURIComponent(provider)}/runs`, { method: 'POST' }, true);
       },
       async runs(actor: Actor, workspaceId: string, provider?: string) {
-        await authorize(actor, workspaceId);
+        await authorizeAdmin(actor, workspaceId);
         return json<Record<string, unknown>>(`${adminPrefix}/runs?${new URLSearchParams(provider ? { provider, limit: '20' } : { limit: '20' })}`, {}, true);
       },
       async cancel(actor: Actor, workspaceId: string, runId: number) {
-        await authorize(actor, workspaceId);
+        await authorizeAdmin(actor, workspaceId);
         return json<Record<string, unknown>>(`${adminPrefix}/runs/${runId}/cancel`, { method: 'POST' }, true);
       },
       async block(actor: Actor, workspaceId: string, id: string) {
-        await authorize(actor, workspaceId);
+        await authorizeAdmin(actor, workspaceId);
         return json<Record<string, unknown>>(`${adminPrefix}/cards/${encodeURIComponent(id)}/block`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }, true);
       },
     },

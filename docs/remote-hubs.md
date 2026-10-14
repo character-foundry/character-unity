@@ -1,7 +1,8 @@
 # Connected hubs
 
-The hub can browse a configured peer, pull a private fork, edit it with the shared
-editor, prepare a saved revision for return, and explicitly send or retry that
+The native `apps/web` application can browse a configured peer at `/remotes`, pull
+a private fork, edit it with the session-isolated Architect editor, prepare an
+exact saved or historical revision for return, and explicitly send or retry that
 return. A successful return creates a private draft on the receiving hub. Its
 account can review and publish the received revision separately.
 
@@ -9,6 +10,17 @@ Connections belong to a local account and its immutable HTTPS actor. Operators
 configure destinations and signing keys on the host. Browser requests select a
 connection ID; they never supply a URL, private key, filesystem path or different
 account. Foundry owns the signed protocol, verification and bundle encoding.
+The same shell provides local publication controls at `/sharing`. The earlier
+`apps/hub` remote UI remains for regression checks, not as a second required app.
+
+## Current opaque-resource limit
+
+Same-hub publication preserves opaque Risu `module.risum` bytes. The current
+Unity-to-sync mapping cannot represent that binding, however: a remote publication
+page containing it reports unavailable rather than stripping the module or
+claiming an empty result. Ordinary PNG/JSON and declared-attachment returns are
+covered by the native TLS browser rehearsal. Explicit unsupported-resource
+diagnostics or a versioned wire extension remain open in `cu-1o2.13.1`.
 
 ## Configure the sender
 
@@ -92,11 +104,12 @@ restoring the same account/actor/destination makes them eligible for retry again
 
 ## Browser workflow
 
-1. Sign in to the sender hub and choose a workspace. Under **Remote hubs**, choose
+1. Sign in to the sender's native app and choose a workspace. Under **Remotes**, choose
    the configured connection and browse its visible publications.
 2. **Pull fork** copies a verified snapshot and assets into the private workspace.
-   Open the copy from the library to edit it. An existing draft remains unchanged.
-3. Save edits, choose **Saved revision to return**, then **Prepare return**. The
+   The native app opens the pulled fork in its editor. Unsaved edits are not sent.
+3. Save edits, choose **Saved revision to return**, optionally use **Choose another
+   saved revision** for paginated history, then **Prepare return**. The
    review shows the pinned revision, destination, saved content and asset count.
    Later saves do not replace the selected revision.
 4. **Send saved return** dispatches the persisted job. An uncertain outcome offers
@@ -105,21 +118,32 @@ restoring the same account/actor/destination makes them eligible for retry again
 5. Sign in to the receiving account, review the new private draft and publish an
    explicit saved revision using its existing publication controls.
 
-Before enqueueing, the browser records the preparation ID and selection in
-account/workspace-scoped session storage. A lost response survives a tab reload
-and offers **Retry preparation**. The server's saved-return list is authoritative
-once a job exists. Clearing browser storage or closing the tab can lose an
-unconfirmed preparation notice; refresh saved returns before preparing another.
-Dismissing that notice never deletes an existing server job.
+Before enqueueing, the native browser records the preparation ID and selection
+in actor/workspace-scoped local storage. A lost response survives a tab reload
+and offers **Retry preparation** with the same operation ID. Unreadable notices
+require explicit dismissal; they are not silently replaced. The server's
+saved-return list is authoritative once a job exists. Clearing browser storage
+can lose an unconfirmed preparation notice; refresh saved returns before
+preparing another. Dismissing the notice never deletes an existing server job.
+The retained scaffold uses its earlier session-storage notice; neither notice
+is a substitute for the durable server outbox.
+
+Archive references cannot be selected for return: they are read-only links, not
+remote-owned drafts. Saving unchanged content creates no copy. Save a changed
+owned fork before using owned-revision workflows, and only return a fork pulled
+from the selected configured hub. For ordinary local publication, use Sharing.
 
 Remote errors have `REMOTE_` codes and do not expire the local session. Local
-session expiry or an account change locks the hub and retains its editor state.
+session expiry or an account change locks the app for same-account recovery and
+retains the mounted editor state. The remote client captures one immutable actor
+and workspace; a later login or selection cannot retarget its pending requests.
 Signing keys, key IDs and account credentials are absent from connection/job
 responses. See [outbox state and recovery](sync-outbox.md) for receipt semantics.
 
 ## Routes and verification
 
-All routes below use the account API's cookie, origin and expected-account checks:
+All routes below use the account API's cookie, origin and expected-account checks.
+The native JSON and binary clients use the same captured authenticated connection:
 
 | Route | Effect |
 |---|---|
@@ -131,7 +155,9 @@ All routes below use the account API's cookie, origin and expected-account check
 | `GET /api/remotes/workspaces/:workspace/jobs/:id` | Read one saved job and historical acknowledgment |
 | `POST /api/remotes/workspaces/:workspace/jobs/:id/send` | Send or retry its existing bytes; body must be `{}` |
 
-The HTTP tests cover connection/account isolation, URL/key injection rejection,
+Final validation of the native Sharing/Remotes UI pass is pending; see
+[implementation status](implementation.md). The existing HTTP tests cover
+connection/account isolation, URL/key injection rejection,
 cookie separation, redacted descriptors, removed connections, peer-error mapping
 and local revocation against SQLite and workerd receivers. Additional tests run
 the sender itself inside workerd, including PKCS8 import, outbound SDK signing,
@@ -147,4 +173,6 @@ receiver response. The receiver has one returned draft, exact asset bytes,
 explicit later publication, visible parent linkage and unchanged original bytes.
 Another account cannot discover or use the connection. The mobile screenshot is
 saved with the test artifacts. These checks run in `pnpm check`; remote hosting,
-operational cleanup and live Archive adoption remain open.
+operational cleanup and live Archive adoption remain open. Live Archive writer
+takeover, real embedding-provider acceptance and Foundry publishing remain held;
+this UI work does not activate them or deploy a public hub.

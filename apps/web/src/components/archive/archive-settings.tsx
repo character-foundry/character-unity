@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn } from '@/lib/utils/cn';
 import { formatRelative } from '@/lib/utils/format';
 import { libraryChanged } from '@/lib/library-search';
-import { archiveApi } from '@/lib/archive';
+import { useArchiveApi } from '@/lib/archive';
 import type { ArchiveRun, ArchiveSource, SettingValue } from '@/lib/archive';
 
 const field = 'w-full rounded-md border border-nebula/30 bg-deep-space/60 px-2.5 py-1.5 text-sm text-starlight placeholder:text-starlight/30 focus:border-nebula focus:outline-none';
@@ -45,34 +45,40 @@ function SettingInput({ spec, value, onChange }: { spec: ArchiveSource['settingS
 }
 
 function SourceCard({ source, onChanged }: { source: ArchiveSource; onChanged: () => void }) {
+  const archiveApi = useArchiveApi();
   const [open, setOpen] = useState(false);
   const [settings, setSettings] = useState(source.settings);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [runs, setRuns] = useState<ArchiveRun[] | null>(null);
+  const operation = useRef<AbortController | null>(null), history = useRef<AbortController | null>(null);
+  useEffect(() => () => { operation.current?.abort(); history.current?.abort(); }, [archiveApi, source.provider]);
   useEffect(() => { setSettings(source.settings); }, [source.settings]);
 
-  async function act(task: () => Promise<unknown>) {
+  async function act(task: (signal: AbortSignal) => Promise<unknown>) {
+    const controller = new AbortController(); operation.current?.abort(); operation.current = controller;
     setBusy(true); setError(null);
-    try { await task(); onChanged(); } catch (failure) { setError(failure instanceof Error ? failure.message : 'That did not work'); } finally { setBusy(false); }
+    try { await task(controller.signal); if (!controller.signal.aborted) onChanged(); }
+    catch (failure) { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'That did not work'); }
+    finally { if (operation.current === controller) operation.current = null; if (!controller.signal.aborted) setBusy(false); }
   }
-  const save = () => act(async () => {
+  const save = () => act(async (signal) => {
     const cleaned = Object.fromEntries(Object.entries(settings).map(([key, value]) => [key, Array.isArray(value) ? value.map((item) => item.trim()).filter(Boolean) : value]));
     const changedSecrets = Object.fromEntries(Object.entries(secrets).filter(([, value]) => value !== ''));
-    await archiveApi.saveSource(source.provider, { settings: cleaned, ...(Object.keys(changedSecrets).length ? { secrets: changedSecrets } : {}) });
     setSecrets({});
+    await archiveApi.saveSource(source.provider, { settings: cleaned, ...(Object.keys(changedSecrets).length ? { secrets: changedSecrets } : {}) }, signal);
   });
 
   return (
     <div className="rounded-lg border border-nebula/20 bg-deep-space/30">
       <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
         <label className="flex cursor-pointer items-center gap-2 font-medium">
-          <input type="checkbox" checked={source.enabled} disabled={busy} onChange={(event) => act(() => archiveApi.saveSource(source.provider, { enabled: event.target.checked }))} />
+          <input type="checkbox" checked={source.enabled} disabled={busy} onChange={(event) => { const enabled = event.target.checked; void act((signal) => archiveApi.saveSource(source.provider, { enabled }, signal)); }} />
           {source.label}
         </label>
         <select className={cn(field, 'w-auto py-1 text-xs')} value={source.intervalMinutes} disabled={busy}
-          onChange={(event) => act(() => archiveApi.saveSource(source.provider, { intervalMinutes: Number(event.target.value) }))}>
+          onChange={(event) => { const intervalMinutes = Number(event.target.value); void act((signal) => archiveApi.saveSource(source.provider, { intervalMinutes }, signal)); }}>
           {intervals.map(([minutes, label]) => <option key={minutes} value={minutes} className="bg-surface-1">{label}</option>)}
           {!intervals.some(([minutes]) => minutes === source.intervalMinutes) && <option value={source.intervalMinutes}>Every {source.intervalMinutes} min</option>}
         </select>
@@ -80,9 +86,14 @@ function SourceCard({ source, onChanged }: { source: ArchiveSource; onChanged: (
           {source.running ? <span className="text-xs text-sky-300">Running now…</span> : source.lastRun ? <RunSummary run={source.lastRun} /> : <span className="text-xs text-starlight/40">Never run</span>}
         </div>
         {source.running
-          ? <button type="button" disabled={busy} onClick={() => act(() => archiveApi.cancel(source.running!))} className="rounded-md border border-nebula/30 px-2.5 py-1 text-xs hover:border-nebula">Stop</button>
-          : <button type="button" disabled={busy} onClick={() => act(() => archiveApi.run(source.provider))} className="rounded-md bg-nebula px-2.5 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50">Run now</button>}
-        <button type="button" onClick={() => { setOpen(!open); if (!open) void archiveApi.runs(source.provider).then(setRuns).catch(() => undefined); }}
+          ? <button type="button" disabled={busy} onClick={() => act((signal) => archiveApi.cancel(source.running!, signal))} className="rounded-md border border-nebula/30 px-2.5 py-1 text-xs hover:border-nebula">Stop</button>
+          : <button type="button" disabled={busy} onClick={() => act((signal) => archiveApi.run(source.provider, signal))} className="rounded-md bg-nebula px-2.5 py-1 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50">Run now</button>}
+        <button type="button" onClick={() => {
+          setOpen(!open); history.current?.abort();
+          if (!open) { const controller = new AbortController(); history.current = controller;
+            void archiveApi.runs(source.provider, controller.signal).then((value) => { if (!controller.signal.aborted) setRuns(value); })
+              .catch((failure: unknown) => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Run history is unavailable.'); }); }
+        }}
           aria-expanded={open} className="text-xs text-starlight/50 hover:text-starlight">{open ? 'Close ▴' : 'Options ▾'}</button>
       </div>
       {error && <p role="alert" className="px-3 pb-2 text-xs text-red-300">{error}</p>}
@@ -102,7 +113,7 @@ function SourceCard({ source, onChanged }: { source: ArchiveSource; onChanged: (
                   onChange={(event) => setSecrets({ ...secrets, [spec.key]: event.target.value })} />
                 {spec.help && <p className="text-[11px] text-starlight/40">{spec.help}</p>}
                 {source.secretsSet.includes(spec.key) && (
-                  <button type="button" className="text-[11px] text-red-300 hover:underline" onClick={() => act(() => archiveApi.saveSource(source.provider, { secrets: { [spec.key]: null } }))}>Remove</button>
+                  <button type="button" disabled={busy} className="text-[11px] text-red-300 hover:underline" onClick={() => act((signal) => archiveApi.saveSource(source.provider, { secrets: { [spec.key]: null } }, signal))}>Remove</button>
                 )}
               </label>
             ))}
@@ -122,12 +133,16 @@ function SourceCard({ source, onChanged }: { source: ArchiveSource; onChanged: (
 
 /** Settings → Archive: which sources the Archive scrapes, how often, and with what options and credentials. */
 export function ArchiveSettings() {
+  const archiveApi = useArchiveApi();
   const [sources, setSources] = useState<ArchiveSource[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const request = useRef<AbortController | null>(null);
   const load = useCallback(() => {
-    archiveApi.sources().then((value) => { setSources(value); setError(null); }, (failure: Error) => setError(failure.message));
-  }, []);
-  useEffect(() => { load(); }, [load]);
+    const controller = new AbortController(); request.current?.abort(); request.current = controller;
+    void archiveApi.sources(controller.signal).then((value) => { if (!controller.signal.aborted) { setSources(value); setError(null); } },
+      (failure: unknown) => { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Archive sources are unavailable.'); });
+  }, [archiveApi]);
+  useEffect(() => { setSources(null); setError(null); load(); return () => request.current?.abort(); }, [load]);
   // While something runs, follow its progress; new cards show up in the Archive as they land.
   const running = sources?.some((source) => source.running);
   useEffect(() => {

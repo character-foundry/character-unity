@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router';
-import { importFile } from '@/lib/unity';
+import { useLibraryState } from '@/lib/library-client';
+import { useSession } from '@/lib/session-provider';
+import { useSettings } from '@/lib/settings';
 import { libraryChanged, readSearch, useDebouncedText, writeSearch } from '@/lib/library-search';
 import { cn } from '@/lib/utils/cn';
 
 const libraryPaths = new Set(['/', '/explore', '/archive']);
 // Stats, presets and lorebooks join this list as they are ported.
-const nav = [{ name: 'Library', href: '/' }, { name: 'Archive', href: '/archive' }];
+const nav = [{ name: 'Library', href: '/' }, { name: 'Archive', href: '/archive' }, { name: 'Sharing', href: '/sharing' }, { name: 'Remotes', href: '/remotes' }];
 
 const action = 'flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-starlight/60 transition-colors hover:bg-cosmic-teal hover:text-starlight disabled:opacity-50';
 // The global input rule is unlayered and outranks utilities; the field draws its own frame.
@@ -14,6 +16,9 @@ const bare = { border: 'none', background: 'transparent', boxShadow: 'none', out
 
 /** The top bar: home and pages, the library search (live on the library, Ctrl+K), Import, New and Settings. */
 export function Header() {
+  const { client, workspaces, selectWorkspace, createWorkspace } = useLibraryState();
+  const account = useSession();
+  const { settings, updateSettings } = useSettings();
   const location = useLocation();
   const navigate = useNavigate();
   const onLibrary = libraryPaths.has(location.pathname);
@@ -28,10 +33,27 @@ export function Header() {
   const [text, setText] = useDebouncedText(current?.q ?? '', commitLive);
   const [busy, setBusy] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
+  const [popover, setPopover] = useState<'display' | 'account' | null>(null);
+  const [newWorkspace, setNewWorkspace] = useState(false);
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceBusy, setWorkspaceBusy] = useState(false);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ text: string; error: boolean; existing: { id: string; name: string }[] } | null>(null);
   const mobileNav = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const searchInput = useRef<HTMLInputElement>(null);
+  const popoverRoot = useRef<HTMLDivElement>(null);
+  const displayButton = useRef<HTMLButtonElement>(null), accountButton = useRef<HTMLButtonElement>(null);
+  const mounted = useRef(true);
+  const editorOpen = location.pathname === '/new' || /\/card\/[^/]+\/(?:edit|fork)$/.test(location.pathname);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  useEffect(() => {
+    if (!popover) return;
+    const closeOutside = (event: PointerEvent) => { if (!popoverRoot.current?.contains(event.target as Node)) setPopover(null); };
+    const closeEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') { setPopover(null); (popover === 'display' ? displayButton : accountButton).current?.focus(); } };
+    window.addEventListener('pointerdown', closeOutside); window.addEventListener('keydown', closeEscape);
+    return () => { window.removeEventListener('pointerdown', closeOutside); window.removeEventListener('keydown', closeEscape); };
+  }, [popover]);
 
   useEffect(() => {
     const focus = (event: KeyboardEvent) => {
@@ -63,12 +85,14 @@ export function Header() {
     setBusy(true); setNotice(null);
     let imported = 0; const failed: string[] = [], existing: { id: string; name: string }[] = [];
     for (const file of Array.from(files)) {
+      if (!mounted.current || client.connection.signal.aborted) break;
       try {
-        const result = await importFile(file);
+        const result = await client.importFile(file);
         if (result.import.created && result.import.match !== 'archive') imported += 1;
         else existing.push({ id: result.card.id, name: file.name });
       } catch (failure) { failed.push(`${file.name}: ${failure instanceof Error ? failure.message : 'Import failed'}`); }
     }
+    if (!mounted.current || client.connection.signal.aborted) return;
     setBusy(false); libraryChanged();
     setNotice({ text: `Imported ${imported} card${imported === 1 ? '' : 's'}.${existing.length ? ` Already have ${existing.length}; no duplicate stored.` : ''}${failed.length ? ` Could not import: ${failed.join(', ')}` : ''}`, error: failed.length > 0, existing });
     setTimeout(() => setNotice(null), failed.length || existing.length ? 10_000 : 4000);
@@ -130,12 +154,39 @@ export function Header() {
           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
           <span className="hidden sm:inline">New</span>
         </button>
-        <Link to="/settings" title="Settings" aria-label="Settings" className="group grid h-8 w-8 place-items-center rounded-md transition-colors hover:bg-cosmic-teal">
+        <div ref={popoverRoot} className="relative flex items-center">
+        <button ref={displayButton} type="button" title="Display settings" aria-label="Display settings" aria-expanded={popover === 'display'} aria-controls="display-settings"
+          onClick={() => setPopover(popover === 'display' ? null : 'display')} className="group grid h-8 w-8 place-items-center rounded-md transition-colors hover:bg-cosmic-teal">
           <svg className={cn('h-4 w-4 group-hover:text-starlight', location.pathname === '/settings' ? 'text-starlight' : 'text-starlight/60')} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
           </svg>
-        </Link>
+        </button>
+        <button ref={accountButton} type="button" aria-label="Account and workspace" aria-expanded={popover === 'account'} aria-controls="account-workspace" title={`${client.connection.name} · ${workspaces.find((workspace) => workspace.id === client.workspaceId)?.name ?? 'Workspace'}`}
+          onClick={() => setPopover(popover === 'account' ? null : 'account')} className="ml-1 grid h-7 w-7 place-items-center rounded-full border border-line bg-raised text-xs font-semibold text-ink">{client.connection.name.slice(0, 1).toUpperCase()}</button>
+        {popover === 'display' && <section id="display-settings" aria-label="Display settings" className="absolute right-0 top-10 w-60 rounded-xl border border-line bg-surface p-4 shadow-xl">
+          <p className="mb-3 text-xs font-medium text-muted">Display</p>
+          <fieldset><legend className="mb-2 text-sm text-ink">Card size</legend><div role="radiogroup" aria-label="Card size" className="grid grid-cols-3 gap-1 rounded-lg bg-canvas p-1">
+            {(['large', 'medium', 'small'] as const).map((size) => <label key={size} className={cn('density-option relative cursor-pointer rounded-md px-2 py-2 text-center text-xs capitalize', settings.cardSize === size ? 'bg-raised text-ink' : 'text-muted')}>
+              <input type="radio" name="card-size" value={size} checked={settings.cardSize === size} onChange={() => updateSettings({ cardSize: size })} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />{size[0].toUpperCase() + size.slice(1)}
+            </label>)}
+          </div></fieldset>
+          <Link to="/settings" onClick={() => setPopover(null)} className="mt-4 block border-t border-line pt-3 text-sm">All settings</Link>
+        </section>}
+        {popover === 'account' && <section id="account-workspace" aria-label="Account and workspace" className="absolute right-0 top-10 w-72 max-w-[calc(100vw-1.5rem)] space-y-3 rounded-xl border border-line bg-surface p-4 shadow-xl">
+          <div><p className="font-medium text-ink">{client.connection.name}</p><p className="text-xs text-muted">{client.connection.profile === 'hub' ? 'Hub account' : 'Local installation'}</p></div>
+          <label className="block text-xs text-muted">Workspace<select aria-label="Workspace" value={client.workspaceId} disabled={editorOpen || busy || workspaceBusy} title={editorOpen ? 'Close the editor before switching workspace' : undefined}
+            className="mt-1 w-full rounded-md p-2 text-sm" onChange={(event) => { selectWorkspace(event.target.value); navigate('/'); }}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>
+          {editorOpen && <p className="text-xs text-muted">Close the editor before switching workspace. Your open draft stays with its original workspace.</p>}
+          {!newWorkspace ? <button type="button" disabled={editorOpen || busy} className="text-sm text-nebula disabled:opacity-40" onClick={() => setNewWorkspace(true)}>New workspace</button> : <form className="space-y-2" onSubmit={(event) => {
+            event.preventDefault(); setWorkspaceBusy(true); setAccountError(null);
+            void createWorkspace(workspaceName.trim()).then(() => { if (mounted.current) navigate('/'); }).catch((failure: unknown) => { if (mounted.current) setAccountError(failure instanceof Error ? failure.message : 'Workspace could not be created'); }).finally(() => { if (mounted.current) setWorkspaceBusy(false); });
+          }}><label className="block text-xs">Workspace name<input autoFocus required maxLength={120} value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} className="mt-1 w-full rounded-md p-2 text-sm" /></label>
+            <button type="submit" disabled={!workspaceName.trim() || workspaceBusy} className="btn-primary rounded-md px-3 py-2 text-xs disabled:opacity-40">Create workspace</button></form>}
+          <button type="button" disabled={account.busy || workspaceBusy || busy} className="block w-full border-t border-line pt-3 text-left text-sm text-muted" onClick={() => { void account.logout().catch((failure: unknown) => { if (mounted.current) setAccountError(failure instanceof Error ? failure.message : 'Sign out failed'); }); }}>Sign out</button>
+          {accountError && <p role="alert" className="text-xs text-red-300">{accountError}</p>}
+        </section>}
+        </div>
       </div>
       {notice && (
         <div role={notice.error ? 'alert' : 'status'} className={cn('fixed bottom-4 right-4 z-[200] max-w-[calc(100vw-2rem)] break-words rounded-lg px-4 py-3 text-sm text-white shadow-lg', notice.error ? 'bg-red-600' : 'bg-emerald-600')}>

@@ -30,9 +30,18 @@
   heads, recovery owner, staged assets and cancellation. Require the session provider;
   never add a singleton/current-session fallback. Auxiliary reads must not repin
   the editor's expected head. Shared browser preferences contain no card/draft state.
-  The active viewer/shell is native React Router
-  and browser HTML; do not add Next aliases, shims or old CardsHub endpoints.
-  `packages/editor` (scaffold form editor) is being retired. Host apps own auth and routing.
+  The active `apps/web` library/viewer/editor/sharing/remotes shell uses native
+  React Router and browser HTML; do not add Next aliases, shims or old CardsHub
+  endpoints. Discover the host profile through `/api/client`, not failed-login
+  guessing. Each library client captures one actor/workspace; JSON and protected
+  binary reads use that same expected-account transport. Do not add a mutable
+  global current client or cookie-only protected media/download shortcuts.
+  Hub profiles must not load browser LLM credentials or call those providers.
+  `packages/tokenizer` supplies the portable browser worker; the active app must
+  not depend on `packages/editor` just to count tokens. Earlier Architect/hub
+  scaffolds remain for regressions pending retirement. Retain browser-only
+  IndexedDB data and safe upgrades; scaffold retirement is not authorization to
+  reset that profile. Host apps own auth and routing.
 - Do not kill processes you did not start, discard legacy working-tree changes,
   or modify archived original bytes.
 

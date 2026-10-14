@@ -1,7 +1,7 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { cn } from '@/lib/utils/cn';
 import { useSettings } from '@/lib/settings';
-import type { UserSettings } from '@/lib/settings';
+import { useLibraryClient } from '@/lib/library-client';
 import {
   archiveSortOptions, emptySearch, flagOptions, isFiltered, loadSavedSearches, readSearch, sortOptions, sourceOptions, storeSavedSearches,
   useDebouncedText, useFollowedCreators, writeSearch,
@@ -12,13 +12,13 @@ import { TagPicker } from './tag-picker';
 
 // One sticky bar under the top bar: everyday filters on one row, the rest behind Filters.
 // The top bar's box is the text search, so the bar has none.
-const box = 'flex h-8 shrink-0 items-center rounded-md border border-nebula/25 bg-cosmic-teal/60 text-[13px] focus-within:border-nebula';
+const box = 'flex h-8 shrink-0 items-center rounded-md border border-starlight/10 bg-cosmic-teal text-[13px] focus-within:border-nebula';
 // The global input rule is unlayered and outranks utilities; fields inside `box` draw no frame of their own.
 const bare = { border: 'none', background: 'transparent', boxShadow: 'none', outline: 'none' } as const;
-const segment = (on: boolean) => cn('h-full rounded px-2.5 text-[12px] font-medium transition-colors', on ? 'bg-surface-2 text-starlight' : 'text-starlight/50 hover:text-starlight');
+const segment = (on: boolean) => cn('h-full rounded px-2.5 text-[12px] font-medium transition-colors', on ? 'bg-surface-2 text-starlight' : 'text-text-muted hover:text-starlight');
 const pill = (on: boolean, disabled = false) => cn('h-7 rounded-full border px-2.5 text-[12px] font-medium transition-colors',
-  disabled ? 'cursor-not-allowed border-dashed border-nebula/20 text-starlight/30'
-    : on ? 'border-nebula/60 bg-nebula/15 text-nebula' : 'border-nebula/25 text-starlight/50 hover:text-starlight');
+  disabled ? 'cursor-not-allowed border-dashed border-starlight/10 text-starlight/30'
+    : on ? 'border-nebula/60 bg-nebula/15 text-nebula' : 'border-starlight/10 text-text-muted hover:text-starlight');
 
 function Select({ label, prefix, value, options, onChange }: {
   label: string; prefix?: string; value: string; options: readonly { value: string; label: string }[]; onChange: (value: string) => void;
@@ -26,8 +26,8 @@ function Select({ label, prefix, value, options, onChange }: {
   return (
     <label className={cn(box, 'relative pl-2.5 pr-7')}>
       <span className="sr-only">{label}</span>
-      {prefix && <span className="mr-1 text-starlight/50">{prefix}</span>}
-      <select value={value} onChange={(event) => onChange(event.target.value)} style={bare} className="appearance-none font-medium text-starlight">
+      {prefix && <span className="mr-1 text-text-muted">{prefix}</span>}
+      <select aria-label={label} value={value} onChange={(event) => onChange(event.target.value)} style={bare} className="appearance-none font-medium text-starlight">
         {options.map((option) => <option key={option.value} value={option.value} className="bg-surface-1">{option.label}</option>)}
       </select>
       <svg className="pointer-events-none absolute right-2 h-3.5 w-3.5 text-starlight/40" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -55,11 +55,6 @@ function Segmented<T extends string>({ label, value, options, onChange }: {
 const icon = (d: string) => (
   <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d} /></svg>
 );
-const sizes: { value: UserSettings['cardSize']; label: React.ReactNode; title: string }[] = [
-  { value: 'large', title: 'Large cards', label: icon('M7 3h10a2 2 0 012 2v14a2 2 0 01-2 2H7a2 2 0 01-2-2V5a2 2 0 012-2z') },
-  { value: 'medium', title: 'Medium cards', label: icon('M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z') },
-  { value: 'small', title: 'Small cards', label: icon('M4 4h4v4H4zM10 4h4v4h-4zM16 4h4v4h-4zM4 10h4v4H4zM10 10h4v4h-4zM16 10h4v4h-4zM4 16h4v4H4zM10 16h4v4h-4zM16 16h4v4h-4z') },
-];
 
 const syntax = [
   ['"modern city"', 'exact phrase'],
@@ -88,14 +83,17 @@ export function FilterBar({ page = 'library', tags, search, update, replace, cou
   total: number | null;
 }) {
   const archive = page === 'archive';
+  const client = useLibraryClient();
   const followed = useFollowedCreators();
-  const { settings, updateSettings } = useSettings();
+  const { settings } = useSettings();
   const [minTokens, setMinTokens] = useDebouncedText(search.minTokens, useCallback((value: string) => update({ minTokens: value }), [update]), 500);
   const [expr, setExpr, flushExpr] = useDebouncedText(search.expr, useCallback((value: string) => update({ expr: value }), [update]), 600);
   const [open, setOpen] = useState(() => !!search.expr.trim());
   const [help, setHelp] = useState(false);
-  const [saved, setSaved] = useState<SavedSearch[]>(() => loadSavedSearches(page));
-  const keep = (next: SavedSearch[]) => { setSaved(next); storeSavedSearches(next, page); };
+  const [savedState, setSavedState] = useState<{ owner: string; page: SearchPage; rows: SavedSearch[] }>(() => ({ owner: client.scopeKey, page, rows: loadSavedSearches(client, page) }));
+  const saved = savedState.owner === client.scopeKey && savedState.page === page ? savedState.rows : [];
+  useEffect(() => { setSavedState({ owner: client.scopeKey, page, rows: loadSavedSearches(client, page) }); }, [client, page]);
+  const keep = (next: SavedSearch[]) => { setSavedState({ owner: client.scopeKey, page, rows: next }); storeSavedSearches(client, next, page); };
   const params = writeSearch(search).toString();
   const applied = saved.find((item) => item.params === params);
 
@@ -110,33 +108,33 @@ export function FilterBar({ page = 'library', tags, search, update, replace, cou
   }
 
   return (
-    <div className="sticky top-12 z-30 border-b border-nebula/20 bg-deep-space/95 backdrop-blur">
-      <div className="flex flex-wrap items-center gap-2 px-3 py-2 sm:px-4">
-        <TagPicker compact className="min-w-[200px] flex-1" label="Include tags" tone="include" value={search.tags} options={tags} blocked={search.exclude}
+    <div className="sticky top-12 z-30 border-b border-starlight/10 bg-deep-space/95 backdrop-blur">
+      <div className="flex flex-wrap items-center gap-1.5 px-3 py-1.5 sm:px-4">
+        <TagPicker compact className="min-w-[min(220px,100%)] flex-1" label="Include tags" tone="include" value={search.tags} options={tags} blocked={search.exclude}
           onChange={(next) => update({ tags: next })} placeholder="Filter by tag…"
           icon={<svg className="h-3.5 w-3.5 shrink-0 text-starlight/40" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" /></svg>} />
 
         <Select label="Sort" value={search.sort || (archive ? 'updated' : 'edited')} options={archive ? archiveSortOptions : sortOptions} onChange={(sort) => update({ sort })} />
 
         {!archive && (<>
-          <Segmented label="Cards" value={search.fork} onChange={(fork) => update({ fork })}
-            options={[{ value: '', label: 'All' }, { value: 'none', label: 'Originals' }, { value: 'only', label: 'Forks' }]} />
+          <Select label="Originals or forks" value={search.fork} onChange={(fork) => update({ fork: fork === 'only' || fork === 'none' ? fork : '' })}
+            options={[{ value: '', label: 'All cards' }, { value: 'none', label: 'Originals' }, { value: 'only', label: 'Forks' }]} />
           <button type="button" aria-pressed={search.favorite === 'fav'} onClick={() => update({ favorite: search.favorite === 'fav' ? '' : 'fav' })}
-            className={cn(box, 'gap-1.5 px-2.5 text-[12px] font-medium transition-colors', search.favorite === 'fav' ? 'border-nebula/60 bg-nebula/15 text-nebula' : 'text-starlight/50 hover:text-starlight')}>
+            className={cn(box, 'gap-1.5 px-2.5 text-[12px] font-medium transition-colors', search.favorite === 'fav' ? 'border-nebula/60 bg-nebula/15 text-nebula' : 'text-text-muted hover:text-starlight')}>
             <HeartIcon className="h-3.5 w-3.5" filled={search.favorite === 'fav'} />
             Favorites
           </button>
         </>)}
 
         <button type="button" aria-expanded={open} aria-controls="library-filters" onClick={() => setOpen(!open)}
-          className={cn(box, 'gap-1.5 px-2.5 text-[12px] font-medium transition-colors', open || advanced ? 'bg-surface-2 text-starlight' : 'text-starlight/50 hover:text-starlight')}>
+          className={cn(box, 'gap-1.5 px-2.5 text-[12px] font-medium transition-colors', open || advanced ? 'bg-surface-2 text-starlight' : 'text-text-muted hover:text-starlight')}>
           {icon('M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4')}
           Filters
           {advanced > 0 && <span className="grid h-4 min-w-4 place-items-center rounded bg-nebula px-1 text-[10px] font-bold text-white">{advanced}</span>}
         </button>
 
-        <div className="ml-auto flex shrink-0 items-center gap-2">
-          <span className="text-[12px] tabular-nums text-starlight/50" aria-live="polite" title={hidden.length ? `Not showing ${hidden.join(' or ')} (Settings)` : undefined}>
+        <div className="ml-auto flex shrink-0 items-center gap-2 pl-1">
+          <span className="text-[12px] tabular-nums text-text-muted" aria-live="polite" title={hidden.length ? `Not showing ${hidden.join(' or ')} (Settings)` : undefined}>
             {count !== null && <><span className="font-semibold text-starlight">{count}</span>{total !== null && count !== total && ` / ${total}`} cards</>}
             {hidden.length > 0 && <span className="text-starlight/30"> · {hidden.join(', ')} hidden</span>}
           </span>
@@ -144,12 +142,11 @@ export function FilterBar({ page = 'library', tags, search, update, replace, cou
             <button type="button" onClick={() => { setMinTokens(''); setExpr(''); replace({ ...emptySearch, sort: search.sort }); }}
               className="text-[12px] font-medium text-nebula hover:underline">Clear</button>
           )}
-          <Segmented label="Card size" value={settings.cardSize} options={sizes} onChange={(cardSize) => updateSettings({ cardSize })} />
         </div>
       </div>
 
       {open && (
-        <div id="library-filters" className="border-t border-nebula/20 px-3 py-2 sm:px-4">
+        <div id="library-filters" className="border-t border-starlight/10 px-3 py-1.5 sm:px-4">
           <form onSubmit={(event) => { event.preventDefault(); flushExpr(); }} className="mb-2 flex items-center gap-2">
             <label className={cn(box, 'min-w-0 flex-1 gap-2 px-2.5')}>
               <span className="shrink-0 text-starlight/50">Advanced search</span>
@@ -170,8 +167,8 @@ export function FilterBar({ page = 'library', tags, search, update, replace, cou
               <li className="text-starlight/40 sm:col-span-2 lg:col-span-3">Works here and in the top search box; both apply together. Plain words search name, creator, description, creator notes, personality, scenario, first message and tags. Write OR and NOT in capitals.</li>
             </ul>
           )}
-          <div className="flex flex-wrap items-center gap-2">
-            <TagPicker compact className="min-w-[200px] flex-1" label="Exclude tags" tone="exclude" value={search.exclude} options={tags} blocked={search.tags}
+          <div className="flex flex-wrap items-center gap-1.5">
+            <TagPicker compact className="min-w-[min(220px,100%)] flex-1" label="Exclude tags" tone="exclude" value={search.exclude} options={tags} blocked={search.tags}
               onChange={(next) => update({ exclude: next })} placeholder="Exclude tags…" />
             <Segmented label="Tag match mode" value={search.tagMode} onChange={(tagMode) => update({ tagMode })}
               options={[{ value: 'any', label: 'Match any' }, { value: 'all', label: 'Match all' }]} />

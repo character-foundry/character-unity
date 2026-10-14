@@ -1,6 +1,7 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Button } from '@/components/ui';
 import { useSettings } from '@/lib/settings';
+import { useLibraryClient } from '@/lib/library-client';
 import { archiveSortOptions, emptySearch, flagOptions, loadSavedSearches, readSearch, sourceOptions, storeSavedSearches, writeSearch } from '@/lib/library-search';
 import type { LibrarySearch, SavedSearch } from '@/lib/library-search';
 import { archiveIsFiltered, archiveMode, archiveModes, archiveOrders, modeAvailable } from '@/lib/archive-search';
@@ -15,8 +16,11 @@ export function ArchiveSearchBar({ search, submit, retry, status, tags, loading 
   search: LibrarySearch; submit(search: LibrarySearch): void; retry(): void;
   status: ArchiveStatus | null; tags: readonly { tag: string; count: number }[]; loading: boolean;
 }) {
+  const client = useLibraryClient();
   const [draft, setDraft] = useState(search);
-  const [saved, setSaved] = useState<SavedSearch[]>(() => loadSavedSearches('archive'));
+  const [savedState, setSavedState] = useState<{ owner: string; rows: SavedSearch[] }>(() => ({ owner: client.scopeKey, rows: loadSavedSearches(client, 'archive') }));
+  const saved = savedState.owner === client.scopeKey ? savedState.rows : [];
+  useEffect(() => { setSavedState({ owner: client.scopeKey, rows: loadSavedSearches(client, 'archive') }); }, [client]);
   const { settings, updateSettings } = useSettings();
   const guide = useId();
   const mode = archiveMode(draft), capabilities = status?.capabilities;
@@ -30,7 +34,7 @@ export function ArchiveSearchBar({ search, submit, retry, status, tags, loading 
     const name = window.prompt('Name this Archive search', draft.q.trim() || draft.archiveFilter.trim() || 'My Archive search')?.trim();
     if (!name) return;
     const next = [...saved.filter((item) => item.name.toLowerCase() !== name.toLowerCase()), { name, params: writeSearch(draft).toString() }].sort((a, b) => a.name.localeCompare(b.name));
-    setSaved(next); storeSavedSearches(next, 'archive');
+    setSavedState({ owner: client.scopeKey, rows: next }); storeSavedSearches(client, next, 'archive');
   };
   return <section aria-label="Archive search controls" className="border-b border-nebula/20 bg-deep-space/95 px-3 py-3 sm:px-4">
     <form onSubmit={(event) => { event.preventDefault(); submit({ ...draft, archiveMode: mode }); }} className="space-y-3">

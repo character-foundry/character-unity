@@ -19,6 +19,18 @@ describe('native editor Save API', () => {
   beforeEach(() => { api = new UnityApiClient({ workspaceId: 'asset-tests' }); editorAssets = api.assets; });
   afterEach(() => { api.dispose(); vi.unstubAllGlobals(); });
 
+  it('uses the injected account transport for editor JSON and binary resources without a global fetch fallback', async () => {
+    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => String(input).includes('/asset?')
+      ? new Response('protected image', { headers: { 'content-type': 'image/png' } }) : Response.json(opened('existing')));
+    const global = vi.fn(); vi.stubGlobal('fetch', global);
+    const pinned = new UnityApiClient({ workspaceId: 'account', fetch: (path, init) => fetcher(path, init) });
+    try {
+      expect((await pinned.getCard('existing')).data?.meta.id).toBe('existing');
+      expect(await (await pinned.resource('/api/workspaces/account/cards/existing/asset?revisionId=head-1&path=portrait')).text()).toBe('protected image');
+      expect(global).not.toHaveBeenCalled();
+    } finally { pinned.dispose(); }
+  });
+
   it('keeps an asset draft and original expected head after a failed Save, then commits document and asset changes in one request', async () => {
     let head = 'head-1';
     const writes: FormData[] = [];

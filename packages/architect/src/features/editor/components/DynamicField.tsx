@@ -328,6 +328,7 @@ export function DynamicField({
 
   // Handle AI generation (tags, tagline)
   const handleGenerate = useCallback(async () => {
+    if (!session.capabilities.browserLLM) return;
     if (!llmSettings || !aiPrompts) return;
 
     let activeProvider = llmSettings.providers.find(
@@ -457,8 +458,8 @@ export function DynamicField({
       onChange={handleChange}
       tokenCount={tokenCount}
       generating={generating}
-      onGenerate={definition.aiGenerate ? handleGenerate : undefined}
-      onOpenLLMAssist={onOpenLLMAssist}
+      onGenerate={definition.aiGenerate && session.capabilities.browserLLM ? handleGenerate : undefined}
+      onOpenLLMAssist={session.capabilities.browserLLM ? onOpenLLMAssist : undefined}
       onOpenTemplates={onOpenTemplates}
       itemTokenCounts={itemTokenCounts}
     />

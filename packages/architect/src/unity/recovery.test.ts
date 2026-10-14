@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Card } from '../lib/types';
 import { createDraftRecovery } from './recovery';
+import { createEditorSession } from './session';
 
 const { database } = vi.hoisted(() => ({ database: {
   saveDraft: vi.fn(), deleteDraft: vi.fn(), listDrafts: vi.fn(),
@@ -34,6 +35,39 @@ beforeEach(() => {
 });
 
 describe('workspace and owner scoped recovery', () => {
+  it('enables the old namespace only through an explicitly local host connection', async () => {
+    await createDraftRecovery('workspace', 'original-owner-uuid').save('same-card', card('Existing native local draft'), 'original-head');
+    const observer = { subscribe: () => () => {}, snapshot: () => ({ status: 'active' as const }) };
+    const local = createEditorSession({ workspaceId: 'workspace', actorId: 'local', connection: { ...observer, profile: 'local' } });
+    const account = createEditorSession({ workspaceId: 'workspace', actorId: 'alice', connection: { ...observer, profile: 'hub' } });
+    try {
+      expect((await local.recovery.load('same-card'))?.baseRevisionId).toBe('original-head');
+      expect(await account.recovery.load('same-card')).toBeNull();
+    } finally { local.dispose(); account.dispose(); }
+  });
+  it('reads old local drafts only with an explicit local upgrade namespace and preserves exact acknowledgments', async () => {
+    const old = createDraftRecovery('workspace', 'old-owner-uuid');
+    await old.save('same-card', card('Old local draft'), 'old-head');
+    const scoped = JSON.stringify(['local', 'workspace']);
+    const local = createDraftRecovery(scoped, 'new-owner-uuid', { legacyLocalWorkspace: 'workspace' });
+    const offered = (await local.load('same-card'))!;
+    expect(offered).toMatchObject({ key: 'unity:["workspace","same-card"]:old-owner-uuid', baseRevisionId: 'old-head' });
+    expect(await createDraftRecovery(JSON.stringify(['alice', 'workspace']), 'account-owner').load('same-card')).toBeNull();
+    await local.dismiss!(offered);
+    expect(await createDraftRecovery(scoped, 'another-reader', { legacyLocalWorkspace: 'workspace' }).load('same-card')).toBeNull();
+    expect(rows.has(offered.key)).toBe(true);
+    await old.save('same-card', card('Later old-editor snapshot'), 'new-head');
+    expect((await local.load('same-card'))?.baseRevisionId).toBe('new-head');
+    await local.save('same-card', card('New scoped draft'), 'scoped-head');
+    await local.remove('same-card');
+    expect(rows.has(offered.key)).toBe(true);
+  });
+
+  it('does not conceal a failed local upgrade read behind the other namespace', async () => {
+    const recovery = createDraftRecovery(JSON.stringify(['local', 'workspace']), 'owner', { legacyLocalWorkspace: 'workspace' });
+    database.listDrafts.mockRejectedValueOnce(new Error('Recovery database unavailable'));
+    await expect(recovery.load('same-card')).rejects.toThrow('Recovery database unavailable');
+  });
   it('stores separate snapshots for identical card ids and removes only its own row', async () => {
     const first = createDraftRecovery('workspace-a', 'owner-a');
     const second = createDraftRecovery('workspace-a', 'owner-b');

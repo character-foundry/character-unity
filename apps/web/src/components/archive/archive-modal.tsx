@@ -1,11 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { Modal, ModalBody } from '@/components/ui';
 import { cn } from '@/lib/utils/cn';
 import { formatCount, formatDate } from '@/lib/utils/format';
 import { useSettings } from '@/lib/settings';
 import { FollowButton } from '@/components/cards/card-actions';
-import { archiveApi, providerLabels, useObjectUrl } from '@/lib/archive';
+import { providerLabels, useArchiveApi, useObjectUrl } from '@/lib/archive';
+import { ProtectedImage } from '@/components/ui/protected-media';
 import type { ArchiveCard, ArchiveCardDetail } from '@/lib/archive';
 import { AddToLibrary } from './archive-card';
 
@@ -23,20 +24,23 @@ function Section({ title, value }: { title: string; value: string }) {
 
 /** Archive quick view. Library membership references a pinned version without copying files. */
 export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCard | null; onClose: () => void; onRemoved: () => void }) {
+  const archiveApi = useArchiveApi();
   const { settings } = useSettings();
   const [detail, setDetail] = useState<ArchiveCardDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const operation = useRef<AbortController | null>(null);
   const image = useObjectUrl(card?.portrait ?? null);
   useEffect(() => {
-    setDetail(null); setError(null);
+    setDetail(null); setError(null); setBusy(false); operation.current?.abort();
     if (!card) return;
     const controller = new AbortController();
     archiveApi.card(card.id, card.versionId, controller.signal).then(
       (value) => { if (!controller.signal.aborted) setDetail(value); },
       (failure: Error) => { if (!controller.signal.aborted) setError(failure.message); },
     );
-    return () => controller.abort();
-  }, [card]);
+    return () => { controller.abort(); operation.current?.abort(); };
+  }, [archiveApi, card]);
   if (!card) return null;
   const data = detail?.document?.data ?? {};
   const nsfw = card.tags.some((tag) => tag.toLowerCase() === 'nsfw');
@@ -48,7 +52,7 @@ export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCa
       <ModalBody className="p-0">
         <div className="flex flex-col lg:flex-row">
           <div className="relative aspect-[3/4] w-full flex-shrink-0 bg-cosmic-teal lg:aspect-auto lg:min-h-[600px] lg:w-2/5">
-            {image && <img src={image} alt={card.name} className={cn('absolute inset-0 h-full w-full rounded-t-2xl object-cover lg:rounded-l-2xl lg:rounded-tr-none', settings.blurNsfwContent && nsfw && 'blur-xl')} />}
+            {image && <ProtectedImage src={image} alt={card.name} className={cn('absolute inset-0 h-full w-full rounded-t-2xl object-cover lg:rounded-l-2xl lg:rounded-tr-none', settings.blurNsfwContent && nsfw && 'blur-xl')} />}
           </div>
           <div className="max-h-[600px] flex-1 space-y-4 overflow-y-auto p-6 lg:max-h-[80vh]">
             <div className="flex items-start justify-between gap-3">
@@ -67,11 +71,14 @@ export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCa
               <a href={card.url} target="_blank" rel="noreferrer noopener" className="rounded-lg border border-nebula/30 px-3 py-1.5 text-sm text-starlight/80 hover:border-nebula">
                 Open on {providerLabels[card.provider] ?? card.provider} ↗
               </a>
-              <button type="button" className="rounded-lg border border-red-500/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10"
+              <button type="button" disabled={busy} className="rounded-lg border border-red-500/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-40"
                 onClick={async () => {
                   if (!window.confirm(`Remove “${card.name}” from the Archive? It will be hidden and never fetched again. Its files stay on disk.`)) return;
-                  try { await archiveApi.block(card.id); onRemoved(); } catch (failure) { window.alert(failure instanceof Error ? failure.message : 'Could not remove it'); }
-                }}>Remove from Archive</button>
+                  const controller = new AbortController(); operation.current = controller; setBusy(true); setError(null);
+                  try { await archiveApi.block(card.id, controller.signal); if (!controller.signal.aborted) onRemoved(); }
+                  catch (failure) { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Could not remove it'); }
+                  finally { if (operation.current === controller) operation.current = null; if (!controller.signal.aborted) setBusy(false); }
+                }}>{busy ? 'Removing…' : 'Remove from Archive'}</button>
             </div>
             <p className="text-xs text-starlight/50">Adding or favoriting keeps a library link to this archived version. The original and its files stay in Archive; saving a changed edit creates your fork. Unfavoriting keeps the link.</p>
 

@@ -1,5 +1,7 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
-import { call, libraryId, UnityError } from './unity';
+import type { LibraryClient } from './unity';
+import { UnityError } from './unity';
+import { useLibraryClient } from './library-client';
 
 export type ChatKind = 'sillytavern' | 'lumiverse' | 'marinara';
 export type PlacementStatus = 'current' | 'behind' | 'edited' | 'missing';
@@ -28,88 +30,117 @@ export const statusInfo: Record<PlacementStatus, { label: string; tone: string; 
   missing: { label: 'Gone', tone: 'bg-starlight/10 text-starlight/50 border-starlight/20', hint: 'The copy was not found at the last scan.' },
 };
 
-const base = async () => `/api/workspaces/${await libraryId()}/chat`;
-const jsonInit = (method: string, body: unknown): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+type ChatLibrary = Pick<LibraryClient, 'workspaceId' | 'connection'>;
+const jsonInit = (method: string, body: unknown, signal?: AbortSignal): RequestInit => ({ method, headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal });
 
-export const chatApi = {
-  async targets() { return (await call<{ targets: ChatTarget[] }>(`${await base()}/targets`)).targets; },
-  async add(input: { kind: ChatKind; name?: string; baseUrl: string; credentials: ChatCredentials }) {
-    return call<ChatTarget>(`${await base()}/targets`, jsonInit('POST', input));
-  },
-  async update(id: string, input: { name?: string; baseUrl?: string; credentials?: ChatCredentials }) {
-    return call<ChatTarget>(`${await base()}/targets/${id}`, jsonInit('PATCH', input));
-  },
-  async remove(id: string) { await call<void>(`${await base()}/targets/${id}`, { method: 'DELETE' }); },
-  async check(id: string) { return call<{ characters: number }>(`${await base()}/targets/${id}/check`, { method: 'POST' }); },
-  async scan(id: string) { return call<{ found: number }>(`${await base()}/targets/${id}/scan`, { method: 'POST' }); },
-  async send(targetId: string, cardId: string, overwriteEdited = false) {
-    return call<ChatPlacement>(`${await base()}/targets/${targetId}/sends`, jsonInit('POST', { cardId, ...(overwriteEdited ? { overwriteEdited } : {}) }));
-  },
-  async forget(targetId: string, remoteId: string) {
-    await call<void>(`${await base()}/targets/${targetId}/placements?${new URLSearchParams({ remoteId })}`, { method: 'DELETE' });
-  },
-  async placements(cardIds?: readonly string[]) {
-    const params = new URLSearchParams(); for (const id of cardIds ?? []) params.append('cardId', id);
-    return (await call<{ placements: ChatPlacement[] }>(`${await base()}/placements?${params}`)).placements;
-  },
-};
-
-// Every send, scan or settings change bumps one version so all views refetch.
-let version = 0;
-const listeners = new Set<() => void>();
-export function chatChanged() { version += 1; targets = null; for (const listener of listeners) listener(); }
-function useChatVersion() {
-  return useSyncExternalStore((listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; }, () => version);
-}
-
-let targets: Promise<ChatTarget[] | 'unavailable'> | null = null;
-function loadTargets() {
-  // A host without chat routes (hub profile) answers 503; hide chat features there.
-  targets ??= chatApi.targets().catch((error: unknown) => (error instanceof UnityError && error.status === 503 ? 'unavailable' as const : []));
-  return targets;
-}
-/** Connected chat apps, or null while loading / when this host has no chat support. */
-export function useChatTargets() {
-  const current = useChatVersion();
-  const [value, setValue] = useState<{ version: number; targets: ChatTarget[] | null; available: boolean }>({ version: -1, targets: null, available: true });
-  useEffect(() => {
-    let active = true;
-    void loadTargets().then((result) => { if (active) setValue({ version: current, targets: result === 'unavailable' ? [] : result, available: result !== 'unavailable' }); });
-    return () => { active = false; };
-  }, [current]);
-  return { targets: value.targets, available: value.available };
-}
-
-/** Placements for the given cards, grouped by card; refetched whenever chat state changes. */
-export function usePlacements(cardIds: readonly string[]) {
-  const current = useChatVersion();
-  const key = cardIds.join(',');
-  const [value, setValue] = useState<Map<string, ChatPlacement[]>>(new Map());
-  useEffect(() => {
-    if (!key) { setValue(new Map()); return; }
-    let active = true;
-    // The API takes at most 100 card IDs per request.
-    const ids = key.split(','), chunks = Array.from({ length: Math.ceil(ids.length / 100) }, (_, index) => ids.slice(index * 100, index * 100 + 100));
-    Promise.all(chunks.map((chunk) => chatApi.placements(chunk))).then((pages) => pages.flat()).then((rows) => {
-      if (!active) return;
-      const grouped = new Map<string, ChatPlacement[]>();
-      for (const row of rows) grouped.set(row.cardId, [...(grouped.get(row.cardId) ?? []), row]);
-      setValue(grouped);
-    }).catch(() => { if (active) setValue(new Map()); });
-    return () => { active = false; };
-  }, [key, current]);
-  return value;
-}
-
-/** Sends a card, asking before it replaces edits made inside the chat app. */
-export async function sendCard(target: ChatTarget, cardId: string): Promise<ChatPlacement | null> {
-  try {
-    return await chatApi.send(target.id, cardId);
-  } catch (error) {
-    if (!(error instanceof UnityError && error.code === 'ACCESS_CHANGED')) throw error;
-    if (!window.confirm(`${error.message}\n\nReplace the copy in ${target.name}?`)) return null;
-    return chatApi.send(target.id, cardId, true);
-  } finally {
-    chatChanged();
+/** One account/workspace owns this cache, its invalidation and every pending request. */
+export function createChatClient(library: ChatLibrary) {
+  const base = `/api/workspaces/${encodeURIComponent(library.workspaceId)}/chat`;
+  const call = <T>(path: string, init?: RequestInit) => library.connection.request<T>(path, init);
+  const targetPath = (id: string) => `${base}/targets/${encodeURIComponent(id)}`;
+  let version = 0, cachedTargets: ChatTarget[] | null = null;
+  let pendingTargets: { promise: Promise<ChatTarget[]>; controller: AbortController; users: Set<symbol> } | null = null;
+  const listeners = new Set<() => void>();
+  function changed() {
+    version += 1; cachedTargets = null; pendingTargets?.controller.abort(); pendingTargets = null;
+    for (const listener of listeners) listener();
   }
+  async function mutation<T>(path: string, init: RequestInit): Promise<T> {
+    try { return await call<T>(path, init); } finally { changed(); }
+  }
+  async function targets(signal?: AbortSignal): Promise<ChatTarget[]> {
+    signal?.throwIfAborted();
+    if (cachedTargets) return cachedTargets;
+    if (!pendingTargets) {
+      const controller = new AbortController(), generation = version;
+      const promise = call<{ targets: ChatTarget[] }>(`${base}/targets`, { signal: controller.signal }).then((value) => {
+        if (generation === version && !controller.signal.aborted) cachedTargets = value.targets;
+        return value.targets;
+      });
+      const next = { promise, controller, users: new Set<symbol>() }; pendingTargets = next;
+      void promise.finally(() => { if (pendingTargets === next) pendingTargets = null; }).catch(() => undefined);
+    }
+    const pending = pendingTargets, user = Symbol('chat-target-reader'); pending.users.add(user);
+    return new Promise((resolve, reject) => {
+      const release = () => { signal?.removeEventListener('abort', abort); pending.users.delete(user); };
+      const abort = () => {
+        release(); reject(signal?.reason ?? new Error('Chat request canceled.'));
+        if (!pending.users.size) { pending.controller.abort(); if (pendingTargets === pending) pendingTargets = null; }
+      };
+      signal?.addEventListener('abort', abort, { once: true });
+      pending.promise.then((value) => { release(); if (!signal?.aborted) resolve(value); }, (error: unknown) => { release(); reject(error); });
+    });
+  }
+  const api = {
+    available: library.connection.profile === 'local', targets, changed,
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    snapshot: () => version,
+    add: (input: { kind: ChatKind; name?: string; baseUrl: string; credentials: ChatCredentials }, signal?: AbortSignal) => mutation<ChatTarget>(`${base}/targets`, jsonInit('POST', input, signal)),
+    update: (id: string, input: { name?: string; baseUrl?: string; credentials?: ChatCredentials }, signal?: AbortSignal) => mutation<ChatTarget>(targetPath(id), jsonInit('PATCH', input, signal)),
+    remove: (id: string, signal?: AbortSignal) => mutation<void>(targetPath(id), { method: 'DELETE', signal }),
+    check: (id: string, signal?: AbortSignal) => mutation<{ characters: number }>(`${targetPath(id)}/check`, { method: 'POST', signal }),
+    scan: (id: string, signal?: AbortSignal) => mutation<{ found: number }>(`${targetPath(id)}/scan`, { method: 'POST', signal }),
+    send: (targetId: string, cardId: string, overwriteEdited = false, signal?: AbortSignal) => mutation<ChatPlacement>(`${targetPath(targetId)}/sends`, jsonInit('POST', { cardId, ...(overwriteEdited ? { overwriteEdited } : {}) }, signal)),
+    forget: (targetId: string, remoteId: string, signal?: AbortSignal) => mutation<void>(`${targetPath(targetId)}/placements?${new URLSearchParams({ remoteId })}`, { method: 'DELETE', signal }),
+    async placements(cardIds?: readonly string[], signal?: AbortSignal) {
+      const params = new URLSearchParams(); for (const id of cardIds ?? []) params.append('cardId', id);
+      return (await call<{ placements: ChatPlacement[] }>(`${base}/placements?${params}`, { signal })).placements;
+    },
+    async sendCard(target: ChatTarget, cardId: string, signal?: AbortSignal): Promise<ChatPlacement | null> {
+      try { return await api.send(target.id, cardId, false, signal); }
+      catch (error) {
+        if (!(error instanceof UnityError && error.code === 'ACCESS_CHANGED')) throw error;
+        signal?.throwIfAborted();
+        if (!window.confirm(`${error.message}\n\nReplace the copy in ${target.name}?`)) return null;
+        return api.send(target.id, cardId, true, signal);
+      }
+    },
+  };
+  return Object.freeze(api);
 }
+export type ChatClient = ReturnType<typeof createChatClient>;
+const clients = new WeakMap<LibraryClient, ChatClient>();
+export function useChatApi() {
+  const library = useLibraryClient();
+  let client = clients.get(library);
+  if (!client) { client = createChatClient(library); clients.set(library, client); }
+  return client;
+}
+function useChatVersion(client: ChatClient) { return useSyncExternalStore(client.subscribe, client.snapshot); }
+
+/** Failures remain visible; account failures are never disguised as an empty connection list. */
+export function useChatTargets() {
+  const api = useChatApi(), version = useChatVersion(api);
+  const [value, setValue] = useState<{ owner: ChatClient; targets: ChatTarget[] | null; error: string | null } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    if (!api.available) return () => controller.abort();
+    setValue((old) => old?.owner === api ? { ...old, error: null } : { owner: api, targets: null, error: null });
+    void api.targets(controller.signal).then((targets) => { if (!controller.signal.aborted) setValue({ owner: api, targets, error: null }); })
+      .catch((failure: unknown) => { if (!controller.signal.aborted) setValue({ owner: api, targets: null, error: failure instanceof Error ? failure.message : 'Chat connections could not be loaded.' }); });
+    return () => controller.abort();
+  }, [api, version]);
+  return { targets: value?.owner === api ? value.targets : null, error: value?.owner === api ? value.error : null, available: api.available, retry: api.changed };
+}
+
+/** Card IDs and reads belong to the captured library, including cancellation and error state. */
+export function usePlacementState(cardIds: readonly string[]) {
+  const api = useChatApi(), version = useChatVersion(api), key = JSON.stringify(cardIds);
+  const [value, setValue] = useState<{ owner: ChatClient; key: string; placements: Map<string, ChatPlacement[]>; error: string | null } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController(), ids = JSON.parse(key) as string[];
+    const empty = () => ({ owner: api, key, placements: new Map<string, ChatPlacement[]>(), error: null });
+    setValue(empty());
+    if (!ids.length || !api.available) return () => controller.abort();
+    const chunks = Array.from({ length: Math.ceil(ids.length / 100) }, (_, index) => ids.slice(index * 100, index * 100 + 100));
+    void Promise.all(chunks.map((chunk) => api.placements(chunk, controller.signal))).then((pages) => {
+      if (controller.signal.aborted) return;
+      const grouped = new Map<string, ChatPlacement[]>();
+      for (const row of pages.flat()) grouped.set(row.cardId, [...grouped.get(row.cardId) ?? [], row]);
+      setValue({ owner: api, key, placements: grouped, error: null });
+    }).catch((failure: unknown) => { if (!controller.signal.aborted) setValue({ ...empty(), error: failure instanceof Error ? failure.message : 'Chat placements could not be loaded.' }); });
+    return () => controller.abort();
+  }, [api, key, version]);
+  return value?.owner === api && value.key === key ? value : { placements: new Map<string, ChatPlacement[]>(), error: null };
+}
+export function usePlacements(cardIds: readonly string[]) { return usePlacementState(cardIds).placements; }

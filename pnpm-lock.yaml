@@ -232,18 +232,21 @@ importers:
 
   apps/web:
     dependencies:
+      '@character-foundry/character-foundry':
+        specifier: link:../../../.unity-foundry-sdk/packages/character-foundry
+        version: link:../../../.unity-foundry-sdk/packages/character-foundry
       '@character-unity/architect':
         specifier: workspace:*
         version: link:../../packages/architect
       '@character-unity/cards':
         specifier: workspace:*
         version: link:../../packages/cards
-      '@character-unity/editor':
-        specifier: workspace:*
-        version: link:../../packages/editor
       '@character-unity/store':
         specifier: workspace:*
         version: link:../../packages/store
+      '@character-unity/tokenizer':
+        specifier: workspace:*
+        version: link:../../packages/tokenizer
       clsx:
         specifier: 2.1.1
         version: 2.1.1
@@ -539,6 +542,9 @@ importers:
       '@character-foundry/character-foundry':
         specifier: link:../../../.unity-foundry-sdk/packages/character-foundry
         version: link:../../../.unity-foundry-sdk/packages/character-foundry
+      '@character-unity/tokenizer':
+        specifier: workspace:*
+        version: link:../tokenizer
     devDependencies:
       '@types/react':
         specifier: 19.3.0
@@ -567,6 +573,12 @@ importers:
       miniflare:
         specifier: 5.20261006.1-alpha
         version: 5.20261006.1-alpha(@types/node@24.19.2)
+
+  packages/tokenizer:
+    dependencies:
+      '@character-foundry/character-foundry':
+        specifier: link:../../../.unity-foundry-sdk/packages/character-foundry
+        version: link:../../../.unity-foundry-sdk/packages/character-foundry
 
   packages/ui:
     devDependencies:

@@ -1,77 +1,52 @@
 # Character Unity
 
-One repository for Archive, Architect and a character-sharing hub. Foundry remains
-an independent SDK for character formats and federation primitives.
+One application for a character library, Archive, editing and sharing. Foundry
+remains an independent SDK for character formats and federation primitives.
 
-The active application is `apps/web`: one library/Archive/viewer/editor shell.
-Its Architect editor now uses native Unity imports, revisions and staged assets;
-portraits and attachments are committed together on explicit Save. New/Fork
-drafts create nothing until Save, and history restores include their assets.
-Browser-local AI settings, templates, presets and wizard remain supported;
-nonexistent old-server modules and duplicate import/storage paths are removed.
+`apps/web` is the active native React Router application in both local and account
+profiles. Its library grid, card menus, viewer, search, sharing and connected-hub
+pages share one shell, with no Next shims or old CardsHub server fallbacks.
+The Architect editor uses native Unity imports, revisions and staged assets;
+explicit Save commits text, portraits and attachments together. New/Fork drafts
+create nothing until Save, and history restores include their assets. Each editor
+owns its workspace, draft, assets, expected revision heads and request lifetime.
 See [current editor status and remaining gaps](docs/editor-port.md).
 
+[Sharing](docs/hub-accounts.md#native-sharing-workflow) reviews and publishes
+1–20 exact saved revisions, including historical revisions. Later saves do not
+change that selection. Publication policy controls visibility, forks and original
+downloads; visible lineage never loads private revision history.
+[Connected hubs](docs/remote-hubs.md) supports configured peers, private pulls and
+reviewed saved returns with explicit send/retry. The browser never supplies peer
+URLs or signing keys.
+
+The host explicitly advertises its local/account profile. Every library client
+captures one authenticated actor and workspace for JSON requests and binary
+downloads. Account expiry or an account change requires recovery as the same
+account; switching accounts disposes the previous client and editor sessions.
+Browser LLM credentials and direct provider requests are local-install features
+and are disabled in the hub profile. Templates, presets and editor preferences
+remain available. These browser features do not provision a publicly hosted hub.
+
 Existing Archive database/files/LanceDB stay in place. Live writer takeover is
-on hold. The native viewer/shell no longer uses Next shims or old CardsHub
-server fallbacks. Each editor now owns its workspace, draft, assets, expected
-revision heads and request lifetime; multiple hosts do not share editing state.
+on hold, along with live embedding-provider acceptance and Foundry publishing.
 Archive favorites now add exact-version library references, not copied cards.
 Unchanged reads and editor drafts resolve through Archive; the first changed Save
 creates an owned fork and retains inherited asset locators. File import checks
 exact bytes, then Foundry content/asset identity across both stores. The native
 Archive page exposes lexical, Boolean, semantic, hybrid and indexed-filter modes,
-with explicit provider, coverage and failure reporting. See
+with explicit provider, coverage and failure reporting. A reference-only Archive
+link cannot be published or returned to a remote hub; first save a changed owned
+fork. An unchanged Save deliberately creates no copy. See
 [in-place setup and explicit indexing gates](docs/archive-existing-storage.md).
 
-The following foundation history describes the earlier standalone/scaffold
-profiles, which remain available for regression checks pending retirement:
-
-**Status: runnable foundation; feature migration remains staged.** Architect has a working core editor with two
-independent drafts; hub mounts the same editor with account sign-in and publishing.
-Both include embedded lorebook settings and entry editing, copying and ordering.
-The [lorebook file workflow](docs/lorebook-files.md) reviews native JSON imports
-before replacing a draft's book and downloads current lorebook edits.
-The shared History view compares saved revisions with a draft without replacing it.
-The Assets view stages portraits and attachments per draft, with explicit saves,
-preview, ordering, removal and exact downloads.
-The shared [Tokens view](docs/text-token-counts.md) counts draft text locally in
-an on-demand browser worker, with explicit coverage and error reporting.
-The shared store now supports workspaces, atomic revisions, forks and asset
-metadata on Node SQLite and local D1. The Node API initializes its own database;
-its asset service has verified filesystem/R2 byte adapters.
-Card import/save/original-download routes now use Foundry identity and local sessions.
-The separate Archive service offers opt-in fixture and copied-SQLite read APIs,
-plus [lexical/Boolean search](docs/archive-search.md) over an explicit copied Lance
-index. Both Architect
-profiles and the hub can review and import an exact Archive selection through the
-same browser component, with card-text search, typed advanced filters, filter-only
-browsing and supported numeric/date ordering when the copied index is configured.
-Opt-in [semantic and hybrid search](docs/archive-semantic-search.md) uses a pinned
-vector copy and an operator-configured query provider, with matched excerpts.
-Explicit [lexical and semantic generation commands](docs/archive-generations.md)
-build new searchable copies from prepared SQLite metadata with a fixed scoring
-date; semantic builds use an explicitly configured embedding provider.
-The [Worker profile](docs/worker-profile.md#archive-reads-and-imports) can configure
-the same Archive read source and import verified originals into D1/R2.
-The shared API now
-supports selected-revision publication and permission-checked forks. Operator-created
-accounts have expiring/revocable sessions. Signed-sync transport and durable peer/replay
-admission are implemented, along with atomic publish/fork receipts.
-[Peer operator commands](docs/peer-operators.md) support Node and local D1;
-[signed publication reads](docs/sync-foundation.md) are available behind an
-HTTPS-only opt-in. Signed publish/fork commands have a separate write flag.
-Remote fork bundles verify parent lineage and exact assets before creating a
-private draft. [Sender services](docs/sync-sender.md) now support public account
-identities, persisted remote pulls and offline return preparation. [Durable return
-jobs](docs/sync-outbox.md) preserve exact selections and recover lost acknowledgments
-after restart. The hub now has [configured remote browsing and return controls](docs/remote-hubs.md),
-including explicit review and retry.
-The hub browses visible published
-revisions and forks sharing an original, with explicit parent links. Rich editor
-tools and live Archive search/scraping still need porting. Remote deployment and
-optional federation integrations remain open.
-No live data, accounts or secrets are included. The editor field metadata is
-extracted from Architect; Foundry stays an external dependency.
+The earlier `apps/architect`, `apps/hub` and `packages/editor` scaffolds remain for
+regression checks pending retirement. The separate browser-only IndexedDB profile
+also remains available; its stored cards and upgrade path have not been discarded.
+The active app depends on the small [tokenizer package](docs/text-token-counts.md),
+not on the scaffold editor for token counting. [Implementation history and open
+gates](docs/implementation.md) distinguish current native capabilities from those
+earlier profiles. No live data, accounts or secrets are included.
 
 ## Run locally
 
@@ -94,13 +69,14 @@ pnpm dev
 its default mode opens no database or search/scraper jobs. Explicit copied-SQLite
 mode reads only an isolated manifest selection; see [copied Archive source](docs/archive-copied-source.md). Architect
 uses the API for sessions and persistence. This default command uses the local
-single-owner profile. Hub sign-in needs the account profile; follow
+single-owner profile. The same web application supports hub sign-in when its API
+uses the account profile; follow
 [hub accounts and setup](docs/hub-accounts.md). Vite proxies `/api` during development.
 
-In Architect, connect to the local library, create a workspace, then import a
-wrapped CCv2/CCv3 JSON, PNG or CharX card. Edit and save explicit revisions.
-You can open two independent drafts, reopen saved cards after a reload and
-download the exact accepted original. Use **Download saved revision** to export
+Open the unified application, choose a workspace from the account menu, then import
+a wrapped CCv2/CCv3 JSON, PNG or CharX card. Edit and save explicit revisions.
+Reopen saved cards after a reload and download the exact accepted original.
+Use the card menu or viewer to export
 a verified JSON/PNG/CharX copy; [export limits and compatibility](docs/card-export.md)
 describe supported cases and explicit loss rejection. A stale draft stays open after a save
 conflict; discard/close it and reopen the current revision when ready.
@@ -181,17 +157,19 @@ The Node and Worker API alternatives both use port 9312; run one at a time.
 Generated Worker types and build outputs are ignored. `pnpm type-check` generates
 the types first. Built Node hosts run with
 `pnpm --filter @character-unity/api-host start` and
-`pnpm --filter @character-unity/archive start`. Static outputs live in
-`apps/architect/dist` and `apps/hub/dist`.
+`pnpm --filter @character-unity/archive start`. The active static output is
+`apps/web/dist`; regression hosts still build `apps/architect/dist` and `apps/hub/dist`.
 Archive's separate native image and synthetic search/restart checks are described
-in [Archive runtime](docs/archive-native-runtime.md). Its public read search still
-uses the fixture/copied contract; full legacy search parity remains open.
+in [Archive runtime](docs/archive-native-runtime.md). Fixture/copied modes remain
+for isolated rehearsals; the active in-house path reads existing storage in place.
+Real-source runs, provider quality and coordinated writer takeover remain open.
 
 ## Ownership
 
 - `apps/archive`: local Archive service; owns the existing database, originals and LanceDB.
-- `apps/architect`: standalone editor host, with local API and browser-only storage profiles.
-- `apps/hub`: sharing host, fresh start with no old CardsHub database migration.
+- `apps/web`: active library, Archive, viewer, Architect editor, sharing and connected-hub UI.
+- `apps/architect`: earlier editor host and retained browser-only storage profile.
+- `apps/hub`: earlier account-host scaffold retained for regressions.
 - `apps/api`: Node and Workers entrypoints for the shared API.
 - `packages/api`: portable Hono routes used by both hosts.
 - `packages/store`: common schema/repositories, native SQLite and D1 adapters,
@@ -204,7 +182,9 @@ uses the fixture/copied contract; full legacy search parity remains open.
 - `packages/archive-browser`: shared Archive search, selection and import UI with an injected host port.
 - `packages/ui`: shared React presentation and CSS, with no application state.
 - `packages/editor`: per-instance draft controller, core CCv2/CCv3 field forms and injected save port.
-- `packages/scraper-kit`: reserved boundary; no runtime implementation yet.
+- `packages/architect`: active session-isolated native editor.
+- `packages/tokenizer`: browser token worker shared without importing scaffold editor UI.
+- `packages/scraper-kit`: plugin contracts shared by the Archive source adapters.
 
 Foundry is consumed through an explicit development link to a pinned external
 checkout. `pnpm bootstrap` prepares sibling `.unity-foundry-sdk`; it refuses to

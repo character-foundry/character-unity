@@ -24,6 +24,9 @@ const docker = async (...args) => (await exec('docker', args, { timeout: 60_000,
 const metadata = JSON.parse(await docker('image', 'inspect', image))[0];
 assert.equal(metadata.Os, 'linux');
 assert.equal(metadata.Config.User, 'node');
+assert.ok(metadata.Config.Env.includes('UNITY_WEB_DIR=/app/web/unity'), 'The API image must default to the native Unity UI');
+const nativeWebRoot = 'apps/web/dist';
+const nativeIndex = await readFile(join(nativeWebRoot, 'index.html'));
 const name = `unity-rehearsal-${randomUUID()}`;
 const temp = await mkdtemp(join(tmpdir(), `${name}-`));
 const volumes = [], containers = new Set();
@@ -109,6 +112,7 @@ try {
     import assert from 'node:assert/strict';
     import { existsSync } from 'node:fs';
     for (const path of ['native-rehearsal.js', 'node_modules/@lancedb/lancedb', 'node_modules/apache-arrow']) assert.equal(existsSync(path), false);
+    for (const path of ['web/unity/index.html', 'web/hub/index.html', 'web/architect/index.html']) assert.equal(existsSync(path), true);
   `);
   const node = await docker('exec', hub, 'node', '--version');
   const foundryCommit = JSON.parse(await docker('exec', hub, 'cat', 'foundry-sdk.json')).commit;
@@ -145,14 +149,23 @@ try {
     return { ...response, json: () => JSON.parse(response.bytes) };
   }
   const home = await request('/');
+  assert.deepEqual(home.bytes, nativeIndex, 'The default image serves the exact native application entry');
+  for (const path of ['/explore', '/archive', '/new', '/search', '/settings', '/sharing', '/remotes', '/chat-apps',
+    '/card/container-saved-card', '/card/container-saved-card/edit', '/card/container-saved-card/fork']) {
+    const page = await request(path);
+    assert.match(page.headers['content-type'], /text\/html/);
+    assert.deepEqual(page.bytes, nativeIndex, `${path} must open the native React Router application`);
+  }
   const asset = home.bytes.toString().match(/src="([^"]+\.js)"/); assert.ok(asset);
   const entryScript = await request(asset[1]);
   assert.match(entryScript.headers['content-type'], /javascript/);
+  assert.deepEqual(entryScript.bytes, await readFile(join(nativeWebRoot, asset[1].slice(1))), 'Container serves the exact native entry bundle');
   const tokenizerPath = entryScript.bytes.toString().match(/\/assets\/tokenizer\.worker-[A-Za-z0-9_-]+\.js/)?.[0];
-  assert.ok(tokenizerPath, 'Hub build must reference its separate tokenizer worker');
+  assert.ok(tokenizerPath, 'Native Unity must reference its separate tokenizer worker');
   const tokenizer = await request(tokenizerPath);
   assert.match(tokenizer.headers['content-type'], /javascript/);
-  assert.deepEqual(tokenizer.bytes, await readFile(join('apps/hub/dist', tokenizerPath.slice(1))), 'Container serves the exact built worker bytes');
+  assert.deepEqual(tokenizer.bytes, await readFile(join(nativeWebRoot, tokenizerPath.slice(1))), 'Container serves the exact native tokenizer worker bytes');
+  assert.deepEqual((await request('/api/client')).json(), { profile: 'hub', capabilities: { browserLLM: false } });
   for (const path of ['/data/unity.db', '/accounts-cli.js', '/peers-cli.js', '/assets-cli.js', '/foundry-sdk.json', '/api/not-a-route']) {
     await request(path, { status: path.startsWith('/api/') ? 401 : 404 });
   }
@@ -169,15 +182,24 @@ try {
     for (const flag of ['; Secure', '; HttpOnly', '; SameSite=Strict', '; Path=/;']) assert.ok(cookie.includes(flag));
     assert.ok(!cookie.includes('Domain='));
     assert.equal(login.json().actor.uri, accounts[name].account.uri);
-    clients[name] = (path, options) => request(`/api/${path}`, { cookie: cookie.split(';')[0], ...options });
+    clients[name] = (path, options = {}) => request(`/api/${path}`, { cookie: cookie.split(';')[0], ...options,
+      headers: { 'x-unity-actor': accounts[name].account.id, ...options.headers } });
   }
   const alice = clients.Alice, bob = clients.Bob;
   const aw = (await alice('workspaces', { method: 'POST', body: { name: 'Container source' }, status: 201 })).json();
   const bw = (await bob('workspaces', { method: 'POST', body: { name: 'Container fork' }, status: 201 })).json();
+  assert.deepEqual((await alice('remotes/connections')).json(), { connections: [] });
+  assert.deepEqual((await alice(`remotes/workspaces/${aw.id}/jobs`)).json(), { jobs: [], nextAfter: null });
+  assert.equal((await alice('workspaces', { headers: { 'x-unity-actor': accounts.Bob.account.id }, status: 409 })).json().error.code, 'ACCOUNT_CHANGED');
+  assert.equal((await alice('hub/publications', { headers: { 'x-unity-actor': accounts.Bob.account.id }, status: 409 })).json().error.code, 'ACCOUNT_CHANGED');
+  assert.equal((await alice('remotes/connections', { headers: { 'x-unity-actor': accounts.Bob.account.id }, status: 409 })).json().error.code, 'ACCOUNT_CHANGED');
   const original = await readFile('e2e/fixtures/opaque-assets.png');
   const imported = (await alice(`workspaces/${aw.id}/imports`, { method: 'POST', body: original,
     headers: { 'content-type': 'image/png', 'x-file-name': 'opaque-assets.png' }, status: 201 })).json();
   const path = `workspaces/${aw.id}/cards/${imported.card.id}`;
+  const blockedOriginal = await alice(`${path}/original`, { headers: { 'x-unity-actor': accounts.Bob.account.id }, status: 409 });
+  assert.match(blockedOriginal.headers['content-type'], /json/);
+  assert.equal(blockedOriginal.json().error.code, 'ACCOUNT_CHANGED');
   imported.revision.document.data.description = 'Saved inside the container.';
   const saved = (await alice(`${path}/revisions`, { method: 'POST', body: { expectedHead: imported.revision.id, document: imported.revision.document } })).json();
   const published = (await alice('hub/publications', { method: 'POST', body: { workspaceId: aw.id, revisionIds: [saved.id],
@@ -256,8 +278,9 @@ try {
   assert.deepEqual((await alice(`${path}/original`)).bytes, original);
   const returned = (await bob(`workspaces/${bw.id}/imports`, { method: 'POST', body: (await bob(exportPath)).bytes,
     headers: { 'content-type': 'application/zip', 'x-file-name': 'fork.charx' }, status: 201 })).json();
-  assert.deepEqual(returned.revision.identity, fork.revision.identity);
-  assert.deepEqual(returned.revision.document.data.extensions.foundry.lineage, fork.revision.document.data.extensions.foundry.lineage);
+  const returnedCard = (await bob(`workspaces/${bw.id}/cards/${returned.card.id}`)).json();
+  assert.deepEqual(returnedCard.revision.identity, fork.revision.identity);
+  assert.deepEqual(returnedCard.revision.document.data.extensions.foundry.lineage, fork.revision.document.data.extensions.foundry.lineage);
   assert.ok(exported.length > 0);
   // CLI changes share the same database and revoke existing sessions after restart.
   await docker('exec', hub, 'node', 'accounts-cli.js', 'disable', '--id', accounts.Bob.account.id);
@@ -271,6 +294,21 @@ try {
   const port = listener.address().port; await new Promise((done) => listener.close(done));
   const architectOrigin = `http://127.0.0.1:${port}`;
   const localData = await volume('architect');
+  const nativeLocal = await run('unity-local', localData, ['--network', 'host', '-e', 'UNITY_PROFILE=local', '-e', 'HOST=127.0.0.1', '-e', `PORT=${port}`]);
+  await ready(nativeLocal, architectOrigin);
+  for (const path of ['/', '/sharing', '/remotes', '/card/local-saved-card/edit']) {
+    const response = await fetch(`${architectOrigin}${path}`); assert.equal(response.status, 200);
+    assert.deepEqual(Buffer.from(await response.arrayBuffer()), nativeIndex, 'The local profile defaults to the same native application');
+  }
+  assert.deepEqual(await (await fetch(`${architectOrigin}/api/client`)).json(), { profile: 'local', capabilities: { browserLLM: true } });
+  const nativeSession = await fetch(`${architectOrigin}/api/local-session`, { method: 'POST', headers: { origin: architectOrigin, 'x-unity-session': 'local' } });
+  assert.equal(nativeSession.status, 200);
+  const nativeCookie = nativeSession.headers.get('set-cookie').split(';')[0];
+  const nativeWorkspace = await fetch(`${architectOrigin}/api/workspaces`, { method: 'POST', headers: { origin: architectOrigin, cookie: nativeCookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Local Unity' }) });
+  assert.equal(nativeWorkspace.status, 201);
+  const nativeWorkspaceId = (await nativeWorkspace.json()).id;
+  await healthy(nativeLocal); await stop(nativeLocal);
+  // Explicitly retained scaffold, same local origin and volume: no browser or server data migration.
   const architect = await run('architect', localData, ['--network', 'host', '-e', 'UNITY_PROFILE=local', '-e', 'HOST=127.0.0.1',
     '-e', `PORT=${port}`, '-e', 'UNITY_WEB_DIR=/app/web/architect']);
   await ready(architect, architectOrigin);
@@ -282,13 +320,17 @@ try {
   const local = await fetch(`${architectOrigin}/api/local-session`, { method: 'POST', headers: { origin: architectOrigin, 'x-unity-session': 'local' } });
   assert.equal(local.status, 200);
   const localCookie = local.headers.get('set-cookie').split(';')[0];
+  const retainedWorkspaces = await fetch(`${architectOrigin}/api/workspaces`, { headers: { origin: architectOrigin, cookie: localCookie } });
+  assert.equal(retainedWorkspaces.status, 200);
+  assert.ok((await retainedWorkspaces.json()).workspaces.some((workspace) => workspace.id === nativeWorkspaceId), 'Explicit legacy UI selection preserves the existing local library');
   const workspace = await fetch(`${architectOrigin}/api/workspaces`, { method: 'POST', headers: { origin: architectOrigin, cookie: localCookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Local Architect' }) });
   assert.equal(workspace.status, 201);
   await healthy(architect); await stop(architect);
 
-  const report = { version: 'unity.container-rehearsal.v1', imageId: metadata.Id, platform: `${metadata.Os}/${metadata.Architecture}`,
+  const report = { version: 'unity.container-rehearsal.v2', imageId: metadata.Id, platform: `${metadata.Os}/${metadata.Architecture}`,
     node, foundryCommit,
     schemaVersion: 13, nonRoot: true, readOnlyRoot: true, httpsProxy: true, secureCookieAttributes: true,
+    nativeUiDefault: true, nativeUiDeepLinks: true, nativeEntryAndTokenizerBytes: true, actorProofJsonAndBinary: true, nativeLocalLinuxHostNetwork: true,
     twoAccountPublishFork: true, immutablePublicActorProvisioning: true, signedReadPublishFork: true, verifiedRemoteForkReturn: true, signedReceiptsSurviveContainerReplacement: true, assetBearingCharxReimport: true, unchangedOriginal: true,
     sessionAndStorageSurviveContainerReplacement: true, accountRevocation: true, architectLinuxHostNetwork: true, gracefulStop: true };
   await mkdir('runtime', { recursive: true }); await writeFile('runtime/container-rehearsal.json', JSON.stringify(report, null, 2) + '\n');

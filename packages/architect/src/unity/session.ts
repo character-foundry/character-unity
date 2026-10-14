@@ -11,6 +11,8 @@ import type { EditorSession } from './session-types';
 /** Explicit ownership boundary: no mutable current workspace, draft, or client
  * exists outside this object. Shared browser preferences contain no card state. */
 export function createEditorSession(config: UnityHostConfig, options: { recovery?: DraftRecovery } = {}): EditorSession {
+  config = Object.freeze({ ...config });
+  config.signal?.throwIfAborted();
   const id = crypto.randomUUID();
   const lifetime = new AbortController();
   let disposed = false;
@@ -20,10 +22,12 @@ export function createEditorSession(config: UnityHostConfig, options: { recovery
   const isDisposed = () => disposed;
   const api = new UnityApiClient(config, { signal: lifetime.signal });
   const assets = api.assets;
-  const recovery = options.recovery ?? createDraftRecovery(config.workspaceId, id);
+  const recovery = options.recovery ?? createDraftRecovery(JSON.stringify([config.actorId ?? 'local', config.workspaceId]), id,
+    config.connection?.profile === 'local' ? { legacyLocalWorkspace: config.workspaceId } : {});
   const ui = createUIStore();
   const tokens = createTokenStore({ api, isDisposed, signal: lifetime.signal });
-  const llm = createLLMStore({ isDisposed, signal: lifetime.signal });
+  const capabilities = Object.freeze({ browserLLM: config.browserLLM === true });
+  const llm = createLLMStore({ isDisposed, signal: lifetime.signal, enabled: capabilities.browserLLM });
   const cards = createCardStore({ api, assets, tokens, recovery, isDisposed, signal: lifetime.signal });
   const wizard: EditorSession['wizard'] = { messages: [], hasShownGreeting: false };
   const unsubscribe = cards.subscribe((state, previous) => {
@@ -33,7 +37,7 @@ export function createEditorSession(config: UnityHostConfig, options: { recovery
     ui.getState().setActiveTab('edit');
   });
   const session: EditorSession = {
-    id, workspaceId: api.workspaceId, api, assets, cards, ui, tokens, llm, recovery,
+    id, workspaceId: api.workspaceId, capabilities, connection: config.connection, api, assets, cards, ui, tokens, llm, recovery,
     persistence: new ServerPersistenceAdapter(api, assets, cards, lifetime.signal),
     root: { current: null }, signal: lifetime.signal, wizard,
     selection: () => cards.getState().selectionVersion,
@@ -74,6 +78,7 @@ export function createEditorSession(config: UnityHostConfig, options: { recovery
     dispose() {
       if (disposed) return;
       disposed = true;
+      config.signal?.removeEventListener('abort', close);
       openVersion++;
       lifetime.abort(); selected.abort();
       cards.getState().cancelPending();
@@ -81,5 +86,7 @@ export function createEditorSession(config: UnityHostConfig, options: { recovery
       wizard.messages = []; wizard.hasShownGreeting = false;
     },
   };
+  const close = () => session.dispose();
+  config.signal?.addEventListener('abort', close, { once: true });
   return session;
 }

@@ -10,9 +10,11 @@ const fixtures = ['Alpha', 'Beta'] as const;
 type Pane = typeof fixtures[number];
 const workspace = (pane: Pane) => params.get(`${pane.toLowerCase()}Workspace`) ?? '';
 const initialCard = (pane: Pane) => params.get(`${pane.toLowerCase()}Card`) ?? '';
+const localConnectionState = Object.freeze({ status: 'active' as const });
 
 function EditorPane({ pane, onClose }: { pane: Pane; onClose(): void }) {
-  const [session] = useState<EditorSession>(() => createEditorSession({ workspaceId: workspace(pane) }));
+  const [session] = useState<EditorSession>(() => createEditorSession({ workspaceId: workspace(pane), actorId: 'local', browserLLM: true,
+    connection: { profile: 'local', subscribe: () => () => {}, snapshot: () => localConnectionState } }));
   const [selection, setSelection] = useState<{ cardId: string; forkOf?: string }>({ cardId: initialCard(pane) });
   const [flushed, setFlushed] = useState(0);
   const [ready, setReady] = useState(!params.has('ai'));

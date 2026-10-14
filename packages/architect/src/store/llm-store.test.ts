@@ -13,11 +13,23 @@ beforeEach(() => {
     removeItem: (key: string) => { items.delete(key); },
   });
   controller = new AbortController();
-  useLLMStore = createLLMStore({ signal: controller.signal, isDisposed: () => controller.signal.aborted });
+  useLLMStore = createLLMStore({ enabled: true, signal: controller.signal, isDisposed: () => controller.signal.aborted });
 });
 afterEach(() => vi.unstubAllGlobals());
 
 describe('browser-owned provider preferences', () => {
+  it('does not read, expose or overwrite local provider credentials when browser LLM is unavailable', async () => {
+    await useLLMStore.getState().addProvider({ ...provider, apiKey: 'local-only-secret' });
+    const blocked = createLLMStore({ enabled: false, signal: controller.signal, isDisposed: () => false });
+    const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
+    await blocked.getState().loadSettings();
+    expect(blocked.getState().settings.providers).toEqual([]);
+    await expect(blocked.getState().addProvider(provider)).rejects.toThrow('local installation');
+    expect(await blocked.getState().testConnection(provider.id)).toMatchObject({ success: false, error: expect.stringContaining('local installation') });
+    expect(await blocked.getState().fetchModelsForProvider(provider.id)).toMatchObject({ success: false });
+    expect(localStorage.getItem('ca-llm-providers')).toContain('local-only-secret');
+    expect(fetcher).not.toHaveBeenCalled();
+  });
   it('saves, renames, reloads and clears active provider without legacy endpoints', async () => {
     const fetcher = vi.fn(); vi.stubGlobal('fetch', fetcher);
     await useLLMStore.getState().addProvider(provider);
@@ -40,7 +52,7 @@ describe('browser-owned provider preferences', () => {
   });
 
   it('keeps model requests and caches independent for concurrent editors', async () => {
-    const other = createLLMStore({ signal: controller.signal, isDisposed: () => false });
+    const other = createLLMStore({ enabled: true, signal: controller.signal, isDisposed: () => false });
     await useLLMStore.getState().addProvider(provider);
     await other.getState().loadSettings();
     vi.stubGlobal('fetch', vi.fn<typeof fetch>().mockResolvedValue(Response.json({ data: [{ id: 'only-first-editor' }] })));

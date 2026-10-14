@@ -6,7 +6,6 @@ import { createNodeBlobStore } from '@character-unity/blob-store/node';
 import { createArchiveClient } from '@character-unity/archive-client';
 import type { SessionProof } from '@character-unity/store/accounts';
 import { composeServices } from './compose.js';
-import { createNativeArchiveService } from '@character-unity/cards/native-archive';
 import { importByteLimit } from '@character-unity/cards';
 import { createLibraryIndexDispatcher } from './library-index.js';
 
@@ -21,13 +20,12 @@ export async function openLocalServices(options: { databasePath: string; blobDir
     const blobs = await createNodeBlobStore(options.blobDirectory, { maxBytes: importByteLimit });
     const archiveClient = options.archiveOrigin ? createArchiveClient(options.archiveOrigin) : undefined;
     const libraryIndex = createLibraryIndexDispatcher(database.store, options.nativeArchive);
-    function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'> & { chat?: typeof database.chat }) {
-      return composeServices(storage, blobs, archiveClient, options.remoteConnections, undefined, importByteLimit, options.nativeArchive, libraryIndex);
+    function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'> & { chat?: typeof database.chat }, archiveAdmin: boolean) {
+      return composeServices(storage, blobs, archiveClient, options.remoteConnections, undefined, importByteLimit, options.nativeArchive, libraryIndex, archiveAdmin);
     }
-    const local = compose(database);
-    const nativeArchive = options.nativeArchive ? createNativeArchiveService(local.cards, options.nativeArchive) : undefined;
-    return { ...local, ...(nativeArchive ? { nativeArchive } : {}), accounts: database.accounts, sync: database.sync,
-      forSession: (proof: SessionProof) => compose(database.forSession(proof)),
+    const local = compose(database, true);
+    return { ...local, accounts: database.accounts, sync: database.sync,
+      forSession: (proof: SessionProof) => compose(database.forSession(proof), false),
       searchIndex: libraryIndex,
       close() { libraryIndex.stop(); database.close(); } };
   } catch (error) {

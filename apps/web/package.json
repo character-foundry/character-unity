@@ -10,8 +10,9 @@
     "type-check": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
     "@character-unity/cards": "workspace:*",
-    "@character-unity/editor": "workspace:*",
+    "@character-unity/tokenizer": "workspace:*",
     "@character-unity/store": "workspace:*",
     "clsx": "2.1.1",
     "dompurify": "3.4.16",

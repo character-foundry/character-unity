@@ -1,30 +1,38 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { cn } from '@/lib/utils/cn';
 import { formatRelative } from '@/lib/utils/format';
-import { chatApi, chatChanged, kindInfo, sendCard, statusInfo, useChatTargets, usePlacements } from '@/lib/chat';
+import { kindInfo, statusInfo, useChatApi, useChatTargets, usePlacementState } from '@/lib/chat';
 import type { ChatPlacement, ChatTarget } from '@/lib/chat';
 
 const seconds = (iso: string | null) => (iso ? Math.floor(Date.parse(iso) / 1000) : null);
 
 /** Profile panel: every chat app copy of this card, how it compares to the library, and what to do about it. */
 export function WhereItLives({ cardId }: { cardId: string }) {
-  const { targets, available } = useChatTargets();
-  const placements = usePlacements([cardId]).get(cardId) ?? [];
+  const api = useChatApi();
+  const { targets, available, error: targetError, retry } = useChatTargets();
+  const placementState = usePlacementState([cardId]);
+  const placements = placementState.placements.get(cardId) ?? [];
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  if (!available || !targets) return null;
+  const operation = useRef<AbortController | null>(null);
+  useEffect(() => { setBusy(null); setError(null); return () => operation.current?.abort(); }, [api, cardId]);
+  if (!available) return null;
+  if (targetError) return <section className="glass mb-4 rounded-xl p-4"><p role="alert" className="text-sm text-red-200">{targetError}</p>
+    <button type="button" onClick={retry} className="mt-2 text-sm text-nebula">Retry chat connections</button></section>;
+  if (!targets) return null;
 
-  async function run(key: string, action: () => Promise<unknown>) {
+  async function run(key: string, action: (signal: AbortSignal) => Promise<unknown>) {
+    const controller = new AbortController(); operation.current?.abort(); operation.current = controller;
     setBusy(key); setError(null);
-    try { await action(); } catch (failure) { setError(failure instanceof Error ? failure.message : 'That did not work'); }
-    finally { setBusy(null); }
+    try { await action(controller.signal); } catch (failure) { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'That did not work'); }
+    finally { if (operation.current === controller) { operation.current = null; if (!controller.signal.aborted) setBusy(null); } }
   }
-  const rescan = () => run('scan', async () => {
-    try { for (const target of targets) await chatApi.scan(target.id); } finally { chatChanged(); }
+  const rescan = () => run('scan', async (signal) => {
+    for (const target of targets) await api.scan(target.id, signal);
   });
-  const send = (target: ChatTarget) => run(target.id, () => sendCard(target, cardId));
-  const forget = (row: ChatPlacement) => run(`${row.targetId}:${row.remoteId}`, async () => { await chatApi.forget(row.targetId, row.remoteId); chatChanged(); });
+  const send = (target: ChatTarget) => run(target.id, (signal) => api.sendCard(target, cardId, signal));
+  const forget = (row: ChatPlacement) => run(`${row.targetId}:${row.remoteId}`, (signal) => api.forget(row.targetId, row.remoteId, signal));
   const without = targets.filter((target) => !placements.some((row) => row.targetId === target.id && row.status !== 'missing'));
   const lastScan = targets.map((target) => target.scannedAt).filter(Boolean).sort().at(-1) ?? null;
 
@@ -95,6 +103,7 @@ export function WhereItLives({ cardId }: { cardId: string }) {
         </div>
       )}
       {error && <p className="mt-2 text-xs text-red-300" role="alert">{error}</p>}
+      {placementState.error && <p className="mt-2 text-xs text-red-300" role="alert">{placementState.error}</p>}
     </section>
   );
 }

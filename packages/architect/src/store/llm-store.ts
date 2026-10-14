@@ -18,6 +18,7 @@ export function clientProvider(provider: ProviderConfig): ClientLLMProvider {
 }
 
 export interface LLMStore {
+  readonly enabled: boolean;
   settings: LLMSettings;
   isLoading: boolean;
   error: string | null;
@@ -33,14 +34,14 @@ export interface LLMStore {
   getCachedModels(id: string): string[];
 }
 
-export function createLLMStore({ signal, isDisposed }: { signal: AbortSignal; isDisposed(): boolean }): StoreApi<LLMStore> {
+export function createLLMStore({ signal, isDisposed, enabled }: { signal: AbortSignal; isDisposed(): boolean; enabled: boolean }): StoreApi<LLMStore> {
   const requests = new Map<string, number>();
   let requestSequence = 0;
   const inactive = () => signal.aborted || isDisposed();
   return createStore<LLMStore>((set, get) => ({
-  settings: { providers: [] }, isLoading: false, error: null, modelCache: {},
+  enabled, settings: { providers: [] }, isLoading: false, error: null, modelCache: {},
   loadSettings: async () => {
-    if (inactive()) return;
+    if (inactive() || !enabled) return;
     const providers: ProviderConfig[] = loadClientLLMProviders().map((provider) => ({
       ...provider, name: provider.name,
       kind: provider.kind === 'openrouter' ? 'openai-compatible' : provider.kind,
@@ -51,6 +52,7 @@ export function createLLMStore({ signal, isDisposed }: { signal: AbortSignal; is
   },
   saveSettings: async (updates) => {
     if (inactive()) return;
+    if (!enabled) throw new Error('Browser LLM providers are available only in a local installation');
     const settings = { ...get().settings, ...updates };
     try {
       saveClientLLMProviders(settings.providers.map(clientProvider));
@@ -72,6 +74,7 @@ export function createLLMStore({ signal, isDisposed }: { signal: AbortSignal; is
   }),
   setActiveProvider: async (id) => get().saveSettings({ activeProviderId: id }),
   testConnection: async (id) => {
+    if (!enabled) return { success: false, error: 'Browser LLM providers are available only in a local installation' };
     if (inactive()) return { success: false, error: 'The editor is closed' };
     const provider = get().settings.providers.find((item) => item.id === id);
     if (!provider) return { success: false, error: 'Provider not found' };
@@ -80,6 +83,7 @@ export function createLLMStore({ signal, isDisposed }: { signal: AbortSignal; is
       ? { success: false, error: 'The editor or provider settings changed' } : result;
   },
   fetchModelsForProvider: async (id) => {
+    if (!enabled) return { success: false, error: 'Browser LLM providers are available only in a local installation' };
     if (inactive()) return { success: false, error: 'The editor is closed' };
     const provider = get().settings.providers.find((item) => item.id === id);
     if (!provider) return { success: false, error: 'Provider not found' };

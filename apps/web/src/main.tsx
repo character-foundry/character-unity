@@ -10,6 +10,10 @@ import NewCardPage from '@/app/new';
 import EditorSessionLayout from '@/app/editor-session';
 import ArchivePage from '@/app/archive';
 import SettingsPage from '@/app/settings';
+import SharingPage from '@/features/sharing/page';
+import RemotesPage from '@/features/remotes/page';
+import { SessionProvider } from '@/lib/session-provider';
+import { LibraryClientProvider, useLibraryClient } from '@/lib/library-client';
 import './styles.css';
 
 /** The search page merged into the library; old links keep their query. */
@@ -32,11 +36,9 @@ function NotFoundPage() {
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Missing root element');
-createRoot(root).render(
-  <StrictMode>
-    <SettingsProvider>
-      <BrowserRouter>
-        <Routes>
+function NativeRoutes() {
+  const client = useLibraryClient();
+  return <Routes key={client.scopeKey}>
           <Route path="/" element={<LibraryPage />} />
           <Route path="/explore" element={<LibraryPage />} />
           <Route path="/archive" element={<ArchivePage />} />
@@ -48,10 +50,12 @@ createRoot(root).render(
           </Route>
           <Route path="/search" element={<SearchRedirect />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/sharing" element={<SharingPage />} />
+          <Route path="/remotes" element={<RemotesPage />} />
           <Route path="/chat-apps" element={<Navigate to="/settings#chat-apps" replace />} />
           <Route path="*" element={<NotFoundPage />} />
-        </Routes>
-      </BrowserRouter>
-    </SettingsProvider>
-  </StrictMode>,
-);
+        </Routes>;
+}
+createRoot(root).render(<StrictMode><SettingsProvider><BrowserRouter><SessionProvider>
+  <LibraryClientProvider><NativeRoutes /></LibraryClientProvider>
+</SessionProvider></BrowserRouter></SettingsProvider></StrictMode>);

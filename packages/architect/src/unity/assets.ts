@@ -117,6 +117,23 @@ export class EditorAssetService {
         main: portrait || name === 'main' };
     });
   }
+  /** Exact draft descriptors resolve to owned/stored sources, never arbitrary
+   * authored URLs. Reading this map neither downloads bytes nor changes a draft. */
+  async imageSources(card: Card): Promise<Record<string, string>> {
+    await this.ensure(card);
+    const sources: Record<string, string> = Object.create(null);
+    const ambiguous = new Set<string>();
+    const raster = (entry: Entry) => /^image\/(png|jpeg|gif|webp|avif|bmp)$/i.test(entry.mediaType);
+    const portrait = this.entries.find((entry) => entry.descriptor === null && raster(entry));
+    if (portrait) sources['ccdefault:'] = portrait.url;
+    for (const entry of this.entries) {
+      const uri = string(entry.descriptor?.uri);
+      if (!uri || !raster(entry) || (uri === 'ccdefault:' && portrait) || ambiguous.has(uri)) continue;
+      if (Object.hasOwn(sources, uri) && sources[uri] !== entry.url) { delete sources[uri]; ambiguous.add(uri); }
+      else sources[uri] = entry.url;
+    }
+    return sources;
+  }
   private uploaded(file: File, descriptor: Json | null): Entry {
     const mediaType = fileType(file);
     const normalized = file.type === mediaType ? file : new File([file], file.name, { type: mediaType });

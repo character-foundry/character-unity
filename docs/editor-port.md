@@ -16,8 +16,10 @@ automatic immutable server revisions; staged files remain in memory and are not
 crash-recovered. Discard releases staged object URLs. Historical Restore creates
 a new revision containing the historical text **and** asset references.
 
-Browser-local LLM providers, templates, presets, wizard prompts, themes and editor
-preferences remain. Nonexistent Architect-server RAG/ComfyUI/backup/name-tool
+Local installations retain browser-local LLM providers, templates, presets, wizard
+prompts, themes and editor preferences. Hub profiles disable browser credential
+loading and direct provider calls; templates and non-provider preferences remain.
+Nonexistent Architect-server RAG/ComfyUI/backup/name-tool
 paths and old dashboard/import/parser shells are retired, not replaced with
 fake endpoints. Native optional tools are tracked in `cu-1o2.5.13`.
 
@@ -31,15 +33,30 @@ retain independent drafts and use the server's existing expected-head conflict.
 The application retains the same session through New/Fork's first Save and route
 promotion, preserving edits/assets entered during the pending Save.
 
-Recovery keys include workspace, card and draft owner; deleting or saving one
+Recovery keys include actor, workspace, card and draft owner; deleting or saving one
 owner does not erase another's snapshot. Restore copies the offered snapshot into
 the restoring owner before acknowledging it; Discard acknowledges only the exact
 offered snapshot, and later changes from its original owner remain recoverable.
 The original expected head stays pinned so restoring stale text cannot overwrite
 a newer revision. This is text recovery, not durable recovery of staged files or
-unsaved New/Fork drafts. Browser-local preference contents are intentionally shared.
+unsaved New/Fork drafts. Existing local-owner recovery rows and exact dismissals
+remain readable in place only for an explicit local connection; hub accounts do
+not inherit those rows. Non-provider editor preferences are intentionally shared;
+saved library/Archive searches are private to their actor/workspace.
 
 The viewer and shell use native React Router/HTML without Next shims (`cu-1o2.26`).
+Native library menus, account/workspace controls, Sharing and Connected hubs now
+use the same shell. `GET /api/client` explicitly discovers the local/account
+profile. Each library client and injected editor transport captures its actor and
+workspace, including binary media/download requests; no mutable current-client
+fallback is used. Same-account session recovery retains the mounted draft, while
+deliberate account/workspace changes dispose its captured lifetime. Native
+top-layer sign-in works above open publication dialogs without replacing drafts.
+Protected previews and downloads bypass HTTP caches and use the captured actor;
+stored images retry after recovery. Authored image URLs are exact binding
+identifiers, not fetch destinations. External images, srcset and CSS resource
+loads stay inert, including in Focused Markdown/HTML mode, without rewriting
+source text or accepted original bytes.
 Archive references open in this same editor without creating owned documents or
 asset rows. An unchanged Save retains the reference; a changed Save creates one
 owned fork pinned to its exact Archive source, retaining inherited asset locators
@@ -47,6 +64,14 @@ and storing only newly uploaded bytes. Route promotion keeps the current editor
 session and pending edits. Native imports report existing file/content matches
 instead of storing another card. References retain exact-original downloads,
 revision exports and Send-to-chat; a missing source remains explicitly unavailable.
+Reference-only links are not publishable or returnable remote drafts. A changed
+Save is required to create an owned fork; saving unchanged content creates no copy.
+
+Sharing can review and publish exact saved or historical revisions without
+changing the editor draft or Save head. Connected hubs can pull a private fork
+into this editor, then prepare/review/send one saved revision separately from any
+unsaved changes. See [native account and sharing workflows](hub-accounts.md) and
+[configured remote controls](remote-hubs.md).
 
 Native viewer/Next-shim removal (`cu-1o2.26`) and editor isolation (`cu-1o2.5.12`)
 are complete. Wizard workflow QA (`cu-1o2.5.5`) remains low priority.
@@ -55,9 +80,13 @@ are complete. Wizard workflow QA (`cu-1o2.5.5`) remains low priority.
 web UI and a separate two-host browser fixture beneath the test build's existing
 `/assets/` route, then runs isolated production-Node browser workflows. The fixture
 is not part of the ordinary production build and adds no application/API route.
-The legacy
-host tests below remain useful scaffold regressions but do not prove parity of
-the active editor.
+The active app uses `packages/tokenizer` for its browser worker, not a dependency
+on the scaffold editor. The legacy host tests below remain useful regressions but
+do not prove parity of the active editor. Their browser-only IndexedDB profile,
+stored cards and safe upgrade path remain available pending explicit retirement.
+Final validation of the current native UI/account pass is recorded separately in
+[implementation status](implementation.md). Live Archive/provider takeover and
+Foundry publishing remain held.
 
 ## Earlier scaffold implementation (historical)
 

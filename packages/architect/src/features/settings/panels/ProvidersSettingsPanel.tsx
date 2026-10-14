@@ -8,10 +8,12 @@ import { useState, useEffect, useId } from 'react';
 import { useLLMStore } from '../../../store/llm-store';
 import { SearchableSelect } from '../../../components/ui/SearchableSelect';
 import type { ProviderConfig } from '../../../lib/types';
+import { useEditorSession } from '../../../unity/context';
 
 type ProviderKind = 'openai' | 'anthropic' | 'openai-compatible';
 
 export function ProvidersSettingsPanel() {
+  const session = useEditorSession();
   const streamDefaultId = useId();
   const {
     settings,
@@ -79,6 +81,7 @@ export function ProvidersSettingsPanel() {
     setEditingProvider({ ...editingProvider, [field]: value });
   };
 
+  if (!session.capabilities.browserLLM) return <p className="text-sm text-dark-muted">Browser LLM credentials and direct provider requests are available only in a local installation.</p>;
   return (
     <div>
       <div className="mb-5 flex flex-wrap justify-between items-center gap-3">

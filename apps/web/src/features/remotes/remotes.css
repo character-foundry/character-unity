@@ -1,0 +1,47 @@
+.remote-page { max-width: 1140px; margin: 0 auto; padding: 12px 0 32px; color: #ecebf3; font-size: 13px; }
+.remote-page-heading, .remote-section-heading, .remote-item-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.remote-page-heading { margin-bottom: 24px; align-items: flex-start; }
+.remote-page h1 { font-size: 25px; font-weight: 600; letter-spacing: -.03em; margin: 3px 0 7px; }
+.remote-page h2 { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
+.remote-page h3 { font-size: 13px; font-weight: 600; }
+.remote-page p { line-height: 1.6; }
+.remote-page-heading > div > p:last-child, .remote-muted { color: #8f8ca3; }
+.remote-eyebrow { color: #d946ef; font-size: 10px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 5px; }
+.remote-columns { display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; }
+.remote-panel { border: 1px solid #2a2838; background: #14131d; border-radius: 12px; padding: 20px; margin-bottom: 16px; min-width: 0; }
+.remote-page label { display: block; font-size: 12px; font-weight: 500; margin: 20px 0 8px; }
+.remote-page select { color: #ecebf3; background: #1c1a28; border: 1px solid #2a2838; border-radius: 7px; padding: 9px 11px; width: 100%; font-size: 12px; margin-bottom: 12px; }
+.remote-page button { font-size: 12px; font-weight: 500; line-height: 1.5; border: 1px solid #2a2838; border-radius: 7px; background: #1c1a28; color: #ecebf3; padding: 7px 11px; cursor: pointer; }
+.remote-page button:hover:enabled { border-color: #6e426f; background: #252132; }
+.remote-page button:disabled, .remote-page select:disabled { opacity: .45; cursor: not-allowed; }
+.remote-page button:focus-visible, .remote-page select:focus-visible { outline: 2px solid #d946ef; outline-offset: 3px; }
+.remote-page .remote-primary { background: #d946ef; border-color: #d946ef; color: #170c1a; font-weight: 600; margin: 15px 0 12px; }
+.remote-page .remote-primary:hover:enabled { background: #e36af4; border-color: #e36af4; }
+.remote-page a { color: #e879f9; }
+.remote-page a:hover { text-decoration: underline; }
+.remote-destination { color: #8f8ca3; font-size: 11px; margin: 4px 0 12px; overflow-wrap: anywhere; }
+.remote-items { list-style: none; padding: 0; margin: 16px 0 12px; }
+.remote-items > li { padding: 15px 0; border-top: 1px solid #2a2838; }
+.remote-excerpt { color: #8f8ca3; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; margin: 8px 0 12px; white-space: pre-wrap; }
+.remote-pill { font-size: 10px; color: #c4b5fd; border: 1px solid #3a304b; background: #251c32; border-radius: 5px; padding: 3px 7px; white-space: nowrap; }
+.remote-pill-warning { color: #fcd892; border-color: #645026; background: #322b1b; }
+.remote-notice { border: 1px solid #593162; border-radius: 8px; background: #25172d; padding: 12px 14px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.remote-error { border-color: #633038; background: #2c171e; color: #fca5a5; }
+.remote-pending { border-color: #645026; }
+.remote-actions, .remote-review-facts { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+.remote-empty { border: 1px dashed #2a2838; border-radius: 9px; padding: 25px 18px; text-align: center; color: #8f8ca3; margin: 20px 0; }
+.remote-empty h3 { color: #ecebf3; margin-bottom: 5px; }
+.remote-jobs > li { display: flex; align-items: center; gap: 12px; }
+.remote-jobs > li > div { flex: 1; min-width: 0; }
+.remote-review { border-color: #633667; scroll-margin-top: 72px; }
+.remote-review dl { display: grid; gap: 12px; margin: 18px 0; }
+.remote-review dt { font-size: 11px; font-weight: 600; color: #8f8ca3; margin-bottom: 4px; }
+.remote-review dd { white-space: pre-wrap; max-height: 220px; overflow: auto; overflow-wrap: anywhere; padding: 12px; border: 1px solid #2a2838; border-radius: 8px; background: #0d0c14; }
+@media (max-width: 740px) {
+  .remote-columns { grid-template-columns: 1fr; gap: 0; }
+  .remote-page-heading { flex-direction: column; gap: 12px; }
+  .remote-panel { padding: 16px; }
+  .remote-jobs > li { flex-wrap: wrap; }
+  .remote-jobs > li > div { flex-basis: 60%; }
+  .remote-section-heading { align-items: flex-start; flex-wrap: wrap; }
+}

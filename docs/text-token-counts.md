@@ -21,9 +21,11 @@ substitution, message wrappers and other prompt components depend on the chat ap
 ## Boundary and encoding
 
 The editor accepts an optional `EditorTokenPort` with a label and an asynchronous
-`count(texts, signal)` method. Hosts explicitly inject the browser worker adapter
-from `@character-unity/editor/worker-tokenizer`. A host without a port has no Tokens
-button. The pure editor controller owns no tokenizer, model, network or cache.
+`count(texts, signal)` method. The native viewer and legacy editor hosts use the
+browser worker adapter from `@character-unity/tokenizer`; the still-supported
+legacy editor export re-exports that same implementation. A host without a port
+has no Tokens button. The pure editor controller owns no tokenizer, model, network
+or cache. The native viewer has no dependency on the scaffold form editor.
 
 The worker calls the external SDK's public `GptTokenizer.encode` primitive. At
 Foundry pin `0e464d69f5722073845954f06c46affb68539eb4`, its locked `gpt-tokenizer`
@@ -57,9 +59,11 @@ the author's text to obtain a count.
 
 ## Verification
 
-Five unit cases cover projection/coverage and document immutability, independent
+Unit cases cover projection/coverage and document immutability, independent
 instances and late results, input bounds and provider errors, exact public SDK
 token-ID vectors, and worker termination on success/failure/timeout/cancellation.
+The neutral package also verifies concurrent request ownership, inclusive resource
+bounds, ordered counts, worker failure redaction and the shared legacy export.
 Three Chromium workflows exercise real workers in local Architect, static
 Architect and the hub: Unicode counts, separate greetings, enabled lorebook
 content, lazy loading, load-failure retry, reserved-token failure, two independent

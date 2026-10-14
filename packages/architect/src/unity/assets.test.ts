@@ -16,6 +16,26 @@ function fixture(metadata: AssetMetadata[] = []) {
 }
 
 describe('native editor asset draft', () => {
+  it('maps authored image URIs only to exact current stored bindings without fetching bytes or ambiguous aliases', async () => {
+    const original = card('card', [
+      { type: 'icon', name: 'main', uri: 'ccdefault:' },
+      { type: 'emotion', name: 'stored', uri: 'https://old.invalid/stored.png' },
+      { type: 'emotion', name: 'ambiguous one', uri: 'embedded://duplicate.png' },
+      { type: 'emotion', name: 'ambiguous two', uri: 'embedded://duplicate.png' },
+      { type: 'custom', name: 'not image', uri: 'embedded://notes.txt' },
+    ]);
+    const { service, transport } = fixture([{ path: 'portrait', mediaType: 'image/png', byteLength: 2 },
+      ...Array.from({ length: 4 }, (_, index) => ({ path: `declared/${index}`, mediaType: 'image/png', byteLength: 2 })),
+      { path: 'declared/4', mediaType: 'text/plain', byteLength: 1 }]);
+    const sources = await service.imageSources(original);
+    expect(sources['ccdefault:']).toBe('/asset/card/head-1/portrait');
+    expect(sources['https://old.invalid/stored.png']).toBe('/asset/card/head-1/declared/1');
+    expect(Object.hasOwn(sources, 'embedded://duplicate.png')).toBe(false);
+    expect(Object.hasOwn(sources, 'embedded://notes.txt')).toBe(false);
+    expect(transport.list).toHaveBeenCalledTimes(1);
+    expect(service.hasChanges(original)).toBe(false);
+    service.reset();
+  });
   it('lists hundreds of declared assets with one metadata request, without fetching their bytes or treating module.risum as editable', async () => {
     const declared = Array.from({ length: 401 }, (_, index) => ({ type: 'emotion', name: `expression-${index}`, uri: `embedded://expression-${index}.png`, ext: 'png', license: { keep: index } }));
     const metadata = declared.map((_, index) => ({ path: `declared/${index}`, mediaType: 'image/png', byteLength: index + 1 }));

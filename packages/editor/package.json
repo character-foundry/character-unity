@@ -15,7 +15,8 @@
     "react": "^19.3.0"
   },
   "dependencies": {
-    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry"
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
+    "@character-unity/tokenizer": "workspace:*"
   },
   "devDependencies": {
     "react": "19.3.0",

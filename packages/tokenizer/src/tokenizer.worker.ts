@@ -1,5 +1,5 @@
 import { GptTokenizer } from '@character-foundry/character-foundry/tokenizers';
-import { validateTokenTexts } from './tokens.js';
+import { validateTokenTexts } from './contract.js';
 
 // Foundry's pinned GptTokenizer.encode uses gpt-tokenizer 3.4.0/o200k_base.
 // Its count() method silently approximates failures; use the throwing primitive.

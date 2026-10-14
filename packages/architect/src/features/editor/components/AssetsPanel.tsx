@@ -3,6 +3,7 @@ import { useCardStore } from '../../../store/card-store';
 import type { EditorAsset } from '../../../unity/assets';
 import { useEditorSession } from '../../../unity/context';
 import type { CardAssetWithDetails } from '../../../lib/types';
+import { EditorImage, EditorVideo, EditorAudio, EditorDownload } from '../../../unity/media';
 
 type ViewMode = 'list' | 'grid';
 type SortField = 'name' | 'type' | 'ext';
@@ -398,7 +399,7 @@ export function AssetsPanel() {
 
     if (asset.asset.mimetype.startsWith('image/')) {
       return (
-        <img
+        <EditorImage
           src={asset.asset.url}
           alt={asset.name}
           className={`${sizeClasses[size]} object-cover rounded`}
@@ -1284,13 +1285,13 @@ export function AssetsPanel() {
                           </button>
                         )}
 
-                        <a
+                        <EditorDownload
                           href={selectedAssetData.asset.url}
                           download={`${selectedAssetData.name}${selectedAssetData.name.endsWith(`.${selectedAssetData.ext}`) || !selectedAssetData.ext ? '' : `.${selectedAssetData.ext}`}`}
                           className="btn-secondary w-full justify-start"
                         >
                           Download Asset
-                        </a>
+                        </EditorDownload>
 
                         <button
                           onClick={() => handleDeleteAsset(selectedAssetData.id)}
@@ -1320,7 +1321,7 @@ export function AssetsPanel() {
                     <h3 className="text-sm font-semibold mb-3">Preview</h3>
                     <div className="bg-dark-bg rounded-lg p-4 flex-1 flex items-center justify-center min-h-[300px]">
                       {selectedAssetData.asset.mimetype.startsWith('image/') ? (
-                        <img
+                        <EditorImage
                           src={selectedAssetData.asset.url}
                           alt={selectedAssetData.name}
                           className="max-w-full max-h-[500px] rounded cursor-pointer object-contain"
@@ -1337,36 +1338,22 @@ export function AssetsPanel() {
                         ['webm', 'mp4', 'mov', 'avi', 'mkv'].includes(
                           selectedAssetData.ext.toLowerCase()
                         ) ? (
-                        <video
+                        <EditorVideo
                           src={selectedAssetData.asset.url}
                           controls
                           className="max-w-full max-h-[500px] rounded"
                           preload="metadata"
-                        >
-                          <source
-                            src={selectedAssetData.asset.url}
-                            type={
-                              selectedAssetData.asset.mimetype || `video/${selectedAssetData.ext}`
-                            }
-                          />
-                        </video>
+                        />
                       ) : selectedAssetData.asset.mimetype.startsWith('audio/') ||
                         ['mp3', 'wav', 'ogg', 'flac', 'm4a', 'aac'].includes(
                           selectedAssetData.ext.toLowerCase()
                         ) ? (
-                        <audio
+                        <EditorAudio
                           src={selectedAssetData.asset.url}
                           controls
                           className="w-full"
                           preload="metadata"
-                        >
-                          <source
-                            src={selectedAssetData.asset.url}
-                            type={
-                              selectedAssetData.asset.mimetype || `audio/${selectedAssetData.ext}`
-                            }
-                          />
-                        </audio>
+                        />
                       ) : (
                         <div className="text-center p-8">
                           <p className="text-dark-muted">No preview available</p>
@@ -1418,7 +1405,7 @@ export function AssetsPanel() {
             className="max-w-full max-h-full flex flex-col items-center"
             onClick={(e) => e.stopPropagation()}
           >
-            <img
+            <EditorImage
               src={lightboxImage.src}
               alt={lightboxImage.name}
               className="max-w-full max-h-[85vh] object-contain rounded-lg"

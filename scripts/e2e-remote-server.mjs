@@ -1,4 +1,4 @@
-import { mkdtemp, rm, readFile, writeFile, unlink } from 'node:fs/promises';
+import { access, mkdtemp, rm, readFile, writeFile, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn, execFile } from 'node:child_process';
@@ -9,6 +9,12 @@ import { once } from 'node:events';
 
 // Two disposable real Node hosts. The HTTPS proxy can lose one successful return
 // response via a test-owned file; no application test routes or login bypasses exist.
+const webDirectory = resolve(process.argv[2] ?? 'apps/hub/dist');
+await access(join(webDirectory, 'index.html'));
+const hostArgs = process.argv[2]
+  ? ['--import', resolve('apps/api/node_modules/tsx/dist/loader.mjs'), 'apps/api/src/node.ts']
+  : ['apps/api/dist/node.js'];
+const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('UNITY_')));
 const directory = await mkdtemp(join(tmpdir(), 'unity-remote-browser-'));
 const fixturePath = resolve('runtime/e2e-remote.json');
 const senderOrigin = 'http://127.0.0.1:19314', receiverOrigin = 'https://127.0.0.1:19315';
@@ -20,9 +26,9 @@ const done = new Promise((resolve) => { finish = resolve; });
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => { stopping = true; finish(); });
 function start(env) {
-  const child = spawn(process.execPath, ['apps/api/dist/node.js'], { env: { ...process.env, UNITY_REMOTE_CONNECTIONS_FILE: undefined,
+  const child = spawn(process.execPath, hostArgs, { env: { ...inheritedEnv, UNITY_REMOTE_CONNECTIONS_FILE: undefined,
     UNITY_SYNC_ENABLED: 'false', UNITY_SYNC_WRITES_ENABLED: 'false', UNITY_ARCHIVE_ORIGIN: undefined,
-    UNITY_PROFILE: 'hub', HOST: '127.0.0.1', UNITY_WEB_DIR: resolve('apps/hub/dist'), ...env }, stdio: 'inherit' });
+    UNITY_PROFILE: 'hub', HOST: '127.0.0.1', UNITY_WEB_DIR: webDirectory, ...env }, stdio: 'inherit' });
   const exited = new Promise((resolve) => {
     child.once('exit', (code) => { if (!stopping) { process.exitCode = code || 1; finish(); } resolve(); });
     child.once('error', () => { process.exitCode = 1; finish(); resolve(); });

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router';
-import { createWorkerTokenizer } from '@character-unity/editor/worker-tokenizer';
+import { createWorkerTokenizer } from '@character-unity/tokenizer';
 import { AppShell } from '@/components/layout';
-import { libraryId, listAssets, openCard, type OpenedCard, type RevisionAssets } from '@/lib/unity';
+import type { OpenedCard, RevisionAssets } from '@/lib/unity';
+import { useLibraryClient } from '@/lib/library-client';
 import { displayDocument, toDetail } from '@/lib/adapt';
 import type { TokenBreakdown } from '@/types/card';
 import { CardDetailClient } from './profile';
@@ -10,6 +11,7 @@ import { CardDetailClient } from './profile';
 const tokenFields = ['description', 'personality', 'scenario', 'mes_example', 'first_mes', 'system_prompt', 'post_history_instructions'] as const;
 
 export default function CardDetailPage() {
+  const client = useLibraryClient();
   const { id = '' } = useParams();
   const [loaded, setLoaded] = useState<{ workspace: string; opened: OpenedCard } | null>(null);
   const [tokens, setTokens] = useState<TokenBreakdown | null>(null);
@@ -24,13 +26,13 @@ export default function CardDetailPage() {
     setLoaded(null); setTokens(null); setAssets(null); setError(null); setAssetError(null); setTokenStatus('counting');
     void (async () => {
       try {
-        const workspace = await libraryId();
+        const workspace = client.workspaceId;
         if (controller.signal.aborted) return;
-        const opened = await openCard(id, { signal: controller.signal });
+        const opened = await client.openCard(id, { signal: controller.signal });
         if (controller.signal.aborted) return;
         setLoaded({ workspace, opened });
         if (opened.revision.assets.some((asset) => asset.path !== 'portrait')) {
-          void listAssets(id, opened.revision.id, controller.signal).then((value) => {
+          void client.listAssets(id, opened.revision.id, controller.signal).then((value) => {
             if (!controller.signal.aborted) setAssets(value);
           }).catch((failure) => {
             if (!controller.signal.aborted) setAssetError(failure instanceof Error ? failure.message : 'Asset previews are unavailable.');
@@ -51,7 +53,7 @@ export default function CardDetailPage() {
       }
     })();
     return () => controller.abort();
-  }, [id, attempt]);
+  }, [client, id, attempt]);
 
   if (error) return <AppShell><div className="glass space-y-4 rounded-xl p-8 text-center"><p role="alert" className="text-red-200">{error}</p>
     <button type="button" onClick={() => setAttempt((value) => value + 1)} className="btn-primary px-4 py-2">Retry</button><Link to="/" className="ml-3 text-nebula">Back to library</Link></div></AppShell>;

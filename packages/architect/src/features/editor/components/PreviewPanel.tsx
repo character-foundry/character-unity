@@ -1,6 +1,7 @@
 import { useEditorSession } from '../../../unity/context';
+import { EditorImage } from '../../../unity/media';
 import { marked, type Tokens } from 'marked';
-import DOMPurify from 'dompurify';
+import { AuthoredHtml } from '../../../unity/authored-media';
 import { useCardStore, extractCardData } from '../../../store/card-store';
 import { useState, useEffect } from 'react';
 
@@ -87,14 +88,6 @@ export function PreviewPanel() {
   if (!currentCard) return null;
   const cardData = extractCardData(currentCard);
 
-  const renderMarkdown = (text: string) => {
-    const html = marked.parse(text) as string;
-    return DOMPurify.sanitize(html, {
-      ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'u', 'a', 'img', 'ul', 'ol', 'li', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'table', 'thead', 'tbody', 'tr', 'th', 'td'],
-      ALLOWED_ATTR: ['href', 'src', 'alt', 'title', 'width', 'height', 'style', 'class'],
-    });
-  };
-
   const handleCopy = async () => {
     try {
       const jsonString = JSON.stringify(currentCard.data, null, 2);
@@ -144,7 +137,7 @@ export function PreviewPanel() {
             <div className="flex justify-center mb-6">
               <div className="w-64 bg-dark-bg border border-dark-border rounded-lg overflow-hidden shadow-lg">
                 {imageUrl && !imageFailed ? (
-                  <img
+                  <EditorImage
                     src={imageUrl}
                     alt="Character Avatar"
                     className="w-full h-auto object-contain"
@@ -174,34 +167,22 @@ export function PreviewPanel() {
             <div className="space-y-4">
               <section>
                 <h2 className="text-xl font-semibold mb-2">Description</h2>
-                <div
-                  className="prose prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(cardData.description || '') }}
-                />
+                <AuthoredHtml className="prose prose-invert max-w-none" html={marked.parse(cardData.description || '') as string} />
               </section>
 
               <section>
                 <h2 className="text-xl font-semibold mb-2">Personality</h2>
-                <div
-                  className="prose prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(cardData.personality || '') }}
-                />
+                <AuthoredHtml className="prose prose-invert max-w-none" html={marked.parse(cardData.personality || '') as string} />
               </section>
 
               <section>
                 <h2 className="text-xl font-semibold mb-2">Scenario</h2>
-                <div
-                  className="prose prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(cardData.scenario || '') }}
-                />
+                <AuthoredHtml className="prose prose-invert max-w-none" html={marked.parse(cardData.scenario || '') as string} />
               </section>
 
               <section>
                 <h2 className="text-xl font-semibold mb-2">First Message</h2>
-                <div
-                  className="prose prose-invert max-w-none bg-dark-surface p-4 rounded"
-                  dangerouslySetInnerHTML={{ __html: renderMarkdown(cardData.first_mes || '') }}
-                />
+                <AuthoredHtml className="prose prose-invert max-w-none bg-dark-surface p-4 rounded" html={marked.parse(cardData.first_mes || '') as string} />
               </section>
 
               {cardData.alternate_greetings && cardData.alternate_greetings.length > 0 && (
@@ -209,10 +190,10 @@ export function PreviewPanel() {
                   <h2 className="text-xl font-semibold mb-2">Alternate Greetings</h2>
                   <div className="space-y-2">
                     {cardData.alternate_greetings.map((greeting, i) => (
-                      <div
+                      <AuthoredHtml
                         key={i}
                         className="prose prose-invert max-w-none bg-dark-surface p-4 rounded"
-                        dangerouslySetInnerHTML={{ __html: renderMarkdown(greeting) }}
+                        html={marked.parse(greeting) as string}
                       />
                     ))}
                   </div>

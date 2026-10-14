@@ -7,7 +7,7 @@ export interface UserSettings {
   /** Leave cards tagged NSFW out of library lists entirely. */
   hideNsfw: boolean;
 
-  // Card display: tile size in the library grid, picked from the filter bar.
+  // Card display: tile size in the library grid, picked from the header.
   cardSize: 'small' | 'medium' | 'large';
 
   // Content filtering

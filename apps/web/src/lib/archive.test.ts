@@ -1,17 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createLibraryClient } from './unity';
+import type { SessionConnection } from './session';
 
 describe('native Archive browser requests', () => {
   beforeEach(() => vi.resetModules());
   afterEach(() => vi.unstubAllGlobals());
   async function client() {
-    const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => {
-      if (String(input) === '/api/local-session') return Response.json({});
-      if (String(input) === '/api/workspaces') return Response.json({ workspaces: [{ id: 'workspace /?', name: 'Library' }] });
-      if (String(input).includes('/cards?')) return Response.json({ cards: [], total: 0, complete: false, snapshot: 'a'.repeat(64), matches: [], scores: [] });
-      return Response.json({ cardId: 'reference-id', created: true });
+    const fetcher = vi.fn<(path: string, init?: RequestInit) => Promise<unknown>>().mockImplementation(async (input) => {
+      if (String(input).includes('/cards?')) return { cards: [], total: 0, complete: false, snapshot: 'a'.repeat(64), matches: [], scores: [] };
+      return { cardId: 'reference-id', created: true };
     });
-    vi.stubGlobal('fetch', fetcher);
-    return { api: (await import('./archive')).archiveApi, fetcher };
+    const connection: SessionConnection = {
+      actor: { id: 'owner', uri: 'urn:owner' }, name: 'Owner', profile: 'local', capabilities: { browserLLM: true },
+      scopeKey: 'owner-connection', signal: new AbortController().signal,
+      request: async <T>(path: string, init?: RequestInit) => await fetcher(path, init) as T,
+      fetch: async () => new Response(), reconnect: async () => {}, subscribe: () => () => {},
+      snapshot: () => ({ status: 'active', reason: null }), dispose() {},
+    };
+    return { api: (await import('./archive')).createArchiveClient(createLibraryClient(connection, 'workspace /?')), fetcher, connection };
   }
 
   it('sends submitted mode, typed filter, page snapshot and cancellation to the native route', async () => {
@@ -46,5 +52,29 @@ describe('native Archive browser requests', () => {
     expect(init?.signal).toBe(controller.signal);
     await api.card('source /?');
     expect(String(fetcher.mock.calls.at(-1)![0])).toBe('/api/workspaces/workspace%20%2F%3F/archive/v2/cards/source%20%2F%3F');
+  });
+  it('encodes providers and immutable object URLs without consulting another session or workspace', async () => {
+    const { api, fetcher } = await client();
+    expect(api.objectUrl('hash/one')).toBe('/api/workspaces/workspace%20%2F%3F/archive/v2/objects/hash%2Fone');
+    await api.saveSource('provider /?', { enabled: false });
+    expect(fetcher.mock.calls.at(-1)![0]).toBe('/api/workspaces/workspace%20%2F%3F/archive/v2/sources/provider%20%2F%3F');
+    await api.runs('provider /?');
+    expect(fetcher.mock.calls.at(-1)![0]).toBe('/api/workspaces/workspace%20%2F%3F/archive/v2/runs?provider=provider+%2F%3F');
+    expect(api.workspaceId).toBe('workspace /?'); expect(api.scopeKey).toContain('owner-connection');
+  });
+  it('propagates auth and stale-page failures, rather than empty successful pages', async () => {
+    const { api, fetcher } = await client();
+    fetcher.mockRejectedValueOnce(new Error('This browser belongs to another account'));
+    await expect(api.list(new URLSearchParams())).rejects.toThrow('another account');
+    fetcher.mockResolvedValueOnce({ cards: [{ id: 'duplicate' }, { id: 'duplicate' }], total: 2 });
+    await expect(api.list(new URLSearchParams())).rejects.toThrow('invalid result page');
+  });
+  it('passes cancellation through both pinned mutations and source administration', async () => {
+    const { api, fetcher } = await client(); const signal = new AbortController().signal;
+    await api.import('card', 'version', signal); expect(fetcher.mock.calls.at(-1)![1]?.signal).toBe(signal);
+    await api.favorite('card', 'version', signal); expect(fetcher.mock.calls.at(-1)![1]?.signal).toBe(signal);
+    await api.block('card', signal); expect(fetcher.mock.calls.at(-1)![1]?.signal).toBe(signal);
+    await api.sources(signal); expect(fetcher.mock.calls.at(-1)![1]?.signal).toBe(signal);
+    await api.cancel(3, signal); expect(fetcher.mock.calls.at(-1)![1]?.signal).toBe(signal);
   });
 });

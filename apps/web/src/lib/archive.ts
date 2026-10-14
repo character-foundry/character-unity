@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { call, libraryId } from './unity';
+import type { LibraryClient } from './unity';
+import { useLibraryClient } from './library-client';
 import { libraryChanged, PAGE_SIZE, useLibraryVersion, writeSearch } from './library-search';
 import type { LibrarySearch } from './library-search';
 import { archiveSearchParams } from './archive-search';
@@ -47,64 +48,76 @@ export interface ArchiveSource {
 export const providerLabels: Record<string, string> = { chub: 'Chub', ct: 'Character Tavern', risuai: 'RisuAI', wyvern: 'Wyvern' };
 export const providerShort: Record<string, string> = { chub: 'CHUB', ct: 'CT', risuai: 'RISU', wyvern: 'WYV' };
 
-async function path(rest: string) { return `/api/workspaces/${encodeURIComponent(await libraryId())}/archive/v2${rest}`; }
 const jsonBody = (body: unknown): RequestInit => ({ headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 
-export const archiveApi = {
+export function createArchiveClient(library: LibraryClient) {
+  const path = (rest: string) => `/api/workspaces/${encodeURIComponent(library.workspaceId)}/archive/v2${rest}`;
+  const call = <T>(path: string, init?: RequestInit) => library.connection.request<T>(path, init);
+  const api = Object.freeze({
+  workspaceId: library.workspaceId,
+  scopeKey: library.scopeKey,
   async status(signal?: AbortSignal) { return call<ArchiveStatus & { sources: { provider: string; label: string; enabled: boolean; running: number | null; lastRun: ArchiveRun | null }[] }>(await path('/status'), { signal }); },
   async list(params: URLSearchParams, signal?: AbortSignal) { return validateArchivePage(await call<ArchivePage>(await path(`/cards?${params}`), { signal })); },
   async card(id: string, versionId?: string, signal?: AbortSignal) {
     const query = versionId ? `?${new URLSearchParams({ version: versionId })}` : '';
     return call<ArchiveCardDetail>(await path(`/cards/${encodeURIComponent(id)}${query}`), { signal });
   },
-  async tags() { return (await call<{ tags: { tag: string; count: number }[] }>(await path('/tags'))).tags; },
-  async objectUrl(hash: string) { return path(`/objects/${hash}`); },
-  async import(id: string, versionId?: string) {
-    const result = await call<{ cardId: string; created: boolean }>(await path(`/cards/${encodeURIComponent(id)}/import`), { method: 'POST', ...(versionId ? jsonBody({ versionId }) : {}) });
+  async tags(signal?: AbortSignal) { return (await call<{ tags: { tag: string; count: number }[] }>(path('/tags'), { signal })).tags; },
+  objectUrl(hash: string) { return path(`/objects/${encodeURIComponent(hash)}`); },
+  async import(id: string, versionId?: string, signal?: AbortSignal) {
+    const result = await call<{ cardId: string; created: boolean }>(path(`/cards/${encodeURIComponent(id)}/import`), { method: 'POST', signal, ...(versionId ? jsonBody({ versionId }) : {}) });
     libraryChanged();
     return result;
   },
-  async favorite(id: string, versionId?: string) {
-    const result = await call<{ cardId: string; created: boolean }>(await path(`/cards/${encodeURIComponent(id)}/favorite`), { method: 'PUT', ...(versionId ? jsonBody({ versionId }) : {}) });
+  async favorite(id: string, versionId?: string, signal?: AbortSignal) {
+    const result = await call<{ cardId: string; created: boolean }>(path(`/cards/${encodeURIComponent(id)}/favorite`), { method: 'PUT', signal, ...(versionId ? jsonBody({ versionId }) : {}) });
     libraryChanged();
     return result;
   },
-  async block(id: string) { await call(await path(`/cards/${encodeURIComponent(id)}/block`), { method: 'POST' }); libraryChanged(); },
-  async sources() { return (await call<{ sources: ArchiveSource[] }>(await path('/sources'))).sources; },
-  async saveSource(provider: string, body: { enabled?: boolean; intervalMinutes?: number; settings?: Record<string, SettingValue>; secrets?: Record<string, string | null> }) {
-    return call<ArchiveSource>(await path(`/sources/${provider}`), { method: 'PUT', ...jsonBody(body) });
+  async block(id: string, signal?: AbortSignal) { await call(path(`/cards/${encodeURIComponent(id)}/block`), { method: 'POST', signal }); libraryChanged(); },
+  async sources(signal?: AbortSignal) { return (await call<{ sources: ArchiveSource[] }>(path('/sources'), { signal })).sources; },
+  async saveSource(provider: string, body: { enabled?: boolean; intervalMinutes?: number; settings?: Record<string, SettingValue>; secrets?: Record<string, string | null> }, signal?: AbortSignal) {
+    return call<ArchiveSource>(path(`/sources/${encodeURIComponent(provider)}`), { method: 'PUT', signal, ...jsonBody(body) });
   },
-  async run(provider: string) { return call<{ runId: number }>(await path(`/sources/${provider}/runs`), { method: 'POST' }); },
-  async runs(provider?: string) { return (await call<{ runs: ArchiveRun[] }>(await path(`/runs${provider ? `?provider=${provider}` : ''}`))).runs; },
-  async cancel(runId: number) { await call(await path(`/runs/${runId}/cancel`), { method: 'POST' }); },
-};
+  async run(provider: string, signal?: AbortSignal) { return call<{ runId: number }>(path(`/sources/${encodeURIComponent(provider)}/runs`), { method: 'POST', signal }); },
+  async runs(provider?: string, signal?: AbortSignal) { return (await call<{ runs: ArchiveRun[] }>(path(`/runs${provider ? `?${new URLSearchParams({ provider })}` : ''}`), { signal })).runs; },
+  async cancel(runId: number, signal?: AbortSignal) { await call(path(`/runs/${runId}/cancel`), { method: 'POST', signal }); },
+  });
+  caches.set(api, { views: new Map(), tags: [] });
+  return api;
+}
+export type ArchiveClient = ReturnType<typeof createArchiveClient>;
+interface ArchiveCache { views: Map<string, ArchiveView>; tags: { tag: string; count: number }[] }
+const caches = new WeakMap<ArchiveClient, ArchiveCache>();
+const clients = new WeakMap<LibraryClient, ArchiveClient>();
+export function useArchiveApi() {
+  const library = useLibraryClient();
+  let client = clients.get(library);
+  if (!client) { client = createArchiveClient(library); clients.set(library, client); }
+  return client;
+}
 
 /** The URL of an Archive object (portraits); objects never change, so the browser may cache them. */
 export function useObjectUrl(hash: string | null) {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    let active = true;
-    if (hash) void archiveApi.objectUrl(hash).then((value) => { if (active) setUrl(value); });
-    else setUrl(null);
-    return () => { active = false; };
-  }, [hash]);
-  return url;
+  const api = useArchiveApi();
+  return hash ? api.objectUrl(hash) : null;
 }
 
 interface ArchiveView extends ArchivePage { status: ArchiveStatus; scrollY: number }
-const archiveViews = new Map<string, ArchiveView>();
-function remember(key: string, view: ArchiveView) {
+function remember(archiveViews: Map<string, ArchiveView>, key: string, view: ArchiveView) {
   archiveViews.delete(key); archiveViews.set(key, view);
   while (archiveViews.size > 10) archiveViews.delete(archiveViews.keys().next().value!);
 }
 
 /** Abort stale reads and keep paging bound to the submitted URL query, never to an edited form. */
 export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
-  const key = `${writeSearch(search)}|${JSON.stringify(hidden)}`;
+  const archiveApi = useArchiveApi(), archiveViews = caches.get(archiveApi)!.views;
+  const key = `${archiveApi.scopeKey}|${writeSearch(search)}|${JSON.stringify(hidden)}`;
   const version = useLibraryVersion();
   const [attempt, setAttempt] = useState(0);
   const [state, setState] = useState<{ key: string; view: ArchiveView | null }>({ key, view: archiveViews.get(key) ?? null });
-  const [status, setStatus] = useState<ArchiveStatus | null>(null);
+  const [statusState, setStatus] = useState<{ owner: ArchiveClient; status: ArchiveStatus } | null>(null);
+  const status = statusState?.owner === archiveApi ? statusState.status : null;
   const [activity, setActivity] = useState<{ key: string; loading: boolean; error: string | null }>({ key, loading: true, error: null });
   const pending = useRef<AbortController | null>(null);
   const liveKey = useRef(key); liveKey.current = key;
@@ -120,7 +133,7 @@ export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly s
     fetchParams.current = null;
     void (async () => {
       const currentStatus = await archiveApi.status(controller.signal); controller.signal.throwIfAborted();
-      setStatus(currentStatus);
+      setStatus({ owner: archiveApi, status: currentStatus });
       const params = archiveSearchParams(search, hidden, currentStatus); fetchParams.current = params;
       // Native offset pages are not immutable snapshots. Refresh a remembered range before paging it.
       const target = Math.min(480, Math.max(PAGE_SIZE, remembered ? archivePageOffset(remembered) : 0));
@@ -137,7 +150,7 @@ export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly s
         if (offset >= combined.total) break;
       }
       const nextView = { ...combined!, status: currentStatus, scrollY: remembered?.scrollY ?? 0 };
-      remember(key, nextView); setState({ key, view: nextView });
+      remember(archiveViews, key, nextView); setState({ key, view: nextView });
     })().catch((failure) => {
       if (!controller.signal.aborted) {
         // Never keep old semantic results under a withdrawn capability or failed refresh.
@@ -149,7 +162,7 @@ export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly s
     });
     return () => { controller.abort(); pending.current?.abort(); pending.current = null; };
     // The key captures every submitted field and hidden-tag policy.
-  }, [key, version, attempt]);
+  }, [archiveApi, archiveViews, key, version, attempt]);
 
   const hasMore = !!view && archivePageOffset(view) < view.total;
   const loadMore = useCallback(async () => {
@@ -163,21 +176,21 @@ export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly s
       if (liveKey.current !== key) return;
       const merged = mergeArchivePage(view, next);
       const nextView = { ...view, ...merged, scrollY: archiveViews.get(key)?.scrollY ?? 0 };
-      remember(key, nextView); setState({ key, view: nextView });
+      remember(archiveViews, key, nextView); setState({ key, view: nextView });
     } catch (failure) {
       if (!controller.signal.aborted && liveKey.current === key) setActivity({ key, loading: false, error: failure instanceof Error ? failure.message : 'More cards could not be loaded.' });
     } finally {
       if (pending.current === controller) pending.current = null;
       if (!controller.signal.aborted && liveKey.current === key) setActivity((previous) => ({ ...previous, loading: false }));
     }
-  }, [hasMore, key, view]);
+  }, [archiveApi, archiveViews, hasMore, key, view]);
 
   useLayoutEffect(() => {
     window.scrollTo(0, archiveViews.get(key)?.scrollY ?? 0);
     const onScroll = () => { const remembered = archiveViews.get(key); if (remembered) remembered.scrollY = window.scrollY; };
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
-  }, [key]);
+  }, [archiveViews, key]);
   const sentinel = useRef<HTMLDivElement>(null);
   // Explicit paging avoids surprising repeated embedding requests while scrolling.
   return { cards: view?.cards ?? [], total: view?.total ?? 0, complete: view?.complete ?? true, matches: view?.matches,
@@ -223,23 +236,26 @@ export function validateArchivePage(page: ArchivePage): ArchivePage {
 
 /** Archive totals for the filter bar (less what Settings hides) and whether the Archive is reachable. */
 export function useArchiveTotal(hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  const archiveApi = useArchiveApi();
   const exclude = [...new Set([...hidden.tags.map((tag) => tag.toLowerCase()), ...(hidden.hideNsfw ? ['nsfw'] : [])])].sort().join(',');
-  const [total, setTotal] = useState<number | null>(null);
+  const [total, setTotal] = useState<{ owner: ArchiveClient; exclude: string; value: number } | null>(null);
   useEffect(() => {
-    let active = true;
-    archiveApi.list(new URLSearchParams({ limit: '1', ...(exclude ? { exclude } : {}) })).then((page) => { if (active) setTotal(page.total); }).catch(() => undefined);
-    return () => { active = false; };
-  }, [exclude]);
-  return total;
+    const controller = new AbortController(); setTotal(null);
+    void archiveApi.list(new URLSearchParams({ limit: '1', ...(exclude ? { exclude } : {}) }), controller.signal)
+      .then((page) => { if (!controller.signal.aborted) setTotal({ owner: archiveApi, exclude, value: page.total }); }).catch(() => { if (!controller.signal.aborted) setTotal(null); });
+    return () => controller.abort();
+  }, [archiveApi, exclude]);
+  return total?.owner === archiveApi && total.exclude === exclude ? total.value : null;
 }
 
-let lastTags: { tag: string; count: number }[] = [];
 export function useArchiveTags() {
-  const [tags, setTags] = useState(lastTags);
+  const archiveApi = useArchiveApi(), cache = caches.get(archiveApi)!;
+  const [state, setState] = useState({ owner: archiveApi, tags: cache.tags });
   useEffect(() => {
-    let active = true;
-    archiveApi.tags().then((value) => { lastTags = value; if (active) setTags(value); }).catch(() => undefined);
-    return () => { active = false; };
-  }, []);
-  return tags;
+    const controller = new AbortController();
+    void archiveApi.tags(controller.signal).then((value) => { if (!controller.signal.aborted) { cache.tags = value; setState({ owner: archiveApi, tags: value }); } })
+      .catch(() => { if (!controller.signal.aborted) setState({ owner: archiveApi, tags: cache.tags }); });
+    return () => controller.abort();
+  }, [archiveApi, cache]);
+  return state.owner === archiveApi ? state.tags : cache.tags;
 }

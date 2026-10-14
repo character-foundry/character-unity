@@ -2,14 +2,15 @@ import { useState } from 'react';
 import { CardGrid } from '@/components/cards/card-grid';
 import { CardModal } from '@/components/cards/card-modal';
 import { Button } from '@/components/ui';
-import { usePlacements } from '@/lib/chat';
+import { useChatApi, usePlacementState } from '@/lib/chat';
 import type { useLibraryFeed } from '@/lib/library-search';
 import type { CardListItem } from '@/types/card';
 
 /** The library's results grid: infinite scroll with a Load more fallback. */
 export function LibraryResults({ feed, empty }: { feed: ReturnType<typeof useLibraryFeed>; empty: React.ReactNode }) {
   const [selected, setSelected] = useState<CardListItem | null>(null);
-  const placements = usePlacements(feed.cards.map((card) => card.id));
+  const chat = useChatApi();
+  const { placements, error: placementError } = usePlacementState(feed.cards.map((card) => card.id));
   const settled = !feed.loading || feed.cards.length > 0;
 
   if (feed.error && feed.cards.length === 0) {
@@ -24,6 +25,10 @@ export function LibraryResults({ feed, empty }: { feed: ReturnType<typeof useLib
 
   return (
     <>
+      {placementError && <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+        <span>Chat placement status unavailable: {placementError}</span>
+        <button type="button" onClick={chat.changed} className="font-medium text-nebula hover:underline">Retry chat status</button>
+      </div>}
       <CardGrid cards={feed.cards} isLoading={feed.loading} onQuickView={setSelected} placements={placements} />
       {feed.cards.length > 0 && (
         <div ref={feed.sentinel} className="mt-6 flex flex-col items-center gap-3 pb-2 text-[13px] text-starlight/50" aria-live="polite">

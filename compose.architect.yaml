@@ -1,5 +1,7 @@
 # Docker Engine on Linux: share the host network so the single-owner API can
 # stay bound to actual loopback. Bridge publishing is for the account hub only.
+# Keep the historical service/volume names so existing data stays in place.
+# Native Unity is the default; UNITY_WEB_DIR=/app/web/architect explicitly selects the retained scaffold.
 services:
   architect:
     build: .
@@ -11,7 +13,7 @@ services:
       UNITY_PROFILE: local
       HOST: 127.0.0.1
       PORT: ${ARCHITECT_PORT:-9314}
-      UNITY_WEB_DIR: /app/web/architect
+      UNITY_WEB_DIR: ${UNITY_WEB_DIR:-/app/web/unity}
     volumes:
       - architect-data:/data
     read_only: true

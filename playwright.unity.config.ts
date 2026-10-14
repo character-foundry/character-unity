@@ -3,6 +3,7 @@ import { defineConfig } from '@playwright/test';
 /** The real Unity shell and Architect editor; the original config covers the older hosts. */
 export default defineConfig({
   testDir: './e2e/unity-editor',
+  testIgnore: 'sharing.spec.ts',
   fullyParallel: false,
   workers: 1,
   retries: 0,

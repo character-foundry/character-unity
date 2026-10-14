@@ -8,6 +8,7 @@ import { PlacementChips, SendMenu } from '@/components/chat/send-menu';
 import { DeleteCardButton, FavoriteButton, FollowButton } from './card-actions';
 import { CardFormatBadge } from './card-format-badge';
 import type { ChatPlacement } from '@/lib/chat';
+import { ProtectedImage } from '@/components/ui/protected-media';
 
 interface CardModalProps {
   card: CardListItem | null;
@@ -26,7 +27,7 @@ export function CardModal({ card, isOpen, onClose, placements }: CardModalProps)
         <div className="flex flex-col lg:flex-row">
           <div className="relative aspect-[3/4] w-full shrink-0 lg:aspect-auto lg:min-h-[620px] lg:w-2/5">
             {(card.thumbnailPath || card.imagePath) ? (
-              <img src={card.thumbnailPath || card.imagePath!} alt={card.name}
+              <ProtectedImage src={card.thumbnailPath || card.imagePath!} alt={card.name}
                 className={cn('absolute inset-0 h-full w-full rounded-t-2xl object-cover lg:rounded-l-2xl lg:rounded-tr-none', shouldBlur && 'blur-xl')} />
             ) : <div className="flex h-full min-h-52 w-full items-center justify-center bg-cosmic-teal/50"><span className="text-8xl text-starlight/30">?</span></div>}
           </div>

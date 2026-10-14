@@ -10,7 +10,8 @@ const queryKeys = ['q', 'mode', 'filter', 'snapshot', 'tags', 'match', 'exclude'
 
 /**
  * The native Archive, read through this host: browsing, files for the library, and Settings' scraper
- * controls. Local profile only. Mounted at /api/workspaces/:workspaceId/archive/v2.
+ * controls. Hosts grant administration separately from account-scoped reads.
+ * Mounted at /api/workspaces/:workspaceId/archive/v2.
  */
 export function nativeArchiveRoutes(options: { nativeArchive?: NativeArchiveService; authenticate?: Authenticate }) {
   const routes = new Hono<Env>();
@@ -39,9 +40,10 @@ export function nativeArchiveRoutes(options: { nativeArchive?: NativeArchiveServ
   routes.get(`${base}/tags`, async (c) => c.json(await archive().tags(c.get('actor'), c.req.param('workspaceId'))));
   routes.get(`${base}/objects/:hash`, async (c) => {
     const upstream = await archive().object(c.get('actor'), c.req.param('workspaceId'), c.req.param('hash'));
-    // Content-addressed and private to this library: the browser may keep it.
+    // Workspace URLs require current session/expected-actor checks on every read.
+    // Only the upstream Archive's unauthenticated object URL may be immutable.
     return new Response(upstream.body, { headers: { 'content-type': upstream.headers.get('content-type') ?? 'application/octet-stream',
-      'cache-control': 'private, max-age=31536000, immutable', 'x-content-type-options': 'nosniff' } });
+      'cache-control': 'no-store', 'x-content-type-options': 'nosniff' } });
   });
   for (const method of ['post', 'put'] as const) routes[method](`${base}/cards/:id/${method === 'post' ? 'import' : 'favorite'}`, async (c) => {
     const body = c.req.header('content-type')?.includes('application/json') ? await json(c, 1024) : {};

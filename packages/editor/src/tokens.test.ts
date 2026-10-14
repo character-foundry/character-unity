@@ -1,8 +1,8 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { GptTokenizer } from '@character-foundry/character-foundry/tokenizers';
 import { createEditor } from './controller.js';
 import type { EditorDocument } from './controller.js';
 import { createTokenAnalysis, tokenProjection, validateTokenTexts } from './tokens.js';
+import { createWorkerTokenizer as neutralWorkerTokenizer } from '@character-unity/tokenizer';
 import { createWorkerTokenizer } from './worker-tokenizer.js';
 
 const document = (description = 'Hello world!'): EditorDocument => ({ spec: 'chara_card_v3', data: { name: 'Aster', description } });
@@ -60,38 +60,6 @@ it('bounds work and clears old totals on errors without affecting saved or unsav
   await analysis.update(document()); expect(analysis.getSnapshot().status).toBe('ready');
 });
 
-it('pins the public Foundry encode primitive to observed o200k_base vectors, with no approximate fallback', () => {
-  const tokenizer = new GptTokenizer();
-  expect(tokenizer.encode('')).toEqual([]);
-  expect(tokenizer.encode('Hello world!')).toEqual([13225, 2375, 0]);
-  expect(tokenizer.encode('お誕生日おめでとう')).toEqual([8930, 9697, 243, 128225, 8930, 17693, 4344, 48669]);
-  expect(tokenizer.encode('😀 café')).toEqual([84083, 30469]);
-  expect(() => tokenizer.encode('<|endoftext|>')).toThrow();
-});
-
-class FakeWorker {
-  static instances: FakeWorker[] = [];
-  onmessage?: (event: { data: unknown }) => void;
-  onerror?: (event: { preventDefault(): void }) => void;
-  onmessageerror?: () => void;
-  postMessage = vi.fn(); terminate = vi.fn();
-  constructor() { FakeWorker.instances.push(this); }
-}
-it('terminates owned workers on success, failure, timeout and cancellation', async () => {
-  FakeWorker.instances = []; vi.stubGlobal('Worker', FakeWorker); vi.useFakeTimers();
-  const port = createWorkerTokenizer();
-  const done = port.count(['Hello'], new AbortController().signal);
-  const first = FakeWorker.instances.at(-1)!; first.onmessage!({ data: { counts: [1] } });
-  await expect(done).resolves.toEqual([1]); expect(first.terminate).toHaveBeenCalledOnce();
-  const aborted = new AbortController(); const cancelled = port.count(['Cancel'], aborted.signal);
-  const pending = expect(cancelled).rejects.toThrow(); aborted.abort(); await pending;
-  expect(FakeWorker.instances.at(-1)!.terminate).toHaveBeenCalledOnce();
-  const timeout = expect(port.count(['Timeout'], new AbortController().signal)).rejects.toThrow(/timed out/);
-  await vi.advanceTimersByTimeAsync(15_000); await timeout;
-  expect(FakeWorker.instances.at(-1)!.terminate).toHaveBeenCalledOnce();
-  const bad = expect(port.count(['Bad'], new AbortController().signal)).rejects.toThrow(/could not be tokenized/);
-  FakeWorker.instances.at(-1)!.onmessage!({ data: { counts: [] } }); await bad;
-  expect(FakeWorker.instances.at(-1)!.terminate).toHaveBeenCalledOnce();
-  const count = FakeWorker.instances.length;
-  await expect(port.count(['Never start'], aborted.signal)).rejects.toThrow(); expect(FakeWorker.instances.length).toBe(count);
+it('keeps legacy host exports on the same neutral worker implementation', () => {
+  expect(createWorkerTokenizer).toBe(neutralWorkerTokenizer);
 });

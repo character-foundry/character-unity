@@ -20,6 +20,8 @@ import { sources } from '../src/sources/index.js';
 // Archive configuration or live corpus is read by this disposable fixture.
 const directory = process.argv[2];
 if (!directory) throw new Error('An isolated fixture directory is required');
+const port = Number(process.argv[3] ?? 19431);
+if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('A valid isolated fixture port is required');
 const databasePath = join(directory, 'cards.db'), filesDirectory = join(directory, 'files'), objectsDirectory = join(directory, 'versions');
 await mkdir(filesDirectory, { recursive: true }); await mkdir(objectsDirectory, { recursive: true });
 const db = new Database(databasePath);
@@ -90,7 +92,7 @@ const libraryIndex = await openLibraryIndex({ lanceDirectory, space: embedder.sp
 const archive = await openExistingArchive({ databasePath, filesDirectory, objectsDirectory, search, libraryIndex });
 const scheduler = createScheduler(archive, sources);
 const app = createNativeArchiveApp(archive, scheduler, sources, { adminToken: 'unity-browser-test-admin-token', libraryIndex });
-const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 19431 });
+const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
 for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
   void scheduler.stop().finally(() => {
     provider.close(); provider.closeAllConnections();

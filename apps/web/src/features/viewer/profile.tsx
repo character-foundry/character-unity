@@ -7,7 +7,8 @@ import type { CardDetail, CardListItem } from '@/types/card';
 import { AppShell } from '@/components/layout';
 import { buildCardExportFilename } from '@/lib/utils';
 import { WhereItLives } from '@/components/chat/where-it-lives';
-import { cardFamily, downloadExport, downloadOriginal, libraryId, type CardFamily, type ExportFormat } from '@/lib/unity';
+import type { CardFamily, ExportFormat } from '@/lib/unity';
+import { useLibraryClient } from '@/lib/library-client';
 import { CardHero, SectionTabs, NotesSection, CharacterSection, GreetingsSection, LorebookSection, AssetsSection, type Section } from './components';
 import { ViewMediaProvider } from './components/utils';
 
@@ -19,6 +20,7 @@ interface CardDetailClientProps {
 const extensions: Record<ExportFormat, string> = { json: 'json', png: 'png', charx: 'charx', 'sillytavern-json': 'json', 'sillytavern-png': 'png' };
 
 export function CardDetailClient({ card, tokenStatus, assetError }: CardDetailClientProps) {
+  const client = useLibraryClient();
   const [activeSection, setActiveSection] = useState<Section>('notes');
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
@@ -31,11 +33,11 @@ export function CardDetailClient({ card, tokenStatus, assetError }: CardDetailCl
   useEffect(() => {
     const controller = new AbortController();
     setFamily(null); setFamilyError(null); setSelectedFork(null);
-    void Promise.all([libraryId(), cardFamily(card.id, { signal: controller.signal })])
-      .then(([workspace, value]) => { if (!controller.signal.aborted) setFamily({ workspace, value }); })
+    void client.cardFamily(card.id, { signal: controller.signal })
+      .then((value) => { if (!controller.signal.aborted) setFamily({ workspace: client.workspaceId, value }); })
       .catch((failure) => { if (!controller.signal.aborted) setFamilyError(failure instanceof Error ? failure.message : 'Forks could not be loaded.'); });
     return () => controller.abort();
-  }, [card.id, familyAttempt]);
+  }, [client, card.id, familyAttempt]);
   const forks = family ? family.value.forks.map((summary) => toListItem(family.workspace, summary)) : [];
   const isNsfw = card.tags.some((tag) => tag.slug === 'nsfw');
   const sections: { id: Section; label: string; available: boolean }[] = [
@@ -66,8 +68,8 @@ export function CardDetailClient({ card, tokenStatus, assetError }: CardDetailCl
       <ViewMediaProvider value={media}>
         <div data-card-page data-card-slug={card.id} data-card-format={card.sourceFormat ?? ''}>
           <CardHero card={card} tokenStatus={tokenStatus} downloading={downloading}
-            onDownload={(format) => void download(() => downloadExport(card.id, card.headRevisionId, format, buildCardExportFilename(card, extensions[format])))}
-            onOriginal={() => void download(() => downloadOriginal(card.id, card.originalFilename!))}
+            onDownload={(format) => void download(() => client.downloadExport(card.id, card.headRevisionId, format, buildCardExportFilename(card, extensions[format])))}
+            onOriginal={() => void download(() => client.downloadOriginal(card.id, card.originalFilename!))}
             parent={family?.value.parent ? { id: family.value.parent.id, name: family.value.parent.name } : null} />
           <WhereItLives cardId={card.id} />
           {downloadError && <div role="alert" className="mb-4 rounded-lg border border-red-500/40 bg-red-500/20 px-4 py-3 text-red-200">{downloadError}</div>}

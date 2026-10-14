@@ -8,11 +8,14 @@ import type { LLMStore } from '../store/llm-store';
 import type { PersistenceAdapter } from '../adapters/persistence/types';
 import type { EditorAssetService } from './assets';
 import type { DraftRecovery } from './recovery';
+import type { UnityHostConfig } from './config';
 
 export interface EditorSelection { cardId: string; forkOf?: string }
 export interface EditorSession {
   readonly id: string;
   readonly workspaceId: string;
+  readonly capabilities: Readonly<{ browserLLM: boolean }>;
+  readonly connection: UnityHostConfig['connection'];
   readonly api: UnityApiClient;
   readonly assets: EditorAssetService;
   readonly cards: StoreApi<CardStore>;

@@ -9,11 +9,11 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant = 'primary', size = 'md', isLoading, disabled, children, ...props }, ref) => {
-    const baseStyles = 'inline-flex items-center justify-center font-semibold rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-deep-space disabled:opacity-50 disabled:cursor-not-allowed';
+    const baseStyles = 'inline-flex items-center justify-center font-semibold rounded-lg transition-colors duration-150 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-deep-space disabled:opacity-50 disabled:cursor-not-allowed';
 
     const variants = {
-      primary: 'cosmic-gradient text-white hover:scale-105 focus:ring-nebula nebula-glow',
-      secondary: 'bg-cosmic-teal/50 text-starlight border border-nebula/30 hover:bg-cosmic-teal hover:border-nebula focus:ring-nebula',
+      primary: 'bg-nebula text-accent-ink hover:bg-pink-light focus:ring-nebula',
+      secondary: 'bg-surface text-starlight border border-line hover:bg-raised hover:border-nebula/50 focus:ring-nebula',
       ghost: 'text-starlight hover:bg-cosmic-teal/30 focus:ring-nebula',
       outline: 'border-2 border-nebula text-nebula hover:bg-nebula hover:text-white focus:ring-nebula',
       danger: 'bg-red-600 text-white hover:bg-red-700 focus:ring-red-500',

@@ -6,6 +6,7 @@ WORKDIR /build/character-unity
 COPY . .
 # Fetch the public SDK at foundry-sdk.json's exact commit. Neither the SDK nor
 # node_modules is copied from a developer machine.
+# A fresh build remains gated until that pinned Foundry commit is published.
 RUN pnpm bootstrap && pnpm build && pnpm build:browser
 RUN node scripts/stage-node-runtime.mjs /output
 
@@ -24,7 +25,7 @@ CMD ["node", "node.js"]
 
 FROM node:24.19.0-bookworm-slim@sha256:a9f5f7c91a432850b2a8a7797adf5eadb6c733ceed61167806cee7ea7fbc29df AS runtime
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=9312 UNITY_PROFILE=hub \
-    UNITY_DB_PATH=/data/unity.db UNITY_BLOB_DIR=/data/blobs UNITY_WEB_DIR=/app/web/hub
+    UNITY_DB_PATH=/data/unity.db UNITY_BLOB_DIR=/data/blobs UNITY_WEB_DIR=/app/web/unity
 WORKDIR /app
 COPY --from=build /output/ ./
 RUN chmod -R a+rX /app && mkdir /data && chown node:node /data

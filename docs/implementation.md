@@ -1,5 +1,70 @@
 # Implementation status and acceptance gates
 
+## Native library, sharing and account UI, 2026-10-13
+
+The active `apps/web` shell now includes the native library/viewer presentation,
+card action menus, account/workspace controls, Sharing and Connected hubs. The
+library and Archive use the same tile conventions and display preferences. These
+pages use native React Router and Unity services; no Next shim, CardsHub endpoint
+fallback or mutable global current API client is required.
+
+Sharing reviews 1–20 exact owned saved revisions, with a paginated historical
+revision picker. Refreshing the library or saving a newer head cannot silently
+change the selection. Review precedes publication. Publication detail supports
+version-checked visibility/fork/original policies, permitted original downloads,
+private forks and visible published lineage. Inaccessible parents stay opaque;
+private library history is not loaded to enrich lineage. Archive references are
+read-only links and cannot be published without a changed owned fork. An unchanged
+Save deliberately creates no owned copy.
+
+Configured remote controls are in the same shell: browse, pull a verified private
+fork into the native editor, choose an exact saved revision, prepare/review a
+durable return, then explicitly send or retry it. The browser supplies connection
+IDs, never destination URLs or signing credentials. Preparation notices are
+actor/workspace-scoped; the server outbox remains authoritative. Receiving a
+return creates a private draft, not an automatic publication.
+
+`GET /api/client` declares local/account profile and browser capabilities. The
+session runtime and library clients capture an immutable actor/workspace owner
+for JSON and binary requests, including stored media and downloads. Expiry or an
+account change locks existing work for same-account recovery; deliberate account
+switching disposes captured clients and editor sessions. Hub editors neither load
+browser LLM credentials nor issue direct provider calls. Local installs retain
+browser-local providers, templates, presets and preferences.
+
+`packages/tokenizer` now owns the shared browser token-worker boundary. The active
+app no longer imports the scaffold editor to count text. Earlier `apps/architect`,
+`apps/hub` and `packages/editor` remain as regression hosts pending retirement;
+the browser-only IndexedDB profile and its data-preserving upgrades remain.
+
+Verification: all 838 tests across 99 files and every conformance report pass.
+Full package/E2E type-check, lint, workspace builds, built Node smoke, public SDK
+identity/sync probes, Worker rehearsal and Archive SQLite/Lance install/reopen
+checks pass. All 45 native local browser workflows, 12 real account/TLS workflows
+and 45 retained scaffold/browser regressions pass. Desktop/mobile screenshots and
+independent Standards/Spec reviews cover real controls, downloads, exact revision
+review, durable return retries, account changes, modal recovery and cancellation.
+The account suite is included sequentially in `pnpm check`.
+
+Authenticated reads bypass browser caches; protected media owns revocable URLs
+and retries on recovery, including active-to-active local renewal. Offscreen
+portraits and audio/video previews do not acquire bytes before visibility or an
+explicit request. Authored HTML/Markdown resolves only exact stored/staged image
+bindings; unresolved images and CSS resource loads remain inert while original
+documents/bytes stay unchanged. Old local recovery snapshots and acknowledgments
+remain readable only by the explicit local profile. Saved searches are scoped to
+stable actors/workspaces, with a safe local-only upgrade from old preferences.
+
+Native Node distribution staging passes with exact UI/tokenizer assets and no
+browser Node/native-driver leakage. A fresh Docker build/rehearsal has not run:
+it remains gated on publishing the held Foundry pin. Worker verification uses its
+explicit retained scaffold assets, not a claim of native Worker UI hosting.
+Opaque Risu resources remain an explicit remote-protocol limitation in
+`cu-1o2.13.1`; no data is stripped to claim success. A non-failing FileHandle GC
+warning from the account asset rehearsal is recorded for diagnosis in
+`cu-1o2.9.11`. No public deployment, live corpus indexing, provider activation,
+Archive writer takeover or Foundry push occurred. Those gates remain held.
+
 ## Archive references and native shared search, 2026-10-13
 
 `cu-1o2.27` and `cu-1o2.9.1` are implemented together. Favorites/adds create

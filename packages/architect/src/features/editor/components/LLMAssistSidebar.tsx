@@ -61,6 +61,7 @@ export function LLMAssistSidebar({ isOpen, onClose, fieldName, currentValue, sel
     setIsProcessing(false); setError('Request stopped by user');
   };
   const handleRun = async () => {
+    if (!session.capabilities.browserLLM) return;
     const provider = settings.providers.find((item) => item.id === selectedProvider);
     const finalInstruction = instruction.trim() || presets.find((preset) => preset.id === selectedPresetId)?.instruction;
     if (!provider || !finalInstruction) { setError('Select a provider and an instruction first.'); return; }
@@ -121,7 +122,7 @@ export function LLMAssistSidebar({ isOpen, onClose, fieldName, currentValue, sel
       refreshPresets(); setSelectedPresetId(preset.id); setInstruction(''); setShowCustomInstruction(false);
     } catch (error) { setError(error instanceof Error ? error.message : 'Failed to save preset'); }
   };
-    if (!isOpen)
+    if (!isOpen || !session.capabilities.browserLLM)
         return null;
     return (<div role="complementary" aria-label="AI assistant" className="ai-assistant absolute top-0 right-0 bottom-0 z-40 flex flex-col">
       {/* Header */}

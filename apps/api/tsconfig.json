@@ -6,7 +6,8 @@
     ]
   },
   "include": [
-    "src"
+    "src",
+    "tests/native-hub-browser-fixture.ts"
   ],
   "exclude": [
     "src/worker.ts"

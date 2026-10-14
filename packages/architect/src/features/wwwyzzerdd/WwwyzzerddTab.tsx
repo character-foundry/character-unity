@@ -151,6 +151,7 @@ Tell me your preferences and describe the character you'd like to create!`;
         }
     }, [promptSet, session, generation]);
     const handleSendMessage = async () => {
+        if (!session.capabilities.browserLLM) return;
         if (!input.trim() || isLoading)
             return;
         if (!promptSet) {
@@ -383,6 +384,7 @@ Tell me your preferences and describe the character you'd like to create!`;
         </div>
       </div>);
     }
+    if (!session.capabilities.browserLLM) return <p className="p-6 text-sm text-dark-muted">The AI wizard is available only in a local installation.</p>;
     return (<div className="flex h-full">
       {/* Left Column - Character Form */}
       <div className="w-1/2 border-r border-dark-border overflow-auto p-6">

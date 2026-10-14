@@ -24,6 +24,7 @@ import '@milkdown/crepe/theme/common/style.css';
 import '@milkdown/crepe/theme/frame-dark.css';
 import { editorViewCtx, parserCtx } from '@milkdown/kit/core';
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener';
+import { imageBlockSchema } from '@milkdown/kit/component/image-block';
 import { Slice } from '@milkdown/kit/prose/model';
 import { Selection } from '@milkdown/kit/prose/state';
 import { eclipse } from '@uiw/codemirror-theme-eclipse';
@@ -35,7 +36,7 @@ import { githubDark } from '@uiw/codemirror-theme-github';
 import { EditorView } from '@codemirror/view';
 import { TemplateSnippetPanel } from './TemplateSnippetPanel';
 import { LLMAssistSidebar } from './LLMAssistSidebar';
-import DOMPurify from 'dompurify';
+import { AuthoredHtml, unavailableImage, useAuthoredImageUrls } from '../../../unity/authored-media';
 
 // Field definitions with settings keys for extended fields
 type LocalFocusField =
@@ -82,6 +83,8 @@ const ALL_FIELDS: FieldDef[] = [
 interface CrepeEditorProps {
   value: string;
   editorKey: number;
+  imageKey: string;
+  imageUrl: (source: string) => string;
   onChange: (markdown: string) => void;
   onReady: (instance: Crepe | null) => void;
 }
@@ -110,8 +113,11 @@ function updateCrepeContent(crepe: Crepe, markdown: string) {
   });
 }
 
-function CrepeMarkdownEditor({ value, editorKey, onChange, onReady }: CrepeEditorProps) {
+function CrepeMarkdownEditor({ value, editorKey, imageKey, imageUrl, onChange, onReady }: CrepeEditorProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const valueRef = useRef(value), callbacks = useRef({ onChange, onReady, imageUrl });
+  valueRef.current = value;
+  callbacks.current = { onChange, onReady, imageUrl };
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -120,13 +126,18 @@ function CrepeMarkdownEditor({ value, editorKey, onChange, onReady }: CrepeEdito
     // Pending creation owns its own mount, so late teardown cannot remove a replacement editor.
     const mount = document.createElement('div');
     containerRef.current.replaceChildren(mount);
-    const changed = throttle((markdown: string) => { if (!disposed) onChange(markdown); }, 200);
+    const changed = throttle((markdown: string) => { if (!disposed) callbacks.current.onChange(markdown); }, 200);
 
     // Crepe configuration with proper features enabled - playground pattern
     const crepe = new Crepe({
       root: mount,
-      defaultValue: value || '',
+      defaultValue: valueRef.current || '',
       featureConfigs: {
+        [Crepe.Feature.ImageBlock]: {
+          // Must be synchronous: Milkdown mounts the authored src before an
+          // asynchronous proxy resolves. The document's URI is never rewritten.
+          proxyDomURL: (source) => callbacks.current.imageUrl(source),
+        },
         [Crepe.Feature.CodeMirror]: {
           theme: eclipse, // Light theme for code blocks (can switch based on dark mode later)
         },
@@ -139,6 +150,15 @@ function CrepeMarkdownEditor({ value, editorKey, onChange, onReady }: CrepeEdito
     // Use listener plugin approach with throttling (playground pattern)
     crepe.editor
       .config((ctx) => {
+        // CommonMark supplies null for an untitled image, while the installed
+        // block schema requires a string caption. Normalize the display parse
+        // only; source URIs and the authored document stay untouched.
+        ctx.update(imageBlockSchema.key, (previous) => (schemaContext) => {
+          const schema = previous(schemaContext), parse = schema.parseMarkdown;
+          return { ...schema, parseMarkdown: { ...parse, runner(state, node, type) {
+            parse.runner(state, { ...node, title: typeof node.title === 'string' ? node.title : '' }, type);
+          } } };
+        });
         ctx.get(listenerCtx).markdownUpdated((_, markdown) => { changed(markdown); });
       })
       .use(listener);
@@ -148,20 +168,21 @@ function CrepeMarkdownEditor({ value, editorKey, onChange, onReady }: CrepeEdito
       .then(() => {
         if (disposed) { void crepe.destroy().catch((error: unknown) => { console.error('Error destroying discarded Crepe editor:', error); }); return; }
         ready = true;
-        onReady(crepe);
+        callbacks.current.onReady(crepe);
       })
       .catch((error) => {
         if (!disposed) console.error('Failed to create Crepe editor:', error);
       });
 
     return () => {
+      if (ready) { valueRef.current = crepe.getMarkdown(); changed.flush(); }
       disposed = true;
       changed.cancel();
       if (ready) void crepe.destroy().catch((error: unknown) => { console.error('Error destroying Crepe editor:', error); });
       mount.remove();
-      onReady(null);
+      callbacks.current.onReady(null);
     };
-  }, [editorKey]);
+  }, [editorKey, imageKey]);
 
   return <div ref={containerRef} className="h-full w-full" />;
 }
@@ -303,6 +324,8 @@ function FocusedEditorInner() {
   }, [selectedField, alternateGreetingIndex, drafts, getFieldValue]);
 
   const currentValue = drafts[selectedField] ?? '';
+  const images = useAuthoredImageUrls(currentValue);
+  const imageKey = JSON.stringify(images.urls);
 
   const normalizeDraft = (value: string) => value.replace(/^(\s*)\\\[/gm, '$1[');
 
@@ -577,74 +600,21 @@ function FocusedEditorInner() {
   // Check if we should use HTML mode for current field
   const isHtmlMode = selectedField === 'creator_notes' && creatorNotes.htmlMode;
 
-  // Sanitize HTML for preview
-  const sanitizeHtml = (html: string) => {
-    return DOMPurify.sanitize(html, {
-      ALLOWED_TAGS: [
-        'p',
-        'br',
-        'strong',
-        'em',
-        'u',
-        'a',
-        'img',
-        'ul',
-        'ol',
-        'li',
-        'code',
-        'pre',
-        'h1',
-        'h2',
-        'h3',
-        'h4',
-        'h5',
-        'h6',
-        'blockquote',
-        'table',
-        'thead',
-        'tbody',
-        'tr',
-        'th',
-        'td',
-        'div',
-        'span',
-        'hr',
-        'b',
-        'i',
-        's',
-        'sub',
-        'sup',
-        'details',
-        'summary',
-      ],
-      ALLOWED_ATTR: [
-        'href',
-        'src',
-        'alt',
-        'title',
-        'width',
-        'height',
-        'style',
-        'class',
-        'id',
-        'target',
-        'rel',
-      ],
-    });
-  };
-
   const renderWysiwyg = (suffix = '') => (
     <div className="flex-1 bg-slate-900/60 border border-dark-border rounded-lg p-3 overflow-auto min-h-[50vh]">
       <CrepeMarkdownEditor
         key={`${editorKey}-${suffix}`}
         value={currentValue}
         editorKey={editorKey}
+        imageKey={imageKey}
+        imageUrl={(source) => Object.hasOwn(images.urls, source) ? images.urls[source]! : unavailableImage}
         onChange={handleDraftChange}
         onReady={(instance) => {
           crepeRef.current = instance;
           rawMarkdownRef.current = currentValue;
         }}
       />
+      {images.missing.length > 0 && <p role="status" className="mt-2 text-xs text-dark-muted">{images.missing.length} image reference{images.missing.length === 1 ? '' : 's'} unavailable or not stored. External images are not loaded; the original references are unchanged.</p>}
     </div>
   );
 
@@ -685,10 +655,7 @@ function FocusedEditorInner() {
 
       {/* HTML Preview Content */}
       <div className="flex-1 overflow-auto p-4">
-        <div
-          className="prose prose-invert max-w-none"
-          dangerouslySetInnerHTML={{ __html: sanitizeHtml(currentValue) }}
-        />
+        <AuthoredHtml className="prose prose-invert max-w-none" html={currentValue} />
       </div>
     </div>
   );

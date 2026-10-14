@@ -7,6 +7,7 @@ import type { ExportFormat } from '@/lib/unity';
 import { SendMenu } from '@/components/chat/send-menu';
 import { DeleteCardButton, FavoriteButton, FollowButton } from '@/components/cards/card-actions';
 import { CardFormatBadge } from '@/components/cards/card-format-badge';
+import { ProtectedImage } from '@/components/ui/protected-media';
 
 interface CardHeroProps {
   card: CardDetail;
@@ -29,11 +30,11 @@ export function CardHero({ card, tokenStatus, onDownload, onOriginal, downloadin
   return (
     <div className="relative mb-4 overflow-hidden rounded-xl" data-card-hero>
       <div className="absolute inset-0 z-10 bg-gradient-to-r from-deep-space via-deep-space/80 to-transparent" data-card-hero-overlay />
-      {card.imagePath && <div className="absolute inset-0" data-card-hero-bg><img src={card.imagePath} alt="" className="h-full w-full object-cover opacity-30 blur-sm" /></div>}
+      {card.imagePath && <div className="absolute inset-0" data-card-hero-bg><ProtectedImage src={card.imagePath} alt="" className="h-full w-full object-cover opacity-30 blur-sm" /></div>}
       <div className="relative z-20 flex flex-col gap-6 p-4 sm:p-6 xl:flex-row" data-card-hero-content>
         <div className="shrink-0" data-card-image-container>
           <div className="relative h-72 w-52 overflow-hidden rounded-lg border-2 border-nebula/30 shadow-xl" data-card-image>
-            {card.imagePath ? <img src={card.imagePath} alt={card.name} className={cn('h-full w-full object-cover', shouldBlur && 'blur-xl')} /> :
+            {card.imagePath ? <ProtectedImage src={card.imagePath} alt={card.name} className={cn('h-full w-full object-cover', shouldBlur && 'blur-xl')} /> :
               <div className="flex h-full w-full items-center justify-center bg-cosmic-teal/50"><svg aria-hidden="true" viewBox="0 0 24 24" className="h-24 w-24 text-nebula/40" fill="none" stroke="currentColor" strokeWidth="1"><circle cx="12" cy="8" r="4" /><path d="M4 22v-2a8 8 0 0116 0v2" /></svg></div>}
           </div>
         </div>

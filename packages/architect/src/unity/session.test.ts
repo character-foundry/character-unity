@@ -33,6 +33,17 @@ beforeEach(() => { fetcher = vi.fn<typeof fetch>(); vi.stubGlobal('fetch', fetch
 afterEach(() => { for (const session of sessions.splice(0)) session.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('editor session lifecycle', () => {
+  it('closes every editor operation when its captured account connection is disposed', async () => {
+    const owner = new AbortController();
+    const recovery: DraftRecovery = { load: async () => null, save: async () => {}, remove: async () => {}, flush: async () => {} };
+    const session = createEditorSession({ workspaceId: 'account-workspace', actorId: 'alice', signal: owner.signal, browserLLM: false }, { recovery });
+    sessions.push(session);
+    expect(session.capabilities.browserLLM).toBe(false);
+    expect(session.llm.getState().settings.providers).toEqual([]);
+    owner.abort();
+    expect(session.signal.aborted).toBe(true);
+    await expect(session.open({ cardId: 'private-card' })).rejects.toMatchObject({ name: 'AbortError' });
+  });
   it('owns separate drafts, controls, assets and live cancellation for concurrent workspaces', async () => {
     const first = make('first-workspace').session, second = make('second-workspace').session;
     fetcher.mockResolvedValueOnce(Response.json(opened('same-id'))).mockResolvedValueOnce(Response.json(opened('same-id', 'other-head')));

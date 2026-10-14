@@ -64,6 +64,7 @@ export function createAccountApi(options: {
   });
   // Bounded per-process admission control, independent of attacker-supplied IP headers.
   let windowStart = clock(), loginAttempts = 0;
+  app.get('/api/client', (c) => c.json({ profile: 'hub', capabilities: { browserLLM: false } }));
   app.post('/api/session', async (c) => {
     const now = clock();
     if (now - windowStart >= 60_000) { windowStart = now; loginAttempts = 0; }

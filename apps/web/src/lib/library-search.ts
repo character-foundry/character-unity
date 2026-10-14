@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useSearchParams } from 'react-router';
-import { libraryId, listCardTags, listCards, listFollowedCreators } from './unity';
-import type { LibraryQuery } from './unity';
+import { useLibraryClient } from './library-client';
+import type { LibraryClient, LibraryQuery } from './unity';
 import { toListItem } from './adapt';
 import type { CardListItem } from '@/types/card';
 
@@ -146,29 +146,36 @@ export function libraryChanged() { tagVersion++; for (const listener of tagListe
 export function useLibraryVersion() {
   return useSyncExternalStore((listener) => { tagListeners.add(listener); return () => tagListeners.delete(listener); }, () => tagVersion);
 }
-let lastTags: { tag: string; count: number }[] = [];
+interface LibraryCache { tags: { tag: string; count: number }[]; followed: string[]; views: Map<string, View> }
+const caches = new WeakMap<LibraryClient, LibraryCache>();
+function cacheFor(client: LibraryClient) {
+  let cache = caches.get(client);
+  if (!cache) { cache = { tags: [], followed: [], views: new Map() }; caches.set(client, cache); }
+  return cache;
+}
 /** Tag counts for pickers; refetched on each mount (edits change them) but shown from the last fetch at once. */
 export function useCardTags() {
+  const client = useLibraryClient(), cache = cacheFor(client);
   const version = useLibraryVersion();
-  const [tags, setTags] = useState(lastTags);
+  const [tags, setTags] = useState(cache.tags);
   useEffect(() => {
     let active = true;
-    listCardTags().then((value) => { lastTags = value; if (active) setTags(value); }).catch(() => undefined);
+    client.listCardTags().then((value) => { cache.tags = value; if (active) setTags(value); }).catch(() => undefined);
     return () => { active = false; };
-  }, [version]);
+  }, [version, client, cache]);
   return tags;
 }
 
-let lastFollowed: string[] = [];
 /** Creators followed in this library; refreshed after follow changes (libraryChanged). */
 export function useFollowedCreators() {
+  const client = useLibraryClient(), cache = cacheFor(client);
   const version = useLibraryVersion();
-  const [creators, setCreators] = useState(lastFollowed);
+  const [creators, setCreators] = useState(cache.followed);
   useEffect(() => {
     let active = true;
-    listFollowedCreators().then((value) => { lastFollowed = value; if (active) setCreators(value); }).catch(() => undefined);
+    client.listFollowedCreators().then((value) => { cache.followed = value; if (active) setCreators(value); }).catch(() => undefined);
     return () => { active = false; };
-  }, [version]);
+  }, [version, client, cache]);
   return creators;
 }
 
@@ -179,14 +186,15 @@ function hiddenTags(hidden: { tags: readonly string[]; hideNsfw: boolean }) {
 
 /** Cards in the library, less those Settings hides; the bar shows matches against it. */
 export function useLibraryTotal(hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  const client = useLibraryClient();
   const version = useLibraryVersion();
   const exclude = [...new Set(hiddenTags(hidden))].sort().join(',');
   const [total, setTotal] = useState<number | null>(null);
   useEffect(() => {
     let active = true;
-    listCards({ exclude: exclude ? exclude.split(',') : [], limit: 1 }).then((page) => { if (active) setTotal(page.total); }).catch(() => undefined);
+    client.listCards({ exclude: exclude ? exclude.split(',') : [], limit: 1 }).then((page) => { if (active) setTotal(page.total); }).catch(() => undefined);
     return () => { active = false; };
-  }, [exclude, version]);
+  }, [exclude, version, client]);
   return total;
 }
 
@@ -195,13 +203,13 @@ export function useLibraryTotal(hidden: { tags: readonly string[]; hideNsfw: boo
 export const PAGE_SIZE = 48;
 interface View { cards: unknown[]; total: number; scrollY: number }
 /** Loaded results and scroll position per query, so returning from a card lands where you left. */
-const views = new Map<string, View>();
 
 /**
  * An infinite list for one query `key` (namespace it per page). Pages come from `fetchRange`; a remembered
  * query shows its loaded range and scroll position at once, then refreshes that range.
  */
 export function useFeed<T extends { id: string }>(key: string, fetchRange: (offset: number, count: number) => Promise<{ cards: T[]; total: number }>) {
+  const client = useLibraryClient(), views = cacheFor(client).views;
   const version = useLibraryVersion();
   const cachedView = () => views.get(key) as { cards: T[]; total: number; scrollY: number } | undefined;
   const cached = cachedView();
@@ -226,7 +234,8 @@ export function useFeed<T extends { id: string }>(key: string, fetchRange: (offs
     }).catch((failure: unknown) => {
       if (id === request.current) setError(failure instanceof Error ? failure.message : 'Cards could not be loaded.');
     }).finally(() => { if (id === request.current) { busy.current = false; setLoading(false); } });
-  }, [key, version]);
+    return () => { request.current++; };
+  }, [key, version, views]);
 
   const hasMore = current.cards.length < current.total;
   const loadMore = useCallback(async () => {
@@ -247,7 +256,7 @@ export function useFeed<T extends { id: string }>(key: string, fetchRange: (offs
     } finally {
       if (id === request.current) { busy.current = false; setLoading(false); }
     }
-  }, [current.cards, hasMore, key]);
+  }, [current.cards, hasMore, key, views]);
 
   // Remember the scroll position for this query and put it back when the page is revisited.
   useLayoutEffect(() => {
@@ -260,7 +269,7 @@ export function useFeed<T extends { id: string }>(key: string, fetchRange: (offs
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => { cancelAnimationFrame(frame); window.removeEventListener('scroll', onScroll); };
-  }, [key]);
+  }, [key, views]);
 
   const sentinel = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -298,13 +307,14 @@ export function excludedTags(search: Pick<LibrarySearch, 'exclude'>, hidden: { t
 }
 
 export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  const client = useLibraryClient();
   const query: LibraryQuery = { q: searchText(search), tags: search.tags, tagMode: search.tagMode, exclude: excludedTags(search, hidden), has: search.has,
     ...(search.fork ? { fork: search.fork } : {}), ...(search.favorite ? { favorite: search.favorite } : {}),
     ...(search.source ? { source: search.source } : {}), ...(search.minTokens ? { minTokens: Number(search.minTokens) } : {}), sort: sortOptions.some((option) => option.value === search.sort) ? search.sort : 'edited' };
   return useFeed<CardListItem>(`library:${JSON.stringify(query)}`, async (offset, count) => {
-    const workspace = await libraryId();
+    const workspace = client.workspaceId;
     return fetchPages(offset, count, async (from, limit) => {
-      const page = await listCards({ ...query, offset: from, limit });
+      const page = await client.listCards({ ...query, offset: from, limit });
       return { items: page.cards.map((summary) => toListItem(workspace, summary)), total: page.total };
     });
   });
@@ -316,15 +326,52 @@ export interface SavedSearch { name: string; params: string }
 /** Saved searches per page: a library search's fork and favorite filters mean nothing in the Archive. */
 const savedKeys = { library: 'unity-saved-searches', archive: 'unity-saved-archive-searches' } as const;
 export type SearchPage = keyof typeof savedKeys;
-export function loadSavedSearches(page: SearchPage = 'library'): SavedSearch[] {
-  const savedKey = savedKeys[page];
+const legacySavedSearchOwnerKey = 'unity:saved-searches:legacy-local-owner:v2';
+// If private mode denies writes, one captured local owner can still read its old rows during this visit.
+const legacySavedSearchClaims = new WeakMap<Storage, string>();
+function savedSearchOwner(client: LibraryClient) {
+  return [client.connection.profile, client.connection.actor.id, client.workspaceId].map(encodeURIComponent).join(':');
+}
+function savedSearchKey(client: LibraryClient, page: SearchPage) {
+  // Reconnects have a fresh scopeKey; private preferences belong to a stable actor/workspace, not a session secret.
+  return `unity:saved-searches:v2:${savedSearchOwner(client)}:${page}`;
+}
+function ownsLegacySavedSearches(storage: Storage, client: LibraryClient) {
+  if (client.connection.profile !== 'local') return false;
+  const owner = savedSearchOwner(client), claimed = storage.getItem(legacySavedSearchOwnerKey);
+  if (claimed !== null) return claimed === owner;
+  const visiting = legacySavedSearchClaims.get(storage);
+  if (visiting && visiting !== owner) return false;
+  if (!Object.values(savedKeys).some((key) => storage.getItem(key) !== null)) return false;
+  legacySavedSearchClaims.set(storage, owner);
+  try { storage.setItem(legacySavedSearchOwnerKey, owner); } catch { /* Keep the first local claim in memory without deleting legacy rows. */ }
+  return true;
+}
+function parseSavedSearches(raw: string | null): SavedSearch[] {
   try {
-    const value = JSON.parse(localStorage.getItem(savedKey) ?? '[]') as unknown;
+    const value = JSON.parse(raw ?? '[]') as unknown;
     return Array.isArray(value) ? value.filter((item): item is SavedSearch => typeof item?.name === 'string' && typeof item?.params === 'string') : [];
   } catch { return []; }
 }
-export function storeSavedSearches(searches: SavedSearch[], page: SearchPage = 'library') {
-  try { localStorage.setItem(savedKeys[page], JSON.stringify(searches)); } catch { /* private mode: searches last for this visit */ }
+export function loadSavedSearches(client: LibraryClient, page: SearchPage = 'library'): SavedSearch[] {
+  try {
+    const key = savedSearchKey(client, page), raw = localStorage.getItem(key);
+    if (raw !== null) return parseSavedSearches(raw);
+    if (!ownsLegacySavedSearches(localStorage, client)) return [];
+    const legacy = localStorage.getItem(savedKeys[page]);
+    if (legacy === null) return [];
+    const rows = parseSavedSearches(legacy);
+    // Never discard the only readable copy if the scoped write is denied.
+    try { localStorage.setItem(key, JSON.stringify(rows)); localStorage.removeItem(savedKeys[page]); } catch { /* Legacy remains readable by its claimed owner. */ }
+    return rows;
+  } catch { return []; }
+}
+export function storeSavedSearches(client: LibraryClient, searches: SavedSearch[], page: SearchPage = 'library') {
+  try {
+    const legacy = ownsLegacySavedSearches(localStorage, client);
+    localStorage.setItem(savedSearchKey(client, page), JSON.stringify(searches));
+    if (legacy) localStorage.removeItem(savedKeys[page]);
+  } catch { /* private mode: searches last for this visit; legacy rows remain recoverable */ }
 }
 
 // ---- Inputs --------------------------------------------------------------------------------------

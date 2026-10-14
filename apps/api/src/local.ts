@@ -26,6 +26,11 @@ export function createLocalApi(services: Awaited<ReturnType<typeof openLocalServ
     const token = cookies.length === 1 ? cookies[0]!.slice('unity_session='.length) : '';
     return token.length === secret.length && !/[^A-Za-z0-9_-]/.test(token) && timingSafeEqual(Buffer.from(token), Buffer.from(secret)) ? actor : null;
   } });
+  app.get('/api/client', (c) => {
+    c.header('cache-control', 'no-store');
+    if (!trusted(c.req.raw, false)) return c.json({ error: { code: 'FORBIDDEN', message: 'Request origin is not allowed' } }, 403);
+    return c.json({ profile: 'local', capabilities: { browserLLM: true } });
+  });
   app.post('/api/local-session', (c) => {
     if (!trusted(c.req.raw, true) || c.req.header('x-unity-session') !== 'local') {
       return c.json({ error: { code: 'FORBIDDEN', message: 'Local sessions require an allowed local origin' } }, 403);

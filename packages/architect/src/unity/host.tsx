@@ -20,7 +20,7 @@ export function ArchitectEditorHost({ config, session: supplied, cardId, forkOf,
   config: UnityHostConfig; session?: EditorSession; cardId: string; forkOf?: string;
   onExit?: () => void; onCreated?: (cardId: string) => void;
 }) {
-  const session = useMemo(() => supplied ?? createEditorSession(config), [supplied, config.workspaceId, config.reconnect]);
+  const session = useMemo(() => supplied ?? createEditorSession(config), [supplied, config.workspaceId, config.actorId, config.fetch, config.reconnect, config.signal, config.browserLLM, config.connection]);
   const leases = useRef(new Map<EditorSession, number>());
   useEffect(() => {
     if (supplied) return;

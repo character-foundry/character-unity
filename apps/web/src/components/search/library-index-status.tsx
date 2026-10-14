@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { libraryIndexStatus, retryLibraryIndex } from '@/lib/unity';
+import { useLibraryClient } from '@/lib/library-client';
 import type { LibraryIndexStatus as Status } from '@/lib/unity';
 import type { ArchiveStatus } from '@/lib/archive-search';
 
 /** One read per search/capability refresh, plus explicit retry. Never polls. */
 export function LibraryIndexStatus({ archive, searchKey }: { archive: ArchiveStatus | null; searchKey: string }) {
+  const client = useLibraryClient();
   const [status, setStatus] = useState<Status | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -15,12 +16,12 @@ export function LibraryIndexStatus({ archive, searchKey }: { archive: ArchiveSta
     const request = ++generation.current;
     setBusy(true); setError(null);
     try {
-      const result = await (retry ? retryLibraryIndex(controller.signal) : libraryIndexStatus(controller.signal));
+      const result = await (retry ? client.retryLibraryIndex(controller.signal) : client.libraryIndexStatus(controller.signal));
       if (request === generation.current && !controller.signal.aborted) setStatus(result);
     } catch (failure) {
       if (request === generation.current && !controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Indexing status could not be loaded');
     } finally { if (request === generation.current && !controller.signal.aborted) setBusy(false); }
-  }, []);
+  }, [client]);
   useEffect(() => {
     if (archive) void load();
     return () => { generation.current++; pending.current?.abort(); };

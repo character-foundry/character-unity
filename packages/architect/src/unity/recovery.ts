@@ -12,14 +12,16 @@ export interface DraftRecovery {
 
 /** Recovery belongs to a workspace and an individual draft owner. Concurrent
  * editors never overwrite or delete each other's rows; restoring is explicit. */
-export function createDraftRecovery(workspaceId: string, ownerId: string): DraftRecovery {
+export function createDraftRecovery(workspaceId: string, ownerId: string, options: { legacyLocalWorkspace?: string } = {}): DraftRecovery {
   let pending = Promise.resolve();
-  const prefix = (cardId: string) => `unity:${JSON.stringify([workspaceId, cardId])}:`;
+  const prefixFor = (namespace: string, cardId: string) => `unity:${JSON.stringify([namespace, cardId])}:`;
+  const prefix = (cardId: string) => prefixFor(workspaceId, cardId);
+  const namespaces = [...new Set([workspaceId, ...(options.legacyLocalWorkspace ? [options.legacyLocalWorkspace] : [])])];
   const key = (cardId: string) => `${prefix(cardId)}${ownerId}`;
-  const dismissedKey = (cardId: string) => `unity:recovery-dismissed:${JSON.stringify([workspaceId, cardId])}`;
+  const dismissedKey = (namespace: string, cardId: string) => `unity:recovery-dismissed:${JSON.stringify([namespace, cardId])}`;
   const snapshotIdentity = (draft: { snapshotId?: string; lastSaved: string }) => draft.snapshotId ?? draft.lastSaved;
-  function dismissed(cardId: string): Record<string, string> {
-    const value = localStorage.getItem(dismissedKey(cardId));
+  function dismissed(namespace: string, cardId: string): Record<string, string> {
+    const value = localStorage.getItem(dismissedKey(namespace, cardId));
     if (value === null) return {};
     const parsed: unknown = JSON.parse(value);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
@@ -34,9 +36,14 @@ export function createDraftRecovery(workspaceId: string, ownerId: string): Draft
   return {
     async load(cardId) {
       await pending.catch(() => undefined);
-      const drafts = await localDB.listDrafts(prefix(cardId));
-      const ignored = dismissed(cardId);
-      const latest = drafts.filter((draft) => ignored[draft.id] !== snapshotIdentity(draft))
+      // This second namespace is enabled only by the trusted local host. Read
+      // exact old rows/acknowledgments in place; never rename another editor's UUID.
+      const drafts = (await Promise.all(namespaces.map(async (namespace) => {
+        const rows = await localDB.listDrafts(prefixFor(namespace, cardId));
+        const ignored = dismissed(namespace, cardId);
+        return rows.filter((draft) => ignored[draft.id] !== snapshotIdentity(draft));
+      }))).flat();
+      const latest = drafts
         .sort((a, b) => b.lastSaved.localeCompare(a.lastSaved))[0];
       return latest ? { key: latest.id, card: latest.card, lastSaved: latest.lastSaved, snapshotId: latest.snapshotId, baseRevisionId: latest.baseRevisionId } : null;
     },
@@ -47,12 +54,13 @@ export function createDraftRecovery(workspaceId: string, ownerId: string): Draft
     remove(cardId) { return enqueue(() => localDB.deleteDraft(key(cardId))); },
     async dismiss(draft) {
       const cardId = draft.card.meta.id;
-      if (!cardId || !draft.key.startsWith(prefix(cardId))) throw new Error('The recovery draft belongs to a different workspace or card');
+      const namespace = cardId ? namespaces.find((namespace) => draft.key.startsWith(prefixFor(namespace, cardId))) : undefined;
+      if (!namespace) throw new Error('The recovery draft belongs to a different workspace or card');
       // Acknowledge this exact snapshot without deleting another live editor's
       // row. New writes have fresh ids even within the same clock millisecond.
-      const ignored = dismissed(cardId);
+      const ignored = dismissed(namespace, cardId);
       ignored[draft.key] = snapshotIdentity(draft);
-      localStorage.setItem(dismissedKey(cardId), JSON.stringify(ignored));
+      localStorage.setItem(dismissedKey(namespace, cardId), JSON.stringify(ignored));
     },
     flush() { return pending; },
   };

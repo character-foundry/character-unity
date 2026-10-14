@@ -51,6 +51,8 @@ if (profile === 'archive') {
   for (const name of ['node.js', 'native-rehearsal.js', 'generation-cli.js']) await cp(`apps/archive/dist/${name}`, join(output, name));
 } else {
   for (const name of ['node.js', 'accounts-cli.js', 'peers-cli.js', 'assets-cli.js']) await cp(`apps/api/dist/${name}`, join(output, name));
+  await cp('apps/web/dist', join(output, 'web', 'unity'), { recursive: true });
+  // Explicit legacy hosts remain available; staging does not migrate or remove browser-origin data.
   for (const name of ['architect', 'hub']) await cp(`apps/${name}/dist`, join(output, 'web', name), { recursive: true });
   await cp('foundry-sdk.json', join(output, 'foundry-sdk.json'));
 }
