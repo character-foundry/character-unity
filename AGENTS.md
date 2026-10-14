@@ -22,6 +22,10 @@
 - Architect and hub share `packages/api` and `packages/store`.
   `apps/api` hosts that API on Node or Workers; it is not a second implementation.
 - Browser and portable code must not import Node adapters or native modules.
+- Stream consumers must consume or cancel their bodies. Keep shared response
+  cleanup for HEAD and already-disconnected requests; the Node adapter cannot
+  own a body it abandons before handoff. Test pre-return and active-read disconnects,
+  not just successful downloads; never rely on FileHandle garbage collection.
 - `packages/architect` retains useful Architect editor components but uses native Unity
   revision/import/asset contracts in `src/lib/api.ts` and `src/unity/`. Do not restore
   old server fallbacks or placeholder endpoints. Save commits document and staged
@@ -38,10 +42,13 @@
   global current client or cookie-only protected media/download shortcuts.
   Hub profiles must not load browser LLM credentials or call those providers.
   `packages/tokenizer` supplies the portable browser worker; the active app must
-  not depend on `packages/editor` just to count tokens. Earlier Architect/hub
-  scaffolds remain for regressions pending retirement. Retain browser-only
+  not depend on the retired scaffold editor just to count tokens. Earlier Architect/hub
+  hosts and their form/UI packages are retired; all profiles use `apps/web`. Retain browser-only
   IndexedDB data and safe upgrades; scaffold retirement is not authorization to
-  reset that profile. Host apps own auth and routing.
+  reset that profile. Browser-only composition stays in-process over the existing
+  `character-unity:architect` IndexedDB database; never fall back to a host API.
+  Hosts own auth and routing. Standalone lorebook/preset/persona JSON lives in the
+  same workspace store, not fabricated card identities or a separate database.
 - Do not kill processes you did not start, discard legacy working-tree changes,
   or modify archived original bytes.
 

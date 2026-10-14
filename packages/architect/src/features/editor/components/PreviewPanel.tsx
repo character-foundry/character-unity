@@ -4,6 +4,9 @@ import { marked, type Tokens } from 'marked';
 import { AuthoredHtml } from '../../../unity/authored-media';
 import { useCardStore, extractCardData } from '../../../store/card-store';
 import { useState, useEffect } from 'react';
+import { PreservedField } from './FieldRenderer';
+import { readFieldValue } from './field-value';
+import { getFieldById } from '../config/field-definitions';
 
 // Custom marked extension to support image sizing syntax: ![alt](url =widthxheight)
 // This handles syntax like: ![image](url =100%x100%) or ![image](url =400x300)
@@ -86,7 +89,31 @@ export function PreviewPanel() {
   }, [session, selection]);
 
   if (!currentCard) return null;
-  const cardData = extractCardData(currentCard);
+  const cardData = extractCardData(currentCard) as unknown as Record<string, unknown>;
+  const renderText = (id: string, markdown = true) => {
+    const definition = getFieldById(id)!;
+    const state = readFieldValue(definition, cardData);
+    if (!state.editable) return <PreservedField key={id} label={definition.label} value={state.value} />;
+    const text = typeof state.value === 'string' ? state.value : '';
+    return <section key={id}>
+      <h2 className="text-xl font-semibold mb-2">{definition.label}</h2>
+      {markdown ? <AuthoredHtml className="prose prose-invert max-w-none" html={marked.parse(text) as string} />
+        : <pre className="bg-dark-surface p-4 rounded overflow-x-auto text-sm">{text}</pre>}
+    </section>;
+  };
+  const renderGreetings = (id: string) => {
+    const definition = getFieldById(id)!;
+    const state = readFieldValue(definition, cardData);
+    if (!state.editable) return <PreservedField key={id} label={definition.label} value={state.value} />;
+    const greetings = state.value as string[] | undefined;
+    if (!greetings?.length) return null;
+    return <section key={id}>
+      <h2 className="text-xl font-semibold mb-2">{definition.label}</h2>
+      <div className="space-y-2">{greetings.map((greeting, index) => <AuthoredHtml key={index}
+        className="prose prose-invert max-w-none bg-dark-surface p-4 rounded" html={marked.parse(greeting) as string} />)}</div>
+    </section>;
+  };
+  const tags = readFieldValue(getFieldById('tags')!, cardData);
 
   const handleCopy = async () => {
     try {
@@ -103,11 +130,11 @@ export function PreviewPanel() {
     <div className="max-w-7xl mx-auto p-6 space-y-6">
       {/* Preview/Raw Content Card */}
       <div className="card">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h2 className="text-2xl font-bold">
             {viewMode === 'preview' ? 'Preview' : 'Raw JSON'}
           </h2>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={handleCopy}
               className="btn-secondary text-sm flex items-center gap-1"
@@ -152,11 +179,12 @@ export function PreviewPanel() {
               </div>
             </div>
 
-            <h1 className="text-3xl font-bold mb-4 text-center">{cardData.name}</h1>
+            {typeof cardData.name === 'string' ? <h1 className="text-3xl font-bold mb-4 text-center">{cardData.name}</h1>
+              : <PreservedField label="Name" value={cardData.name} />}
 
-            {cardData.tags && cardData.tags.length > 0 && (
+            {!tags.editable ? <PreservedField label="Tags" value={tags.value} /> : Array.isArray(tags.value) && tags.value.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-4 justify-center">
-                {cardData.tags.map((tag, i) => (
+                {tags.value.map((tag, i) => (
                   <span key={i} className="chip bg-slate-700 text-slate-200">
                     {tag}
                   </span>
@@ -165,49 +193,10 @@ export function PreviewPanel() {
             )}
 
             <div className="space-y-4">
-              <section>
-                <h2 className="text-xl font-semibold mb-2">Description</h2>
-                <AuthoredHtml className="prose prose-invert max-w-none" html={marked.parse(cardData.description || '') as string} />
-              </section>
-
-              <section>
-                <h2 className="text-xl font-semibold mb-2">Personality</h2>
-                <AuthoredHtml className="prose prose-invert max-w-none" html={marked.parse(cardData.personality || '') as string} />
-              </section>
-
-              <section>
-                <h2 className="text-xl font-semibold mb-2">Scenario</h2>
-                <AuthoredHtml className="prose prose-invert max-w-none" html={marked.parse(cardData.scenario || '') as string} />
-              </section>
-
-              <section>
-                <h2 className="text-xl font-semibold mb-2">First Message</h2>
-                <AuthoredHtml className="prose prose-invert max-w-none bg-dark-surface p-4 rounded" html={marked.parse(cardData.first_mes || '') as string} />
-              </section>
-
-              {cardData.alternate_greetings && cardData.alternate_greetings.length > 0 && (
-                <section>
-                  <h2 className="text-xl font-semibold mb-2">Alternate Greetings</h2>
-                  <div className="space-y-2">
-                    {cardData.alternate_greetings.map((greeting, i) => (
-                      <AuthoredHtml
-                        key={i}
-                        className="prose prose-invert max-w-none bg-dark-surface p-4 rounded"
-                        html={marked.parse(greeting) as string}
-                      />
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {cardData.mes_example && (
-                <section>
-                  <h2 className="text-xl font-semibold mb-2">Example Dialogue</h2>
-                  <pre className="bg-dark-surface p-4 rounded overflow-x-auto text-sm">
-                    {cardData.mes_example}
-                  </pre>
-                </section>
-              )}
+              {['description', 'personality', 'scenario', 'first_mes'].map(id => renderText(id))}
+              {renderGreetings('alternate_greetings')}
+              {renderGreetings('group_only_greetings')}
+              {renderText('mes_example', false)}
             </div>
           </>
         )}

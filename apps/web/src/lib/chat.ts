@@ -15,6 +15,14 @@ export interface ChatPlacement {
   status: PlacementStatus; sentAt: string | null; seenAt: string | null;
 }
 export interface ChatCredentials { username?: string; password?: string; apiKey?: string }
+export interface ChatEditPin {
+  cardId: string; remoteId: string; baseRevisionId: string; expectedHead: string; remoteHash: string;
+  targetKind: string; targetUrl: string; targetConfiguration: number;
+}
+export interface ChatEditReview extends ChatEditPin {
+  changes: { field: string; before: string | string[]; after: string | string[] }[];
+  preserved: string[];
+}
 
 export const chatKinds: { kind: ChatKind; label: string; short: string; defaultUrl: string; auth: 'basic' | 'login'; ready: boolean }[] = [
   { kind: 'sillytavern', label: 'SillyTavern', short: 'ST', defaultUrl: 'http://127.0.0.1:8000', auth: 'basic', ready: true },
@@ -80,6 +88,12 @@ export function createChatClient(library: ChatLibrary) {
     remove: (id: string, signal?: AbortSignal) => mutation<void>(targetPath(id), { method: 'DELETE', signal }),
     check: (id: string, signal?: AbortSignal) => mutation<{ characters: number }>(`${targetPath(id)}/check`, { method: 'POST', signal }),
     scan: (id: string, signal?: AbortSignal) => mutation<{ found: number }>(`${targetPath(id)}/scan`, { method: 'POST', signal }),
+    reviewEdit: (id: string, remoteId: string, signal?: AbortSignal) => call<ChatEditReview>(`${targetPath(id)}/edits/review`, jsonInit('POST', { remoteId }, signal)),
+    acceptEdit: (id: string, review: ChatEditPin, signal?: AbortSignal) => {
+      const { cardId, remoteId, baseRevisionId, expectedHead, remoteHash, targetKind, targetUrl, targetConfiguration } = review;
+      return mutation<{ cardId: string; revisionId: string; duplicate: boolean }>(`${targetPath(id)}/edits`, jsonInit('POST',
+        { cardId, remoteId, baseRevisionId, expectedHead, remoteHash, targetKind, targetUrl, targetConfiguration }, signal));
+    },
     send: (targetId: string, cardId: string, overwriteEdited = false, signal?: AbortSignal) => mutation<ChatPlacement>(`${targetPath(targetId)}/sends`, jsonInit('POST', { cardId, ...(overwriteEdited ? { overwriteEdited } : {}) }, signal)),
     forget: (targetId: string, remoteId: string, signal?: AbortSignal) => mutation<void>(`${targetPath(targetId)}/placements?${new URLSearchParams({ remoteId })}`, { method: 'DELETE', signal }),
     async placements(cardIds?: readonly string[], signal?: AbortSignal) {

@@ -32,7 +32,8 @@ import { LorebookEditor } from './LorebookEditor';
 import { LLMAssistSidebar } from './LLMAssistSidebar';
 import { TemplateSnippetPanel } from './TemplateSnippetPanel';
 
-import { getFieldsForTab, tabDefinitions, type TabId } from '../config/field-definitions';
+import { getFieldById, getFieldsForTab, tabDefinitions, type TabId } from '../config/field-definitions';
+import { readFieldValue, writeFieldValue } from './field-value';
 
 // ============================================================================
 // TYPES
@@ -135,7 +136,6 @@ function AvatarUpload() {
     </div>
   );
 }
-
 // ============================================================================
 // EXTENSIONS TAB (Read-only JSON view)
 // ============================================================================
@@ -327,26 +327,13 @@ export function EditPanelV2() {
   // Early return if no card
   if (!currentCard) return null;
 
-  const isV3 = currentCard.meta.spec === 'v3';
   const cardData = extractCardData(currentCard) as unknown as Record<string, unknown>;
   const spec = normalizeSpec(currentCard.meta.spec);
   const showV3Fields = editor.showV3Fields;
 
   // Field change handler
   const handleFieldChange = (field: string, value: unknown) => {
-    const v2Data = currentCard.data as unknown as Record<string, unknown>;
-    const isWrappedV2 = !isV3 && v2Data.spec === 'chara_card_v2' && 'data' in v2Data;
-
-    if (isV3 || isWrappedV2) {
-      updateCardData({
-        data: {
-          ...cardData,
-          [field]: value,
-        },
-      } as Record<string, unknown>);
-    } else {
-      updateCardData({ [field]: value });
-    }
+    updateCardData({ [field]: value });
 
     // Special handling for tags - also update meta.tags
     if (field === 'tags') {
@@ -362,60 +349,23 @@ export function EditPanelV2() {
   };
 
   const handleLLMApply = (value: string, action: 'replace' | 'append' | 'insert') => {
-    // Handle appearance field
-    if (llmAssistField === 'appearance') {
-      const existingExtensions = (cardData.extensions || {}) as Record<string, unknown>;
-      const extensions = { ...existingExtensions };
-      const currentAppearance = getAppearanceFromExtensions(extensions);
-
-      if (extensions.voxta) {
-        (extensions.voxta as Record<string, unknown>).appearance =
-          action === 'replace' ? value : currentAppearance + '\n' + value;
-      } else {
-        extensions.visual_description =
-          action === 'replace' ? value : currentAppearance + '\n' + value;
-      }
-      handleFieldChange('extensions', extensions);
+    const [id, item] = llmAssistField.split(':');
+    const definition = getFieldById(id);
+    if (!definition) return;
+    const state = readFieldValue(definition, cardData);
+    if (!state.editable) return;
+    if (item !== undefined) {
+      const index = Number(item);
+      if (!Array.isArray(state.value) || !Number.isSafeInteger(index) || index < 0 || index >= state.value.length) return;
+      const updated = [...state.value];
+      updated[index] = action === 'replace' ? value : `${updated[index]}\n${value}`;
+      const change = writeFieldValue(definition, cardData, updated);
+      handleFieldChange(change.field, change.value);
       return;
     }
-
-    // Handle character_note field
-    if (llmAssistField === 'character_note') {
-      const existingExtensions = (cardData.extensions || {}) as Record<string, unknown>;
-      const depthPrompt = (existingExtensions.depth_prompt || {}) as Record<string, unknown>;
-      const currentPrompt = (depthPrompt.prompt as string) || '';
-      const depth = (depthPrompt.depth as number) ?? 4;
-
-      const extensions = {
-        ...existingExtensions,
-        depth_prompt: {
-          prompt: action === 'replace' ? value : currentPrompt + '\n' + value,
-          depth,
-          role: 'system',
-        },
-      };
-      handleFieldChange('extensions', extensions);
-      return;
-    }
-
-    // Handle alternate_greetings array items
-    if (llmAssistField.startsWith('alternate_greetings:')) {
-      const index = parseInt(llmAssistField.split(':')[1], 10);
-      if (!isNaN(index) && cardData.alternate_greetings) {
-        const updated = [...(cardData.alternate_greetings as string[])];
-        if (action === 'replace') updated[index] = value;
-        else if (action === 'append') updated[index] = updated[index] + '\n' + value;
-        handleFieldChange('alternate_greetings', updated);
-      }
-      return;
-    }
-
-    // Standard field handling
-    if (action === 'replace') {
-      handleFieldChange(llmAssistField, value);
-    } else if (action === 'append') {
-      handleFieldChange(llmAssistField, llmAssistValue + '\n' + value);
-    }
+    const previous = typeof state.value === 'string' ? state.value : '';
+    const change = writeFieldValue(definition, cardData, action === 'replace' ? value : `${previous}\n${value}`);
+    handleFieldChange(change.field, change.value);
   };
 
   // Templates handlers
@@ -441,12 +391,18 @@ export function EditPanelV2() {
       newValue = content + '\n\n' + templatesValue;
     }
 
-    handleFieldChange(templatesField, newValue);
+    const definition = getFieldById(templatesField);
+    if (!definition || !readFieldValue(definition, cardData).editable) return;
+    const change = writeFieldValue(definition, cardData, newValue);
+    handleFieldChange(change.field, change.value);
   };
 
   const handleInsertSnippet = (snippet: Snippet) => {
     const newValue = templatesValue + snippet.content;
-    handleFieldChange(templatesField, newValue);
+    const definition = getFieldById(templatesField);
+    if (!definition || !readFieldValue(definition, cardData).editable) return;
+    const change = writeFieldValue(definition, cardData, newValue);
+    handleFieldChange(change.field, change.value);
   };
 
   // Determine card type for tab filtering
@@ -559,15 +515,4 @@ export function EditPanelV2() {
       />
     </div>
   );
-}
-
-// Helper function for appearance
-function getAppearanceFromExtensions(extensions: Record<string, unknown>): string {
-  if ((extensions.voxta as Record<string, unknown> | undefined)?.appearance) {
-    return (extensions.voxta as Record<string, unknown>).appearance as string;
-  }
-  if (extensions.visual_description) {
-    return extensions.visual_description as string;
-  }
-  return '';
 }

@@ -76,7 +76,7 @@ async function publish(page: Page, review: Locator) {
   const result = await received.json() as { publications: { id: string }[] };
   expect(result.publications).toHaveLength(1);
   await expect(review).not.toBeVisible();
-  await expect(page.getByRole('status')).toContainText('Published 1 saved revision');
+  await expect(page.getByRole('status').filter({ hasText: 'Published 1 saved revision' })).toBeVisible();
   return result.publications[0]!.id;
 }
 async function readPublication(page: Page, actor: Credentials, id: string, host = origin) {
@@ -544,27 +544,40 @@ test('native remote connections remain account-specific', async ({ page, diagnos
   await assertAudit(value, info, 'tls-outsider-immutable-request-audit');
 });
 
-test('a published opaque Risu module reports the current remote protocol limit instead of empty results or stripped success', async ({ browser }, info) => {
+test('opaque Risu publications show explicit transport policy while compatible remote neighbors remain usable', async ({ browser }, info) => {
   const data = await remoteFixture(), sender = 'http://127.0.0.1:19314', receiver = 'https://127.0.0.1:19315';
   const publisherContext = await browser.newContext({ baseURL: receiver, ignoreHTTPSErrors: true });
   const editorContext = await browser.newContext({ baseURL: sender, viewport: { width: 390, height: 844 } });
   const publisher = await publisherContext.newPage(), editor = await editorContext.newPage(), value = audit(editor, data.editor);
   try {
-    await login(publisher, data.publisher, receiver); await importCard(publisher, 'Native opaque Risu publication');
+    await login(publisher, data.publisher, receiver); await importCard(publisher, 'Native compatible neighbor', 'json');
+    await publisher.getByRole('button', { name: 'Done', exact: true }).click(); await gotoSharing(publisher, receiver);
+    await publish(publisher, await beginReview(publisher, 'Native compatible neighbor'));
+    const imported = await importCard(publisher, 'Native opaque Risu publication');
     await publisher.getByRole('button', { name: 'Done', exact: true }).click(); await gotoSharing(publisher, receiver);
     const id = await publish(publisher, await beginReview(publisher, 'Native opaque Risu publication'));
     expect((await readPublication(publisher, data.publisher, id, receiver)).assets.some((asset) => asset.path === 'module.risum')).toBe(true);
+    await expect(publicationRow(publisher, 'Native opaque Risu publication')).toContainText('Not listed for remote sync');
     await publicationRow(publisher, 'Native opaque Risu publication').getByRole('button', { name: 'View publication', exact: true }).click();
-    expect(Buffer.from((await parse(await download(publisher, 'Download original'))).metadata!.moduleRisum!)).toEqual(moduleRisum);
+    await expect(publisher.getByRole('dialog', { name: 'Published character', exact: true })).toContainText('module.risum');
+    const original = await download(publisher, 'Download original');
+    expect(original).toEqual(imported.bytes);
+    expect(Buffer.from((await parse(original)).metadata!.moduleRisum!)).toEqual(moduleRisum);
+    await screenshot(publisher, info, 'native-opaque-risu-source-diagnostic');
     await login(editor, data.editor, sender); await editor.goto(`${sender}/remotes`);
+    await expect(editor.getByText(/Remote listings omit whole publications with opaque RisuAI modules/)).toBeVisible();
     await editor.getByLabel('Connected hub', { exact: true }).selectOption('friends');
-    const failure = editor.waitForResponse((response) => new URL(response.url()).pathname === '/api/remotes/connections/friends/publications');
+    const listing = editor.waitForResponse((response) => new URL(response.url()).pathname === '/api/remotes/connections/friends/publications');
     await editor.getByRole('button', { name: 'Browse remote publications', exact: true }).click();
-    expect((await failure).status()).toBe(502);
-    await expect(editor.getByRole('alert')).toContainText('The remote hub reported unavailable');
-    await expect(editor.getByText('No publications are visible on this hub.', { exact: true })).toHaveCount(0);
+    expect((await listing).status()).toBe(200);
+    await expect(editor.getByRole('alert')).toHaveCount(0);
     await expect(editor.getByRole('button', { name: 'Pull fork of Native opaque Risu publication', exact: true })).toHaveCount(0);
-    await fit(editor); await screenshot(editor, info, 'native-opaque-risu-sync-limit-explicit-failure');
-    await assertAudit(value, info, 'tls-opaque-limit-immutable-request-audit');
+    await expect(editor.getByRole('button', { name: 'Pull fork of Native compatible neighbor', exact: true })).toBeVisible();
+    await fit(editor); await screenshot(editor, info, 'native-opaque-risu-mobile-policy-and-supported-neighbor');
+    await editor.setViewportSize({ width: 1440, height: 1000 });
+    await fit(editor); await screenshot(editor, info, 'native-opaque-risu-desktop-policy-and-supported-neighbor');
+    await editor.getByRole('button', { name: 'Pull fork of Native compatible neighbor', exact: true }).click();
+    await expect(editor.getByLabel('Name', { exact: true })).toHaveValue('Native compatible neighbor');
+    await assertAudit(value, info, 'tls-opaque-policy-immutable-request-audit');
   } finally { await publisherContext.close(); await editorContext.close(); }
 });

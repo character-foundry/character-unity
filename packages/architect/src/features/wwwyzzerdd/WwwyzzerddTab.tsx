@@ -8,63 +8,29 @@ import { useSettingsStore } from '../../store/settings-store';
 import { useLLMStore } from '../../store/llm-store';
 import { invokeClientLLM, type ClientLLMProvider } from '../../lib/client-llm';
 import { type WwwyzzerddPromptSet, defaultWwwyzzerddPrompts, initializeWwwyzzerddPrompts, } from '../../lib/default-wwwyzzerdd';
-import { getExtensions, type CardFields } from '../../lib/card-type-guards';
-import { getVisualDescription, updateVoxtaExtension, type CardExtensions } from '../../lib/extension-types';
+import type { CardFields } from '../../lib/card-type-guards';
 import { useEditorSession } from '../../unity/context';
+import { applyWizardProposal, parseWizardProposal, reviewWizardProposal, type WizardFields } from './proposal';
+import { DynamicField } from '../editor/components/DynamicField';
+import { getFieldById } from '../editor/config/field-definitions';
+import { readFieldValue } from '../editor/components/field-value';
 interface ChatMessage {
     role: 'user' | 'assistant';
     content: string;
     timestamp: Date;
-    parsedData?: Partial<CharacterFields>;
+    parsedData?: WizardFields;
     selection?: number;
     sessionId?: string;
-}
-interface CharacterFields {
-    name: string;
-    nickname: string;
-    description: string;
-    scenario: string;
-    first_mes: string;
-    appearance: string;
-    personality: string;
-    tags: string[];
+    proposalWarning?: string;
 }
 // Default prompt set fallback
 const DEFAULT_PROMPT_SET = defaultWwwyzzerddPrompts[0];
-// Try to parse JSON from assistant response
-function tryParseCharacterJson(content: string): Partial<CharacterFields> | null {
-    // Look for JSON block in the response
-    const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) ||
-        content.match(/```\s*([\s\S]*?)\s*```/) ||
-        content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-        try {
-            const jsonStr = jsonMatch[1] || jsonMatch[0];
-            const parsed = JSON.parse(jsonStr);
-            // Validate it has at least one expected field
-            const validFields = ['name', 'nickname', 'description', 'scenario', 'first_mes', 'first_message', 'appearance', 'personality', 'tags'];
-            const hasValidField = validFields.some(f => f in parsed);
-            if (hasValidField) {
-                // Normalize first_message to first_mes
-                if (parsed.first_message && !parsed.first_mes) {
-                    parsed.first_mes = parsed.first_message;
-                    delete parsed.first_message;
-                }
-                return parsed;
-            }
-        }
-        catch {
-            // Ordinary prose is allowed; only recognized JSON updates card fields.
-        }
-    }
-    return null;
-}
 export function WwwyzzerddTab() {
     const session = useEditorSession();
     const generation = session.selection();
     const sessionRef = useRef(session);
     sessionRef.current = session;
-    const { currentCard, updateCardFields, updateExtensions } = useCardStore();
+    const { currentCard, updateCardFields } = useCardStore();
     const llmSettings = useLLMStore((state) => state.settings);
     const loadSettings = useLLMStore((state) => state.loadSettings);
     const activePromptSetId = useSettingsStore((state) => state.wwwyzzerdd?.activePromptSetId);
@@ -74,6 +40,7 @@ export function WwwyzzerddTab() {
     const [isLoading, setIsLoading] = useState(false);
     const [promptSet, setPromptSet] = useState<WwwyzzerddPromptSet | null>(null);
     const [mode, setMode] = useState<'character' | 'lore'>('character');
+    const [proposalError, setProposalError] = useState('');
     const chatEndRef = useRef<HTMLDivElement>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
     // Wrapper to persist messages
@@ -87,6 +54,7 @@ export function WwwyzzerddTab() {
         setMessagesState(session.wizard.messages as ChatMessage[]);
         setInput('');
         setIsLoading(false);
+        setProposalError('');
         return () => {
             const controller = abortControllerRef.current;
             abortControllerRef.current = null;
@@ -95,9 +63,8 @@ export function WwwyzzerddTab() {
     }, [session, generation]);
     // Get card data
     const cardData = currentCard ? extractCardData(currentCard) : null;
-    const extensions = currentCard ? getExtensions(currentCard) : {};
     // Helper to update card fields - uses type-safe updateCardFields
-    const handleFieldChange = (field: keyof CardFields, value: string | string[]) => {
+    const handleFieldChange = (field: string, value: unknown) => {
         if (!currentCard || !cardData)
             return;
         updateCardFields({ [field]: value } as Partial<CardFields>);
@@ -190,14 +157,11 @@ Tell me your preferences and describe the character you'd like to create!`;
         signal.addEventListener('abort', onAbort, { once: true });
         try {
             // Build context from current card
-            const cardContext = cardData ? `
-Current character data:
-- Name: ${cardData.name || '(not set)'}
-- Description: ${cardData.description || '(not set)'}
-- Personality: ${cardData.personality || '(not set)'}
-- Scenario: ${cardData.scenario || '(not set)'}
-- First Message: ${cardData.first_mes || '(not set)'}
-` : 'No character card loaded yet.';
+            const cardContext = cardData ? 'Current character data:\n' + ['name', 'description', 'personality', 'scenario', 'first_mes', 'appearance'].map(id => {
+                const definition = getFieldById(id)!;
+                const state = readFieldValue(definition, cardData as unknown as Record<string, unknown>);
+                return `- ${definition.label}: ${!state.editable ? '(unsupported value preserved; do not propose changes)' : typeof state.value === 'string' && state.value ? state.value : '(not set)'}`;
+            }).join('\n') : 'No character card loaded yet.';
             const jsonInstruction = `
 
 IMPORTANT FORMATTING RULES:
@@ -260,12 +224,14 @@ Only include fields you want to update. The user can then apply these to the cha
                 }
                 content = result.content || 'No response received.';
             }
-            const parsedData = tryParseCharacterJson(content);
+            const parsedData = parseWizardProposal(content);
+            const review = parsedData && cardData ? reviewWizardProposal(parsedData, cardData as unknown as Record<string, unknown>) : null;
             const assistantMessage: ChatMessage = {
                 role: 'assistant',
                 content,
                 timestamp: new Date(),
-                parsedData: parsedData || undefined,
+                parsedData: review && Object.keys(review.fields).length ? review.fields : undefined,
+                proposalWarning: review?.blocked.length ? `${review.blocked.join(', ')} cannot be edited by this form and were excluded from the proposal.` : undefined,
                 selection: requestGeneration,
                 sessionId: session.id,
             };
@@ -347,32 +313,12 @@ Tell me your preferences and describe the character you'd like to create!`;
         const data = message.parsedData;
         if (!currentCard || !cardData || !data || message.sessionId !== session.id || message.selection !== session.selection())
             return;
-        // Build the complete update object with all fields at once
-        const fieldsToUpdate: Partial<CardFields> = {};
-        let extensionsUpdate: CardExtensions | undefined;
-        Object.entries(data).forEach(([key, value]) => {
-            if (value !== undefined && value !== null) {
-                // Handle appearance specially - it goes into extensions
-                if (key === 'appearance' && typeof value === 'string') {
-                    if (extensions.voxta) {
-                        extensionsUpdate = updateVoxtaExtension(extensions, { appearance: value });
-                    }
-                    else {
-                        extensionsUpdate = { ...extensions, visual_description: value };
-                    }
-                }
-                else {
-                    (fieldsToUpdate as Record<string, unknown>)[key] = value;
-                }
-            }
-        });
-        // Apply field updates
-        if (Object.keys(fieldsToUpdate).length > 0) {
-            updateCardFields(fieldsToUpdate);
-        }
-        // Apply extension updates separately
-        if (extensionsUpdate) {
-            updateExtensions(extensionsUpdate);
+        try {
+            const changes = applyWizardProposal(data, cardData as unknown as Record<string, unknown>);
+            updateCardFields(changes as Partial<CardFields>);
+            setProposalError('');
+        } catch (error) {
+            setProposalError(error instanceof Error ? error.message : 'The proposal could not be applied.');
         }
     };
     if (!currentCard) {
@@ -385,72 +331,22 @@ Tell me your preferences and describe the character you'd like to create!`;
       </div>);
     }
     if (!session.capabilities.browserLLM) return <p className="p-6 text-sm text-dark-muted">The AI wizard is available only in a local installation.</p>;
-    return (<div className="flex h-full">
+    return (<div className="flex h-full min-h-0 flex-col overflow-auto lg:flex-row lg:overflow-hidden">
       {/* Left Column - Character Form */}
-      <div className="w-1/2 border-r border-dark-border overflow-auto p-6">
+      <div className="order-2 w-full min-w-0 shrink-0 border-t border-dark-border p-4 sm:p-6 lg:order-1 lg:w-1/2 lg:shrink lg:border-t-0 lg:border-r lg:overflow-auto">
         <div className="space-y-4">
-          {/* Name & Nickname */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium mb-1">Name</label>
-              <input type="text" value={cardData?.name || ''} onChange={(e) => handleFieldChange('name', e.target.value)} className="w-full bg-dark-surface border border-dark-border rounded px-3 py-2"/>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Nickname</label>
-              <input type="text" value={(cardData as Record<string, unknown>)?.nickname as string || ''} onChange={(e) => handleFieldChange('nickname' as keyof CardFields, e.target.value)} className="w-full bg-dark-surface border border-dark-border rounded px-3 py-2"/>
-            </div>
-          </div>
-
-          {/* Description */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Description</label>
-            <textarea value={cardData?.description || ''} onChange={(e) => handleFieldChange('description', e.target.value)} rows={8} className="w-full bg-dark-surface border border-dark-border rounded px-3 py-2 resize-y"/>
-          </div>
-
-          {/* Scenario */}
-          <div>
-            <label className="block text-sm font-medium mb-1">Scenario</label>
-            <textarea value={cardData?.scenario || ''} onChange={(e) => handleFieldChange('scenario', e.target.value)} rows={6} className="w-full bg-dark-surface border border-dark-border rounded px-3 py-2 resize-y"/>
-          </div>
-
-          {/* First Message */}
-          <div>
-            <label className="block text-sm font-medium mb-1">First Message</label>
-            <textarea value={cardData?.first_mes || ''} onChange={(e) => handleFieldChange('first_mes', e.target.value)} rows={8} className="w-full bg-dark-surface border border-dark-border rounded px-3 py-2 resize-y"/>
-          </div>
-
-          {/* Appearance */}
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <label className="block text-sm font-medium">Appearance</label>
-              <span className="text-xs px-1.5 py-0.5 rounded bg-orange-600 text-white">Image Gen</span>
-            </div>
-            <textarea value={getVisualDescription(extensions) || ''} onChange={(e) => {
-            if (extensions.voxta) {
-                updateExtensions(updateVoxtaExtension(extensions, { appearance: e.target.value }));
-            }
-            else {
-                updateExtensions({ ...extensions, visual_description: e.target.value });
-            }
-        }} rows={4} placeholder="Booru tags or natural language for image generation..." className="w-full bg-dark-surface border border-dark-border rounded px-3 py-2 resize-y"/>
-          </div>
-
-          {/* Personality - Last, deprecated for CC */}
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <label className="block text-sm font-medium">Personality</label>
-              <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-600 text-white">Voxta Only</span>
-            </div>
-            <textarea value={cardData?.personality || ''} onChange={(e) => handleFieldChange('personality', e.target.value)} rows={4} placeholder="Only used for Voxta cards. For CC, put personality in Description." className="w-full bg-dark-surface border border-dark-border rounded px-3 py-2 resize-y"/>
-          </div>
+          {proposalError && <p role="alert" className="text-sm text-red-300">{proposalError}</p>}
+          {['name', 'nickname', 'description', 'scenario', 'first_mes', 'appearance', 'personality'].map(id => <DynamicField key={id}
+            definition={getFieldById(id)!} cardData={cardData as unknown as Record<string, unknown>}
+            onFieldChange={handleFieldChange} spec={currentCard.meta.spec === 'v2' ? 'v2' : 'v3'} showV3Fields={true} tokenCounts={{}} />)}
         </div>
       </div>
 
       {/* Right Column - AI Chat */}
-      <div className="w-1/2 flex flex-col">
+      <div className="order-1 flex h-[36rem] w-full min-w-0 shrink-0 flex-col lg:order-2 lg:h-auto lg:w-1/2 lg:shrink">
         {/* Chat Header */}
-        <div className="p-4 border-b border-dark-border flex items-center justify-between">
-          <div className="flex items-center gap-4">
+        <div className="p-4 border-b border-dark-border flex flex-wrap items-center justify-between gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h3 className="text-lg font-semibold text-purple-400">wwwyzzerdd</h3>
             <div className="flex gap-2">
               <button onClick={() => setMode('character')} className={`px-3 py-1 rounded text-sm ${mode === 'character'
@@ -471,17 +367,18 @@ Tell me your preferences and describe the character you'd like to create!`;
         </div>
 
         {/* Messages */}
-        <div className="flex-1 overflow-auto p-4 space-y-4">
+        <div className="flex-1 min-h-0 overflow-auto p-4 space-y-4">
           {!promptSet && (<div className="bg-yellow-900/20 border border-yellow-700 rounded p-4 text-yellow-200 text-sm">
               No prompt set selected. Go to Settings &gt; wwwyzzerdd to select or create a prompt set.
             </div>)}
           {messages.map((msg, i) => (<div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-              <div className={`max-w-[85%] rounded-lg px-4 py-2 ${msg.role === 'user'
+              <div className={`max-w-[85%] min-w-0 rounded-lg px-4 py-2 ${msg.role === 'user'
                 ? 'bg-blue-600 text-white'
                 : 'bg-dark-surface border border-dark-border'}`}>
-                <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
+                <div className="whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]">{msg.content}</div>
+                {msg.proposalWarning && <p role="status" className="mt-2 text-xs text-amber-200">{msg.proposalWarning}</p>}
                 {msg.parsedData && (<div className="mt-3 pt-3 border-t border-dark-border">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <span className="text-xs text-green-400">
                         JSON detected: {Object.keys(msg.parsedData).join(', ')}
                       </span>
@@ -509,7 +406,7 @@ Tell me your preferences and describe the character you'd like to create!`;
         {/* Input */}
         <div className="p-4 border-t border-dark-border">
           <div className="flex gap-2">
-            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Describe your character or ask for suggestions..." rows={2} className="flex-1 bg-dark-surface border border-dark-border rounded px-3 py-2 resize-none" disabled={isLoading || !promptSet}/>
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} placeholder="Describe your character or ask for suggestions..." rows={2} className="min-w-0 flex-1 bg-dark-surface border border-dark-border rounded px-3 py-2 resize-none" disabled={isLoading || !promptSet}/>
             {isLoading ? (<button onClick={handleStop} className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded transition-colors">
                 Stop
               </button>) : (<button onClick={handleSendMessage} disabled={!input.trim() || !promptSet} className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded transition-colors">

@@ -10,7 +10,8 @@ import type { CardDocument } from '@character-unity/store';
 import { createCardService } from '../src/index.js';
 import { createChatService } from '../src/chat.js';
 import { createNativeArchiveReader } from '../src/native-reader.js';
-import { hashBytes } from '@character-foundry/character-foundry/identity';
+import { hashBytes, readCardLineage, verifyCardLineage } from '@character-foundry/character-foundry/identity';
+import { parseCard } from '@character-foundry/character-foundry/loader';
 
 const alice = { id: 'alice', uri: 'urn:unity:user:alice' };
 const card = (description: string): CardDocument => ({ spec: 'chara_card_v2', spec_version: '2.0', data: {
@@ -32,8 +33,7 @@ function fakeSillyTavern() {
     if (url.pathname === '/api/characters/import') {
       const form = init.body as FormData;
       const file = form.get('avatar') as File;
-      if (form.get('file_type') !== 'json') return Response.json({ error: true });
-      const stored = JSON.parse(await file.text()) as Record<string, unknown>;
+      const stored = parseCard(new Uint8Array(await file.arrayBuffer())).originalShape as unknown as Record<string, unknown>;
       const name = String(form.get('preserved_name') ?? (stored.data as { name: string }).name);
       files.set(`${name}.png`, stored);
       return Response.json({ file_name: name });
@@ -122,6 +122,186 @@ describe('chat service with a SillyTavern-shaped app', () => {
     await expect(chat.targets({ id: 'bob', uri: 'urn:unity:user:bob' }, workspaceId)).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
+  it('reviews remote text edits without writes and accepts them as a private, verified fork', async () => {
+    const original = card('Original description.');
+    (original.data as Record<string, unknown>).opaque = { script: 'keep me' };
+    const imported = await cards.import(alice, workspaceId, new TextEncoder().encode(JSON.stringify(original)));
+    const target = await chat.addTarget(alice, workspaceId, { kind: 'sillytavern', baseUrl: 'http://st.test', credentials: {} });
+    const sent = await chat.send(alice, workspaceId, imported.card.id, target.id);
+    (st.files.get(sent.remoteId)!.data as Record<string, unknown>).description = 'Edited inside the app.';
+    const review = await chat.reviewEdit(alice, workspaceId, target.id, sent.remoteId);
+    expect(review).toMatchObject({ cardId: imported.card.id, baseRevisionId: imported.revision.id, expectedHead: imported.revision.id,
+      changes: [{ field: 'description', before: 'Original description.', after: 'Edited inside the app.' }] });
+    expect(await cards.list(alice, workspaceId)).toHaveLength(1);
+    const result = await chat.acceptEdit(alice, workspaceId, target.id, review);
+    expect(result.cardId).not.toBe(imported.card.id);
+    const fork = await cards.open(alice, workspaceId, result.cardId);
+    expect(fork.revision.document.data).toMatchObject({ description: 'Edited inside the app.', opaque: { script: 'keep me' } });
+    expect(readCardLineage(fork.revision.document)).toMatchObject({ operation: 'fork', originalHash: imported.card.originalHash });
+    expect(await verifyCardLineage(fork.revision.document)).toBe(true);
+    expect((await cards.open(alice, workspaceId, imported.card.id)).revision.id).toBe(imported.revision.id);
+    expect(await database.hub.list(null)).toEqual([]);
+    expect(await chat.acceptEdit(alice, workspaceId, target.id, review)).toMatchObject({ cardId: result.cardId, duplicate: true });
+    const exported = await cards.export(alice, workspaceId, result.cardId, result.revisionId, 'json');
+    expect(new TextDecoder().decode(exported.bytes)).not.toContain('unityChatImport');
+    await chat.removeTarget(alice, workspaceId, target.id);
+    expect(await chat.acceptEdit(alice, workspaceId, target.id, review)).toMatchObject({ cardId: result.cardId, duplicate: true });
+  });
+
+  async function editedCopy() {
+    const imported = await cards.import(alice, workspaceId, new TextEncoder().encode(JSON.stringify(card('Original.'))));
+    const target = await chat.addTarget(alice, workspaceId, { kind: 'sillytavern', baseUrl: 'http://st.test', credentials: {} });
+    const sent = await chat.send(alice, workspaceId, imported.card.id, target.id);
+    const remote = st.files.get(sent.remoteId)!.data as Record<string, unknown>;
+    remote.description = 'Remote edit.';
+    return { imported, target, sent, remote };
+  }
+
+  it('explains a removed previous snapshot import without recreating or resurrecting its private fork', async () => {
+    const fixture = await editedCopy();
+    const review = await chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    const imported = await chat.acceptEdit(alice, workspaceId, fixture.target.id, review);
+    await cards.delete(alice, workspaceId, imported.cardId);
+    const freshReview = await chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    expect(freshReview).toEqual(review);
+    for (const pin of [review, freshReview]) await expect(chat.acceptEdit(alice, workspaceId, fixture.target.id, pin)).rejects.toMatchObject({
+      code: 'ACCESS_CHANGED', message: 'A previous import of this snapshot was removed; it will not be silently recreated.',
+    });
+    expect((await cards.list(alice, workspaceId)).map((item) => item.id)).toEqual([fixture.imported.card.id]);
+    await expect(cards.open(alice, workspaceId, imported.cardId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect((await chat.placements(alice, workspaceId, [fixture.imported.card.id]))[0]).toMatchObject({ remoteId: fixture.sent.remoteId, status: 'current' });
+  });
+
+  it('refuses stale remote bytes, stale heads and changed connections without creating a fork', async () => {
+    const fixture = await editedCopy();
+    const review = await chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    fixture.remote.description = 'Another remote edit.';
+    await expect(chat.acceptEdit(alice, workspaceId, fixture.target.id, review)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    fixture.remote.description = 'Remote edit.';
+    await cards.save(alice, workspaceId, fixture.imported.card.id, fixture.imported.revision.id, card('Local edit.'));
+    await expect(chat.acceptEdit(alice, workspaceId, fixture.target.id, review)).rejects.toMatchObject({ code: 'HEAD_CONFLICT' });
+    await chat.updateTarget(alice, workspaceId, fixture.target.id, { baseUrl: 'http://other.test' });
+    await expect(chat.acceptEdit(alice, workspaceId, fixture.target.id, review)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    expect(await cards.list(alice, workspaceId)).toHaveLength(1);
+  });
+
+  it.each(['configuration', 'removed target', 'forgotten placement'])('atomically refuses %s changes during the final owned fork', async (change) => {
+    const fixture = await editedCopy();
+    const review = await chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    const guarded = createChatService({ ...database.store, async forkCard(input, context) {
+      if (change === 'configuration') await chat.updateTarget(alice, workspaceId, fixture.target.id, { credentials: { password: 'changed after final review read' } });
+      else if (change === 'removed target') await chat.removeTarget(alice, workspaceId, fixture.target.id);
+      else await chat.forget(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+      return database.store.forkCard(input, context);
+    } }, database.chat, assets, (connection) => createChatApp(connection, st.fetcher));
+    await expect(guarded.acceptEdit(alice, workspaceId, fixture.target.id, review)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    expect(await cards.list(alice, workspaceId)).toHaveLength(1);
+  });
+
+  it('merges only remotely changed fields and refuses conflicting edits to the same field', async () => {
+    const fixture = await editedCopy();
+    const local = card('Original.'); (local.data as Record<string, unknown>).scenario = 'A newer local scenario.';
+    await cards.save(alice, workspaceId, fixture.imported.card.id, fixture.imported.revision.id, local);
+    const review = await chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    const result = await chat.acceptEdit(alice, workspaceId, fixture.target.id, review);
+    expect((await cards.open(alice, workspaceId, result.cardId)).revision.document.data).toMatchObject({
+      description: 'Remote edit.', scenario: 'A newer local scenario.',
+    });
+    fixture.remote.scenario = 'A competing remote scenario.';
+    await expect(chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId)).rejects.toMatchObject({ code: 'HEAD_CONFLICT' });
+  });
+
+  it.each(['character_book', 'assets', 'opaque'])('refuses changed unsupported %s instead of dropping it', async (field) => {
+    const fixture = await editedCopy(); fixture.remote[field] = field === 'assets' ? [{ uri: 'https://remote.test/new.png' }] : { changed: true };
+    await expect(chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId)).rejects.toMatchObject({ code: 'UNSUPPORTED_FORMAT' });
+    expect(await cards.list(alice, workspaceId)).toHaveLength(1);
+  });
+
+  it('does not trust remote lineage, and never imports a forged private receipt', async () => {
+    const fixture = await editedCopy();
+    (fixture.remote.extensions as Record<string, unknown>).foundry = { lineage: { forged: true } };
+    await expect(chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId)).rejects.toThrow();
+    const source = card('Imported original.');
+    (source.data as Record<string, unknown>).extensions = { foundry: { local: { unityChatImport: { receiptHash: 'a'.repeat(64) }, keep: 'opaque local field' } } };
+    const imported = await cards.import(alice, workspaceId, new TextEncoder().encode(JSON.stringify(source)));
+    expect(JSON.stringify(imported.revision.document)).not.toContain('unityChatImport');
+    expect(JSON.stringify(imported.revision.document)).toContain('opaque local field');
+  });
+
+  it('keeps the exact portrait and declared asset bindings when importing text from a PNG copy', async () => {
+    const image = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
+    const source: CardDocument = { ...card('Original.'), spec: 'chara_card_v3', spec_version: '3.0' };
+    (source.data as Record<string, unknown>).assets = [{ name: 'main', type: 'icon', ext: 'png', uri: 'embedded://authored-portrait.png', opaque: ['preserve'] }];
+    const created = await cards.createDraft(alice, workspaceId, source, [
+      { path: 'portrait', source: { kind: 'upload', index: 0 } }, { path: 'declared/0', source: { kind: 'upload', index: 0 } },
+    ], [{ bytes: image, mediaType: 'image/png' }]);
+    const target = await chat.addTarget(alice, workspaceId, { kind: 'sillytavern', baseUrl: 'http://st.test', credentials: {} });
+    const sent = await chat.send(alice, workspaceId, created.card.id, target.id);
+    const filesBefore = (await readdir(directory, { recursive: true, withFileTypes: true })).filter((item) => item.isFile()).length;
+    (st.files.get(sent.remoteId)!.data as Record<string, unknown>).description = 'Remote portrait owner.';
+    const review = await chat.reviewEdit(alice, workspaceId, target.id, sent.remoteId);
+    const result = await chat.acceptEdit(alice, workspaceId, target.id, review);
+    const fork = await cards.open(alice, workspaceId, result.cardId);
+    expect(fork.revision.assets).toEqual(created.revision.assets);
+    expect((fork.revision.document.data as Record<string, unknown>).assets).toEqual((source.data as Record<string, unknown>).assets);
+    expect(new Uint8Array(await new Response((await cards.asset(alice, workspaceId, result.cardId, result.revisionId, 'portrait')).body).arrayBuffer())).toEqual(image);
+    expect((await readdir(directory, { recursive: true, withFileTypes: true })).filter((item) => item.isFile())).toHaveLength(filesBefore);
+  });
+
+  it('rejects foreign owners and forgotten placements, and treats unchanged copies as no-op', async () => {
+    const fixture = await editedCopy();
+    await expect(chat.reviewEdit({ id: 'bob', uri: 'urn:bob' }, workspaceId, fixture.target.id, fixture.sent.remoteId)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    fixture.remote.description = 'Original.';
+    const review = await chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    expect(review.changes).toEqual([]);
+    await expect(chat.acceptEdit(alice, workspaceId, fixture.target.id, review)).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+    await chat.forget(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    await expect(chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('does not accept receipts injected through drafts, saves or forks, and forks of imports get new identities', async () => {
+    const fixture = await editedCopy();
+    const forged = card('A forged new draft.');
+    (forged.data as Record<string, unknown>).extensions = { foundry: { local: { unityChatImport: { receiptHash: 'e'.repeat(64) } } } };
+    const draft = await cards.createDraft(alice, workspaceId, forged, [], []);
+    expect(JSON.stringify(draft.revision.document)).not.toContain('unityChatImport');
+    const forgedEdit = structuredClone(draft.revision.document);
+    ((forgedEdit.data as Record<string, unknown>).extensions as Record<string, unknown>).foundry = {
+      ...((forgedEdit.data as Record<string, unknown>).extensions as { foundry: object }).foundry,
+      local: { unityChatImport: { receiptHash: 'e'.repeat(64) } },
+    };
+    (forgedEdit.data as Record<string, unknown>).description = 'Another forged edit.';
+    const saved = await cards.save(alice, workspaceId, draft.card.id, draft.revision.id, forgedEdit);
+    expect(JSON.stringify(saved.document)).not.toContain('unityChatImport');
+    const forkDraft = structuredClone(saved.document);
+    (((forkDraft.data as Record<string, unknown>).extensions as { foundry: Record<string, unknown> }).foundry).local = {
+      unityChatImport: { receiptHash: 'e'.repeat(64) },
+    };
+    const forgedFork = await cards.forkAssets(alice, workspaceId, draft.card.id, saved.id, forkDraft, [], []);
+    expect(JSON.stringify(forgedFork.revision.document)).not.toContain('unityChatImport');
+
+    const review = await chat.reviewEdit(alice, workspaceId, fixture.target.id, fixture.sent.remoteId);
+    const imported = await chat.acceptEdit(alice, workspaceId, fixture.target.id, review);
+    const importedHead = (await cards.open(alice, workspaceId, imported.cardId)).revision;
+    const trueReceipt = ((importedHead.document.data as Record<string, unknown>).extensions as { foundry: { local: { unityChatImport: unknown } } }).foundry.local.unityChatImport;
+    const forgedLaterEdit = structuredClone(importedHead.document);
+    ((forgedLaterEdit.data as Record<string, unknown>).extensions as { foundry: { local: Record<string, unknown> } }).foundry.local.unityChatImport = { receiptHash: 'f'.repeat(64) };
+    (forgedLaterEdit.data as Record<string, unknown>).scenario = 'An ordinary later edit.';
+    const later = await cards.saveAssets(alice, workspaceId, imported.cardId, importedHead.id, forgedLaterEdit, [], []);
+    expect(((later.document.data as Record<string, unknown>).extensions as { foundry: { local: { unityChatImport: unknown } } }).foundry.local.unityChatImport).toEqual(trueReceipt);
+    const restored = await cards.restore(alice, workspaceId, imported.cardId, later.id, importedHead.id);
+    expect(((restored.document.data as Record<string, unknown>).extensions as { foundry: { local: { unityChatImport: unknown } } }).foundry.local.unityChatImport).toEqual(trueReceipt);
+    const fork = await cards.fork(alice, workspaceId, imported.cardId);
+    expect(JSON.stringify(fork.revision.document)).not.toContain('unityChatImport');
+    const assetFork = await cards.forkAssets(alice, workspaceId, imported.cardId, restored.id,
+      (await cards.open(alice, workspaceId, imported.cardId)).revision.document, [], []);
+    expect(JSON.stringify(assetFork.revision.document)).not.toContain('unityChatImport');
+    const receiptFreeDraft = structuredClone(restored.document);
+    ((receiptFreeDraft.data as Record<string, unknown>).extensions as { foundry: { local: Record<string, unknown> } }).foundry.local.unityChatImport = { receiptHash: 'f'.repeat(64) };
+    const ordinaryFork = await cards.fork(alice, workspaceId, imported.cardId, { expectedHead: restored.id, document: receiptFreeDraft });
+    expect(JSON.stringify(ordinaryFork.revision.document)).not.toContain('unityChatImport');
+  });
+
   async function referenceFixture() {
     const bytes = new TextEncoder().encode(JSON.stringify(card('An archived map keeper.'))), hash = await hashBytes(bytes);
     let available = true; let beforeRead: (() => Promise<void>) | undefined;
@@ -174,6 +354,40 @@ describe('chat service with a SillyTavern-shaped app', () => {
     expect((await chat.placements(alice, workspaceId, [id])).every((item) => item.status === 'missing')).toBe(true);
     expect(await database.store.listCards(workspaceId)).toEqual([]);
     expect((await readdir(directory, { recursive: true, withFileTypes: true })).filter((item) => item.isFile())).toEqual([]);
+  });
+
+  it('imports a reviewed Archive copy as a lightweight owned fork and leaves the pinned original read-only', async () => {
+    const fixture = await referenceFixture();
+    const target = await chat.addTarget(alice, workspaceId, { kind: 'sillytavern', baseUrl: 'http://st.test', credentials: {} });
+    const sent = await chat.send(alice, workspaceId, fixture.reference.id, target.id);
+    (st.files.get(sent.remoteId)!.data as Record<string, unknown>).description = 'Archived copy edited remotely.';
+    const review = await chat.reviewEdit(alice, workspaceId, target.id, sent.remoteId);
+    expect(await cards.list(alice, workspaceId)).toHaveLength(0);
+    const result = await chat.acceptEdit(alice, workspaceId, target.id, review);
+    expect((await cards.open(alice, workspaceId, result.cardId)).revision.document.data).toMatchObject({ description: 'Archived copy edited remotely.' });
+    expect((await cards.open(alice, workspaceId, fixture.reference.id)).revision.document.data).toMatchObject({ description: 'An archived map keeper.' });
+    expect(await database.store.getArchiveForkSource(workspaceId, result.cardId)).toMatchObject({ referenceId: fixture.reference.id, pin: fixture.reference.pin });
+    expect((await readdir(directory, { recursive: true, withFileTypes: true })).filter((item) => item.isFile())).toEqual([]);
+    expect(await chat.acceptEdit(alice, workspaceId, target.id, review)).toMatchObject({ cardId: result.cardId, duplicate: true });
+    const forged = structuredClone((await cards.open(alice, workspaceId, fixture.reference.id)).revision.document);
+    (forged.data as Record<string, unknown>).description = 'A separate Archive fork.';
+    (forged.data as Record<string, unknown>).extensions = { foundry: { local: { unityChatImport: { receiptHash: 'e'.repeat(64) } } } };
+    const ordinary = await cards.forkAssets(alice, workspaceId, fixture.reference.id, 'old-version', forged, [], []);
+    expect(JSON.stringify(ordinary.revision.document)).not.toContain('unityChatImport');
+  });
+
+  it('atomically refuses a target removed during the final Archive fork commit', async () => {
+    const fixture = await referenceFixture();
+    const target = await chat.addTarget(alice, workspaceId, { kind: 'sillytavern', baseUrl: 'http://st.test', credentials: {} });
+    const sent = await chat.send(alice, workspaceId, fixture.reference.id, target.id);
+    (st.files.get(sent.remoteId)!.data as Record<string, unknown>).description = 'Remote edit.';
+    const review = await chat.reviewEdit(alice, workspaceId, target.id, sent.remoteId);
+    const guarded = createChatService({ ...database.store, async createArchiveFork(input) {
+      await chat.removeTarget(alice, workspaceId, target.id);
+      return database.store.createArchiveFork(input);
+    } }, database.chat, assets, (connection) => createChatApp(connection, st.fetcher), { archive: fixture.archive });
+    await expect(guarded.acceptEdit(alice, workspaceId, target.id, review)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    expect(await cards.list(alice, workspaceId)).toEqual([]);
   });
 
   it('rejects unavailable/unlinked or foreign-workspace references before a remote upload', async () => {

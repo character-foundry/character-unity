@@ -10,12 +10,22 @@ import { publicationPolicy } from '@character-unity/store/hub';
 import type { HubStore, Publication, PublicationPolicy, PublishInput } from '@character-unity/store/hub';
 import type { AssetService } from '@character-unity/assets';
 import { CardError } from './types.js';
+import { risuModulePath } from './types.js';
 import type { Actor } from './types.js';
 import { revisionIdentityOptions } from './revision-assets.js';
+
+/** This host cannot project an opaque file into the current public wire profile. */
+export class UnsupportedSyncResourceError extends Error {
+  constructor() {
+    super('This publication contains an opaque RisuAI module (module.risum), which the current signed-sync profile cannot transfer. Its complete publication and original remain available on the source hub.');
+    this.name = 'UnsupportedSyncResourceError';
+  }
+}
 
 /** Explicit public wire projection shared by read and incoming-fork verification. */
 export function publicationToSyncRead(value: Pick<Publication, 'id' | 'document' | 'identity' | 'originalHash' | 'parentId' | 'createdAt' | 'visibility' | 'allowFork' | 'policyVersion'>
   & { assets: { path: string; hash: string; byteLength: number; mediaType: string }[] }): SyncReadPublication {
+  if (value.assets.some((asset) => asset.path === risuModulePath)) throw new UnsupportedSyncResourceError();
   return parseSyncReadPublication({ id: value.id, document: value.document, identity: value.identity, originalHash: value.originalHash,
     parentId: value.parentId, publishedAt: value.createdAt, policy: { visibility: value.visibility, allowFork: value.allowFork, version: value.policyVersion },
     assets: value.assets.map((asset) => ({ ...asset, binding: asset.path === 'portrait' ? { kind: 'portrait' }

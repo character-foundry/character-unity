@@ -8,6 +8,8 @@ import type { ChatStore } from '../../src/chat.js';
 import { createNodeDriver } from '../../src/node.js';
 import { createD1Driver } from '../../src/d1.js';
 import { migrate } from '../../src/migrations.js';
+import { migrations } from '../../src/schema.js';
+import { createHash } from 'node:crypto';
 import type { StoreDriver } from '../../src/driver.js';
 
 const lineage = (revisionHash: string) => ({ data: { name: 'Aster', extensions: { foundry: { lineage: { revisionHash } } } } });
@@ -34,11 +36,13 @@ for (const adapter of ['sqlite', 'd1']) describe(`chat contract / ${adapter}`, (
     const target = await chat.addTarget({ workspaceId: ws, kind: 'sillytavern', name: 'ST', baseUrl: 'http://127.0.0.1:9000/', credentials: { username: 'u', password: 'p' } });
     expect(target).not.toHaveProperty('credentials');
     expect(target.baseUrl).toBe('http://127.0.0.1:9000');
+    expect(target.configurationVersion).toBe(1);
     expect(await chat.targets(ws)).toEqual([target]);
     await expect(chat.addTarget({ workspaceId: ws, kind: 'sillytavern', name: 'Again', baseUrl: 'http://127.0.0.1:9000', credentials: {} })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
     await expect(chat.addTarget({ workspaceId: ws, kind: 'sillytavern', name: 'Bad', baseUrl: 'http://u:p@host', credentials: {} })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
     await chat.updateTarget(ws, target.id, { name: 'Tavern', credentials: { password: 'q' } });
     expect((await chat.target(ws, target.id)).credentials).toEqual({ username: 'u', password: 'q' });
+    expect((await chat.target(ws, target.id)).configurationVersion).toBe(2);
     await expect(chat.target('other', target.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
@@ -103,5 +107,60 @@ for (const adapter of ['sqlite', 'd1']) describe(`chat contract / ${adapter}`, (
     expect(await chat.placements(ws)).toEqual([]);
     expect(await chat.resolveRevision(ws, match)).toBeNull();
     await chat.removeTarget(ws, target.id);
+  });
+
+  it('[C05] atomically deduplicates first-save inbound receipts, scopes lookup and retains provenance on later edits', async () => {
+    const original = await store.createCard({ workspaceId: ws, authorId: 'alice', document: { data: { name: 'Source' } },
+      identity: { algorithm: 't', hash: 'a'.repeat(64) }, originalHash: 'b'.repeat(64) });
+    const receiptHash = 'c'.repeat(64);
+    const target = await chat.addTarget({ workspaceId: ws, kind: 'sillytavern', name: 'Chat', baseUrl: 'http://chat.test', credentials: {} });
+    await chat.recordPlacements(ws, target.id, [{ remoteId: 'remote', remoteName: 'Source', cardId: original.card.id, revisionId: original.revision.id, edited: true }], { complete: false });
+    const input = { workspaceId: ws, sourceWorkspaceId: ws, sourceRevisionId: original.revision.id, expectedSourceHead: original.revision.id,
+      authorId: 'alice', document: { data: { name: 'Remote edit', extensions: { foundry: { local: { unityChatImport: { receiptHash } } } } } },
+      identity: { algorithm: 't', hash: 'd'.repeat(64) }, chatImport: { receiptHash, sourceCardId: original.card.id, expectedHead: original.revision.id,
+        targetId: target.id, targetConfiguration: 1, remoteId: 'remote', baseRevisionId: original.revision.id } };
+    const attempts = await Promise.allSettled([store.forkCard(input), store.forkCard(input)]);
+    expect(attempts.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(await store.listCards(ws)).toHaveLength(2);
+    const saved = await chat.importedEdit(ws, 'alice', receiptHash, original.revision.id);
+    expect(saved).not.toBeNull();
+    expect(await chat.importedEdit(ws, 'other', receiptHash, original.revision.id)).toBeNull();
+    expect(await chat.importedEdit('elsewhere', 'alice', receiptHash, original.revision.id)).toBeNull();
+    expect(await chat.importedEdit(ws, 'alice', receiptHash, 'another-head')).toBeNull();
+    const next = await store.saveRevision({ workspaceId: ws, cardId: saved!.cardId, expectedHead: saved!.revisionId,
+      authorId: 'alice', document: input.document, identity: { algorithm: 't', hash: 'e'.repeat(64) } });
+    expect(next.sequence).toBe(2);
+    expect(await chat.importedEdit(ws, 'alice', receiptHash, original.revision.id)).toEqual(saved);
+    await chat.removeTarget(ws, target.id);
+    expect(await chat.importedEdit(ws, 'alice', receiptHash, original.revision.id)).toEqual(saved);
+  });
+
+  it('[C06] upgrades schema13 duplicate opaque receipt metadata without treating authored JSON as authority', async () => {
+    await close();
+    if (adapter === 'sqlite') {
+      const db = new Database(':memory:'); driver = createNodeDriver(db); close = () => { db.close(); };
+    } else {
+      const mf = new Miniflare(convertV4MiniflareOptions({ port: 0, workers: [{ name: 'chat-upgrade-test', modules: true,
+        script: 'export default { fetch() { return new Response("test"); } };', compatibilityDate: '2026-10-11', d1Databases: ['DB'] }] }));
+      driver = createD1Driver(await mf.getD1Database('DB')); close = () => mf.dispose();
+    }
+    await driver.batch([{ sql: 'CREATE TABLE unity_migrations(version INTEGER PRIMARY KEY NOT NULL,name TEXT NOT NULL,checksum TEXT NOT NULL,applied_at TEXT NOT NULL)' }]);
+    for (const migration of migrations.filter((entry) => entry.version <= 13)) await driver.batch([
+      ...migration.statements.map((sql) => ({ sql })), { sql: 'INSERT INTO unity_migrations VALUES (?,?,?,?)', params: [migration.version, migration.name,
+        createHash('sha256').update(JSON.stringify(migration.statements)).digest('hex'), new Date().toISOString()] },
+    ]);
+    store = createStore(driver); chat = createChatStore(driver);
+    ws = (await store.createWorkspace({ ownerId: 'alice', name: 'Legacy' })).id;
+    const document = { data: { name: 'Legacy opaque data', extensions: { foundry: { local: { unityChatImport: { receiptHash: 'c'.repeat(64) } } } } } };
+    const one = await store.createCard({ workspaceId: ws, authorId: 'alice', document, identity: { algorithm: 't', hash: 'a'.repeat(64) } });
+    const two = await store.createCard({ workspaceId: ws, authorId: 'alice', document, identity: { algorithm: 't', hash: 'b'.repeat(64) } });
+    await migrate(driver);
+    expect(await store.getRevision(ws, one.revision.id)).toEqual(one.revision);
+    expect(await store.getRevision(ws, two.revision.id)).toEqual(two.revision);
+    expect(await chat.importedEdit(ws, 'alice', 'c'.repeat(64), one.revision.id)).toBeNull();
+    const forged = await store.forkCard({ workspaceId: ws, sourceWorkspaceId: ws, sourceRevisionId: one.revision.id,
+      authorId: 'alice', document, identity: { algorithm: 't', hash: 'd'.repeat(64) } });
+    expect(forged.revision.document).toEqual(document);
+    expect(await chat.importedEdit(ws, 'alice', 'c'.repeat(64), one.revision.id)).toBeNull();
   });
 });

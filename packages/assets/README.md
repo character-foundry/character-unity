@@ -22,8 +22,9 @@ The service never deletes a committed object on a database error: another upload
 may already have successfully completed it. Temporary upload files/objects are
 cleaned by the storage adapters during normal success/failure. Explicit operator
 retirement and retryable sweeps reclaim unreferenced SQL-owned final objects; see
-[asset maintenance](../../docs/asset-maintenance.md). Hard-crash temporary leftovers
-and objects without SQL rows still need lifecycle work.
+[asset maintenance](../../docs/asset-maintenance.md). Explicit offline Node orphan
+commands reclaim reviewed old crash leftovers without touching SQL-owned keys or
+Archive bytes. Remote R2 lifecycle policies and IndexedDB reclamation remain separate.
 
 This is a trusted host service. Account/workspace authorization belongs in the
 calling card operations. HTTP revision-asset uploads and downloads now use those

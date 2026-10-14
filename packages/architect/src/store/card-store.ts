@@ -1,16 +1,18 @@
 import { useStore } from 'zustand';
 import { createStore, type StoreApi } from 'zustand/vanilla';
 import type { Card, CCv2Data, CCv3Data, CardMeta } from '../lib/types';
-import type { CharacterBook, CCv2Wrapped } from '@character-foundry/character-foundry/schemas';
+import type { CharacterBook } from '@character-foundry/character-foundry/schemas';
 import type { UnityApiClient } from '../lib/api';
-import { extractCardData } from '../lib/card-utils';
+import { extractCardData, isCharacterEnvelope, isRecord } from '../lib/card-utils';
 import type { TokenStore } from './token-store';
 import type { EditorAssetService } from '../unity/assets';
 import type { DraftRecovery } from '../unity/recovery';
 import { useEditorSession } from '../unity/context';
 import { importCharacterFile, importCharacterUrl } from '../unity/import';
-import { isV3Card, isV2Card, isWrappedV2, getInnerData, type CardFields } from '../lib/card-type-guards';
+import { getInnerData, type CardFields } from '../lib/card-type-guards';
 import type { CardExtensions } from '../lib/extension-types';
+import { characterBook, editLorebook, loreObject, type EditorDocument, type LorebookEdit } from '../unity/lorebook/model';
+import { readLorebookFile, writeLorebookFile, type LorebookImportReview } from '../unity/lorebook/files';
 
 export { extractCardData };
 
@@ -38,6 +40,10 @@ export interface CardStore {
   updateCardFields(fields: Partial<CardFields>): void;
   updateExtensions(extensions: Partial<CardExtensions>): void;
   updateCharacterBook(book: Partial<CharacterBook>): void;
+  editLorebook(edit: LorebookEdit): void;
+  prepareLorebookImport(bytes: Uint8Array): LorebookImportReview;
+  attachLorebook(review: LorebookImportReview): void;
+  downloadLorebook(): string;
   setExtension<K extends keyof CardExtensions>(key: K, value: CardExtensions[K]): void;
 }
 
@@ -69,9 +75,10 @@ function blankCard(lorebook = false): Card {
 export function createCardStore({ api, assets, tokens, recovery, isDisposed, signal }: CardStoreDependencies): StoreApi<CardStore> {
   let loading: AbortController | null = null;
   let saving: AbortController | null = null;
+  const lorebookReviews = new WeakMap<LorebookImportReview, { card: Card; book: EditorDocument }>();
   const inactive = () => signal.aborted || isDisposed();
   return createStore<CardStore>((set, get) => {
-    const updateTokens = (card: Card | null) => { void tokens.getState().updateTokenCounts(card); };
+    const updateTokens = (card: Card | null) => tokens.getState().schedule(card);
     const recover = (card: Card) => {
       if (card.meta.id && !inactive()) void recovery.save(card.meta.id, card, api.headRevision(card.meta.id)).catch(console.warn);
     };
@@ -117,7 +124,10 @@ export function createCardStore({ api, assets, tokens, recovery, isDisposed, sig
         const current = get().currentCard;
         if (!current) return;
         const document = current.data as unknown as Record<string, unknown>;
-        const wrapped = typeof document.data === 'object' && document.data !== null && 'spec' in document;
+        const wrapped = isCharacterEnvelope(document);
+        if ((document.spec === 'chara_card_v2' || document.spec === 'chara_card_v3') && !wrapped) {
+          throw new Error('The card envelope has no editable data object');
+        }
         const changes = updates as unknown as Record<string, unknown>;
         const data = wrapped ? { ...document, ...('data' in changes ? changes : {}),
           data: { ...(document.data as Record<string, unknown>), ...((changes.data as Record<string, unknown> | undefined) ?? changes) } } : { ...document, ...changes };
@@ -213,27 +223,62 @@ export function createCardStore({ api, assets, tokens, recovery, isDisposed, sig
         } finally { URL.revokeObjectURL(url); }
       },
       updateCardFields(fields) {
-        const current = get().currentCard;
-        if (!current) return;
-        let data: CCv2Data | CCv3Data;
-        if (isV3Card(current)) data = { ...current.data, data: { ...current.data.data, ...fields } };
-        else if (isV2Card(current) && isWrappedV2(current.data)) {
-          const wrapped = current.data as CCv2Wrapped;
-          data = { ...wrapped, data: { ...wrapped.data, ...fields } } as unknown as CCv2Data;
-        } else data = { ...current.data, ...fields } as CCv2Data;
-        mutate({ ...current, data });
+        get().updateCardData(fields);
       },
       updateExtensions(extensions) {
         const current = get().currentCard;
-        if (current) get().updateCardFields({ extensions: { ...(getInnerData(current).extensions || {}), ...extensions } });
+        if (current) {
+          const existing = getInnerData(current).extensions;
+          if (existing !== undefined && !isRecord(existing)) throw new Error('Extensions have a value this form cannot edit');
+          get().updateCardFields({ extensions: { ...existing, ...extensions } });
+        }
       },
       updateCharacterBook(book) {
         const current = get().currentCard;
-        if (current) get().updateCardFields({ character_book: { ...(getInnerData(current).character_book || { entries: [] }), ...book } as CharacterBook });
+        if (current) {
+          const existing = getInnerData(current).character_book;
+          if (existing !== undefined && !isRecord(existing)) throw new Error('Character book has a value this form cannot edit');
+          get().updateCardFields({ character_book: { ...(existing ?? { entries: [] }), ...book } as CharacterBook });
+        }
+      },
+      editLorebook(edit) {
+        const state = get(), current = state.currentCard;
+        if (inactive() || !current || state.isRestoring || state.isSaving) throw new Error('The draft is not available for lorebook edits');
+        const document = editLorebook(current.data as unknown as EditorDocument, edit);
+        mutate({ ...current, data: document as unknown as Card['data'] });
+      },
+      prepareLorebookImport(bytes) {
+        const state = get(), card = state.currentCard;
+        if (inactive() || !card || state.isRestoring || state.isSaving) throw new Error('The draft is not available for lorebook import');
+        const book = readLorebookFile(bytes), existing = characterBook(card.data as unknown as EditorDocument);
+        const review = Object.freeze({ name: typeof book.name === 'string' ? book.name : null,
+          entries: (book.entries as unknown[]).length, replacesExisting: existing !== undefined && existing !== null });
+        lorebookReviews.set(review, { card, book });
+        return review;
+      },
+      attachLorebook(review) {
+        const state = get(), prepared = lorebookReviews.get(review), card = state.currentCard;
+        if (inactive() || state.isRestoring || state.isSaving || !prepared || prepared.card !== card) {
+          throw new Error('The draft changed. Choose the lorebook file again to review it.');
+        }
+        const document = structuredClone(card.data) as unknown as EditorDocument;
+        if (!loreObject(document.data)) throw new Error('The card has no editable document');
+        document.data.character_book = structuredClone(prepared.book);
+        lorebookReviews.delete(review);
+        mutate({ ...card, data: document as unknown as Card['data'] });
+      },
+      downloadLorebook() {
+        const card = get().currentCard;
+        if (inactive() || !card) throw new Error('No current draft');
+        return writeLorebookFile(characterBook(card.data as unknown as EditorDocument));
       },
       setExtension(key, value) {
         const current = get().currentCard;
-        if (current) get().updateCardFields({ extensions: { ...(getInnerData(current).extensions || {}), [key]: value } });
+        if (current) {
+          const existing = getInnerData(current).extensions;
+          if (existing !== undefined && !isRecord(existing)) throw new Error('Extensions have a value this form cannot edit');
+          get().updateCardFields({ extensions: { ...existing, [key]: value } });
+        }
       },
       convertSpec(mode) {
         const current = get().currentCard;

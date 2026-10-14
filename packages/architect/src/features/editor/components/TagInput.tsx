@@ -55,6 +55,7 @@ export function TagInput({ tags, onChange, label = 'Tags', placeholder = 'Add ta
 
         <input
           type="text"
+          aria-label={label || 'Tags'}
           value={inputValue}
           onChange={(e) => setInputValue(e.target.value)}
           onKeyDown={handleKeyDown}

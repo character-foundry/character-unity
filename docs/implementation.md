@@ -1,5 +1,62 @@
 # Implementation status and acceptance gates
 
+## Remaining non-migration implementation, completed 2026-10-14
+
+Implemented since the native sharing checkpoint below:
+
+- Native Statistics with workspace-owned counts, explicit Archive coverage and
+  read-only SQL/IndexedDB snapshots; no scrape/index/model work on open.
+- Standalone lorebook/preset/persona originals, immutable revisions, reviewed
+  native sharing, recipient private forks and precision-safe raw JSON editing in
+  the same Unity store. See [scope and limits](standalone-content.md).
+- Reviewed inbound chat-text edits with three-way conflict checks, private forks,
+  commit-time review pins and trusted atomic receipts. Original assets/opaque
+  fields remain intact; raw remote response bytes are not retained. See
+  [chat edit contract](chat-app-edits.md).
+- Deleted-card retention-aware maintenance, explicit filesystem orphan review,
+  browser cleanup with late-writer fences, and Node backup/verify/new-directory
+  restore. No maintenance is run against live data by implementing these tools.
+- Native account and browser-only Worker profiles; scoped domain services,
+  static/API routing and bounded Archive objects. No remote deployment.
+- Native lorebooks, searchable paged import, strict Tokens and actual read-only
+  unified/side-by-side history. Core forms, Focused, Preview, wizard and tools
+  preserve incompatible field shapes instead of coercing them.
+- Native local retrieval/provider/ComfyUI tools and deterministic wizard QA;
+  provider quality and a live ComfyUI workflow remain operator acceptance.
+- Whole-publication opaque-Risu exclusion before signed pagination, explicit
+  direct-read diagnostics and unchanged original/module bytes. HEAD and already-
+  disconnected responses release abandoned streams before the Node adapter
+  drops them. Forced-GC real-HTTP tests cover both pre-return and active-read
+  disconnects rather than relying on garbage collection to close descriptors.
+- Retired scaffold hosts/form/UI packages. All three profiles use native web;
+  browser IndexedDB identity and additive upgrades remain in place. See
+  [coverage and legacy repository notices](native-retirement.md).
+
+Final `pnpm check` passes: 1,016 tests across 122 files, every conformance report,
+lint, all profile/E2E types, workspace and both Worker builds, SDK ESM/CJS/workerd
+probes, Node smoke, Archive install/reopen and native Worker/browser-light
+rehearsals. All 86 browser workflows pass: 63 native local, 12 account/TLS, 10
+static browser and one explicit cross-origin browser–Archive rehearsal. Native
+Archive SQL/originals/versions/Lance invariants pass after teardown. No FileHandle
+GC warnings remain in the final run. Desktop/mobile captures were inspected.
+
+Independent Standards and Spec rereviews are clear after fixes for receipt
+upgrades, opaque-field mutation, numeric rounding, bounded source selection,
+comparison layout, inherited browser assets and response-stream ownership.
+Combined-suite fixture scopes and status locators now reflect real asynchronous
+UI state; domain assertions were retained. Evidence is in ignored
+`runtime/non-migration-final-check.log`, the conformance reports and the four
+native browser report directories. Older totals below describe historical
+checkpoints, not this expanded tree.
+
+Live Archive/provider/writer takeover and migration remain excluded. Foundry pin
+`7699064` is still held locally; only its Risu-sized identity-limit commit is
+unpublished, while earlier identity/lineage/sync work is on the remote feature
+branch. Fresh Docker bootstrap remains gated by that exact SHA. Public deployment,
+full-library browser backup/eviction recovery and reconciliation of pre-existing
+legacy Architect worktree changes are not claimed. An unchanged Archive reference
+still cannot publish directly; save a changed owned fork first.
+
 ## Native library, sharing and account UI, 2026-10-13
 
 The active `apps/web` shell now includes the native library/viewer presentation,

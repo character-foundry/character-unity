@@ -24,24 +24,25 @@ scaffold-era descriptions below.
 
 Accepted direction, 2026-10-11: scaffold a new `character-unity` repository using
 Vite/React + Hono. Foundry remains primitives; Archive owns its separate database
-and search stack. The scaffold now has store, asset, Archive-read and initial card
-workflow foundations; the complete editor/publish/fork slice remains in progress.
+and search stack. The native app now has shared storage, verified assets, Archive
+reads, editing, publication and fork workflows. Local verification and live
+operational rollout remain separate gates.
 
 ## Data and runtime ownership
 
 ```text
-Architect browser ──┐
-                    ├── shared API ── shared workspace/revision store
-Hub browser ────────┘       │
-                           └── Archive read client (fixture contract implemented)
-                                      │
-                            Archive local service
-                                      │
-                           Archive DB / files / LanceDB
+Native Unity browser ── shared API ── Unity workspace/revision store
+                            │
+                            └── read-only Archive contract
+                                        │
+                               Archive local service
+                                        │
+                             Existing DB / files / LanceDB
 
 Foundry SDK supplies format and protocol primitives to relevant consumers.
-Static Architect uses the same card/asset services with IndexedDB persistence
-instead of the API. Its separate build has no API calls or Node dependencies.
+The native browser-only build hosts the same portable API and card/asset services
+in-process over IndexedDB. Its cards retain the existing browser storage identity;
+no server account or Node adapter is involved.
 ```
 
 `apps/api` is the execution host, `packages/api` the shared implementation. Hono's
@@ -54,8 +55,9 @@ local-owner and account-session profiles with the same business API. Archive is 
 Archive remains the only writer to archived originals and metadata. Its read API
 must not trigger refresh/sync, mutation, repair or asset downloads. Stable subset
 manifests and exact original bytes are implemented against an opt-in immutable
-fixture or explicit copied-SQLite source; the default host has no source configured. No live Archive adapter
-is installed. See `archive-read-contract.md` for snapshot and read semantics.
+fixture or explicit copied-SQLite source; the default host has no source configured.
+The existing-storage adapter is implemented but live writer takeover remains held.
+See `archive-read-contract.md` for snapshot and read semantics.
 The shared store handles edits, immutable revisions, forks and pinned hub
 publications with versioned access policies. Mutations use atomic statement batches and SQL guards,
 not the old Federation async transaction wrapper. Native SQLite and local D1
@@ -82,13 +84,17 @@ Its native API client has no inherited Architect-server fallback. Original-byte
 imports go to the shared Foundry-backed backend; portrait/attachment drafts and
 text save together. First Save publishes a new card/fork atomically. Browser-local
 AI and preferences remain local; unavailable old-server capabilities are not
-advertised. Global stores currently constrain this editor to one instance per
-page, with explicit selection guards for pending work. See `editor-port.md`.
+advertised. Each editor session captures its own immutable actor/workspace client,
+stores, recovery owner and cancellation. Auxiliary reads do not repin the expected
+revision head. See `editor-port.md`.
 
-The earlier `packages/editor` and `apps/architect`/`apps/hub` profiles retain
-per-instance scaffold controllers and regression coverage pending retirement.
-The active viewer still uses CardsHub components through Next shims; a native
-viewer/shell rewrite follows editor integration. Data adoption remains separate.
+The earlier `packages/editor`, `packages/ui`, `packages/archive-browser` and
+`apps/architect`/`apps/hub` scaffolds are retired after native workflow coverage.
+The browser-only profile now composes the same portable services in-process over
+the existing IndexedDB database, with additive upgrades and no API fallback.
+The active library, viewer, editor, sharing and remotes use native React Router;
+there are no Next compatibility shims in the active app. Data adoption remains
+separate.
 
 ## Already settled historical decisions
 
@@ -107,8 +113,8 @@ ports and the live Archive adapter's snapshot retention. Operator-created accoun
 are implemented. Signed HTTP sync now has an unreleased Foundry transport profile;
 durable peer/key grants and replay admission are implemented on SQLite/D1. Atomic
 publish/fork receipts and commit-time guards now share the domain SQL batches.
-Local peer operator commands are implemented; blob cleanup, remote provisioning
-remain open. Shared signed endpoints, account-bound sender routes and durable
+Local peer operator commands and reviewed blob cleanup are implemented; remote
+provisioning remains open. Shared signed endpoints, account-bound sender routes and durable
 return review/retry controls are implemented on the current development SDK pin.
 See [connected hubs](remote-hubs.md) and
 [signed sync foundation](sync-foundation.md).

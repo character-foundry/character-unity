@@ -69,6 +69,24 @@ export function chatRoutes(options: { chat?: ChatService; authenticate?: Authent
   });
   routes.post('/:workspaceId/chat/targets/:targetId/check', async (c) => c.json(await chat().check(c.get('actor'), c.req.param('workspaceId'), c.req.param('targetId'))));
   routes.post('/:workspaceId/chat/targets/:targetId/scan', async (c) => c.json(await chat().scan(c.get('actor'), c.req.param('workspaceId'), c.req.param('targetId'))));
+  routes.post('/:workspaceId/chat/targets/:targetId/edits/review', async (c) => {
+    const body = await json(c, 4096); fields(body, ['remoteId']);
+    if (typeof body.remoteId !== 'string' || !body.remoteId || body.remoteId.length > 500) throw new CardError('INVALID_INPUT', 'Expected a remote copy ID');
+    return c.json(await chat().reviewEdit(c.get('actor'), c.req.param('workspaceId'), c.req.param('targetId'), body.remoteId));
+  });
+  routes.post('/:workspaceId/chat/targets/:targetId/edits', async (c) => {
+    const body = await json(c, 8192);
+    const text = ['cardId', 'remoteId', 'baseRevisionId', 'expectedHead', 'remoteHash', 'targetKind', 'targetUrl'] as const;
+    fields(body, [...text, 'targetConfiguration']);
+    if (text.some((key) => typeof body[key] !== 'string' || !body[key] || (body[key] as string).length > 500)
+      || typeof body.remoteHash !== 'string' || !/^[a-f0-9]{64}$/.test(body.remoteHash)
+      || !Number.isSafeInteger(body.targetConfiguration) || Number(body.targetConfiguration) < 1) throw new CardError('INVALID_INPUT', 'Expected the complete reviewed copy and head pins');
+    return c.json(await chat().acceptEdit(c.get('actor'), c.req.param('workspaceId'), c.req.param('targetId'), {
+      cardId: body.cardId as string, remoteId: body.remoteId as string, baseRevisionId: body.baseRevisionId as string,
+      expectedHead: body.expectedHead as string, remoteHash: body.remoteHash, targetKind: body.targetKind as string,
+      targetUrl: body.targetUrl as string, targetConfiguration: body.targetConfiguration as number,
+    }), 201);
+  });
   routes.post('/:workspaceId/chat/targets/:targetId/sends', async (c) => {
     const body = await json(c, 4096);
     fields(body, ['cardId', 'overwriteEdited']);

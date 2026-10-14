@@ -20,14 +20,30 @@ import { NativeArchiveUnavailable } from '@character-unity/cards/native-archive'
 import { nativeArchiveRoutes } from './archive-native.js';
 import { libraryIndexRoutes } from './library-index.js';
 import type { LibraryIndexService } from './library-index.js';
+import { disposeUnusedResponseBody } from './response-body.js';
+import { statisticsRoutes } from './statistics.js';
+import { ContentError, type ContentService } from '@character-unity/content';
+import { contentRoutes } from './content.js';
+import type { StatisticsService } from '@character-unity/cards/statistics';
 export type { LibraryIndexService, LibraryIndexStatus } from './library-index.js';
 
 /** Shared Architect/hub API. Hosts supply storage, card operations and authentication. */
-export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; nativeArchive?: NativeArchiveService; hub?: HubService;
+export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; nativeArchive?: NativeArchiveService; hub?: HubService; content?: ContentService;
   /** Largest upload body (card file or asset form); hosted profiles pass hostedUploadByteLimit. */
-  uploadByteLimit?: number; remotes?: RemoteConnectionsService; chat?: ChatService; libraryIndex?: LibraryIndexService; authenticate?: Authenticate } = {}) {
+  uploadByteLimit?: number; remotes?: RemoteConnectionsService; chat?: ChatService; statistics?: StatisticsService; libraryIndex?: LibraryIndexService; authenticate?: Authenticate } = {}) {
   const app = new Hono();
+  app.use('*', disposeUnusedResponseBody);
   app.onError((error, c) => {
+    if (error instanceof ContentError) {
+      const status = error.code === 'FORBIDDEN' ? 403 : error.code === 'UNAVAILABLE' ? 503 : error.code === 'TOO_LARGE' ? 413 : 400;
+      return c.json({ error: { code: error.code,message: error.message } },status);
+    }
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      return c.json({ error: { code: 'STORAGE_FULL', message: 'Browser storage is full. Your draft is still open; free some space before saving again.' } }, 503);
+    }
+    if (error instanceof DOMException && ['InvalidStateError', 'VersionError'].includes(error.name)) {
+      return c.json({ error: { code: 'STORAGE_CHANGED', message: 'Browser storage changed in another tab. Preserve any unsaved text, then reload this app.' } }, 503);
+    }
     if (error instanceof SyncCommandError || error instanceof SyncReadError) {
       // A peer's credentials or policy error must not sign the user out of this host.
       const status = ['CHANGED', 'OPERATION_CONFLICT'].includes(error.code) ? 409 : error.code === 'TOO_LARGE' ? 413 : 502;
@@ -57,6 +73,8 @@ export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; card
     return c.json({ error: { code: 'UNAVAILABLE', message: 'Card service unavailable' } }, 503);
   });
   if (options.chat) app.route('/api/workspaces', chatRoutes(options));
+  app.route('/api/workspaces', statisticsRoutes(options));
+  app.route('/api/content',contentRoutes(options));
   if (options.nativeArchive) app.route('/api/workspaces', nativeArchiveRoutes(options));
   if (options.libraryIndex) app.route('/api/workspaces', libraryIndexRoutes(options));
   app.route('/api/workspaces', cardRoutes(options));

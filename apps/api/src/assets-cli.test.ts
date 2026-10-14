@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, rm, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,9 @@ import { createD1Driver } from '@character-unity/store/d1';
 import { createStore } from '@character-unity/store';
 import { migrate } from '@character-unity/store/migrations';
 import { createNodeBlobStore } from '@character-unity/blob-store/node';
+import { createNodeOrphanMaintenance } from '@character-unity/blob-store/node-maintenance';
+import type { NodeOrphanCandidate } from '@character-unity/blob-store/node-maintenance';
+import { createAssetMaintenanceStore } from '@character-unity/store/asset-maintenance';
 import { assetMaintenanceSchema } from '../../../packages/store/src/asset-maintenance-schema.js';
 import type { StoreDriver } from '../../../packages/store/src/driver.js';
 
@@ -35,9 +38,36 @@ it('requires explicit matching paths and valid commands without creating a datab
     ['sweep', '--database', database], ['retire', '--database', database, '--before', before],
     ['preview', '--database', database, '--before', before, '--limit', '101'],
     ['sweep', '--worker-state', root, '--blob-dir', root],
+    ['orphan-preview', '--worker-state', root, '--before', before],
+    ['orphan-remove', '--database', database, '--blob-dir', root, '--before', before, '--review', 'missing.json'],
   ]) await expect(run(...args)).rejects.toMatchObject({ code: 1, stdout: '' });
   await expect(stat(database)).rejects.toMatchObject({ code: 'ENOENT' });
   expect((await run('--help')).stdout).toContain('Retirement is permanent');
+});
+
+it('orphan commands require an exact review and stopped storage, remain read-only in SQL and refuse fresh or linked review files', async () => {
+  const database = join(root, 'unity.db'), blobDir = join(root, 'blobs'), reviewFile = join(root, 'review.json');
+  const raw = new Database(database), driver = createNodeDriver(raw);
+  let review: { objects: NodeOrphanCandidate[]; nextAfter: string | null };
+  const key = `.pending/${crypto.randomUUID()}`;
+  try {
+    await migrate(driver); await createNodeBlobStore(blobDir); await writeFile(join(blobDir, key), bytes);
+    const maintenance = createAssetMaintenanceStore(driver);
+    const collector = await createNodeOrphanMaintenance(blobDir, { tracked: maintenance.trackedStorageKeys, now: () => new Date('2100-01-03T00:00:00.000Z') });
+    review = await collector.preview('2100-01-01T00:00:00.000Z');
+  } finally { raw.close(); }
+  await writeFile(reviewFile, JSON.stringify(review));
+  const flags = ['--database', database, '--blob-dir', blobDir, '--before', before];
+  const databaseBefore = await stat(database);
+  expect(JSON.parse((await run('orphan-preview', ...flags)).stdout)).toEqual({ objects: [], nextAfter: null });
+  await expect(run('orphan-remove', ...flags, '--review', reviewFile)).rejects.toMatchObject({ code: 1, stdout: '' });
+  await expect(run('orphan-remove', ...flags, '--review', reviewFile, '--storage-stopped')).rejects.toMatchObject({ code: 1 });
+  await symlink(reviewFile, join(root, 'linked-review.json'));
+  await expect(run('orphan-remove', ...flags, '--review', join(root, 'linked-review.json'), '--storage-stopped')).rejects.toMatchObject({ code: 1, stdout: '' });
+  await writeFile(join(root, 'large-review.json'), new Uint8Array(262_145));
+  await expect(run('orphan-remove', ...flags, '--review', join(root, 'large-review.json'), '--storage-stopped')).rejects.toMatchObject({ code: 1, stdout: '' });
+  expect((await stat(database)).mtimeMs).toBe(databaseBefore.mtimeMs);
+  expect(new Uint8Array(await readFile(join(blobDir, key)))).toEqual(bytes);
 });
 
 for (const adapter of ['sqlite', 'd1']) describe(`asset operator / ${adapter}`, () => {

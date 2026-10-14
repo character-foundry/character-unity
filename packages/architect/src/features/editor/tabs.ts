@@ -28,6 +28,7 @@ const PreviewPanel = lazy(() =>
 const DiffPanel = lazy(() =>
   import('./components/DiffPanel').then((m) => ({ default: m.DiffPanel }))
 );
+const TokenCounts = lazy(() => import('../../unity/tokens-view').then((module) => ({ default: module.NativeTokenCounts })));
 
 /**
  * Register all core editor tabs
@@ -85,5 +86,8 @@ export function registerCoreTabs(): void {
     condition: () => useSettingsStore.getState().features?.diffEnabled ?? true,
   });
 
-  console.log('[CoreTabs] Registered 5 core editor tabs');
+  registry.registerTab({ id: 'tokens', label: 'Tokens', component: TokenCounts, order: 65,
+    contexts: ['card', 'lorebook', 'collection'] });
+
+  console.log('[CoreTabs] Registered 6 core editor tabs');
 }

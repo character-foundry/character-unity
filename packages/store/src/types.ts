@@ -7,6 +7,11 @@ export interface ContentIdentity { algorithm: string; hash: string }
 export interface RevisionAsset { path: string; assetId: string }
 export interface CardSourceInput { assetId: string; provenance: CardDocument }
 export interface CardSource extends CardSourceInput { cardId: string; workspaceId: string }
+/** Trusted application input, never reconstructed from authored document JSON. */
+export interface ChatImportReceiptInput {
+  receiptHash: string; sourceCardId: string; expectedHead: string;
+  targetId: string; targetConfiguration: number; remoteId: string; baseRevisionId: string;
+}
 export interface RevisionInput {
   authorId: string;
   document: CardDocument;
@@ -81,7 +86,7 @@ export type ImportCardResult = { created: true; card: Card; revision: Revision }
 export type LibrarySummaryItem = CardSummaryItem | { reference: ArchiveReference; forkCount: number; inChat: boolean };
 export interface LibrarySummaryPage { items: LibrarySummaryItem[]; total: number }
 export interface PublicationForkGuard { publicationId: string; policyVersion: number; actorId: string }
-export type StoreErrorCode = 'NOT_FOUND' | 'HEAD_CONFLICT' | 'OPERATION_CONFLICT' | 'ACCESS_CHANGED' | 'UNAUTHENTICATED' | 'INVALID_INPUT' | 'ASSET_NOT_READY' | 'INTEGRITY' | 'SCHEMA_MISMATCH';
+export type StoreErrorCode = 'NOT_FOUND' | 'HEAD_CONFLICT' | 'OPERATION_CONFLICT' | 'ACCESS_CHANGED' | 'UNAUTHENTICATED' | 'FORBIDDEN' | 'INVALID_INPUT' | 'ASSET_NOT_READY' | 'INTEGRITY' | 'SCHEMA_MISMATCH';
 export class StoreError extends Error {
   constructor(public readonly code: StoreErrorCode, message: string, options?: ErrorOptions) {
     super(message, options);

@@ -44,10 +44,45 @@ async function versionTwo(format = 'character-unity-indexeddb') {
   db.close();
 }
 
+async function versionThree() {
+  await versionTwo();
+  const bytes = new TextEncoder().encode('Existing original bytes'), hash = await digest(bytes);
+  const db = await new Promise<IDBDatabase>((resolve, reject) => {
+    const opening = indexedDB.open(name, 3);
+    opening.onupgradeneeded = () => {
+      const db = opening.result, tx = opening.transaction!;
+      tx.objectStore('meta').put({ key: 'schema', format: 'character-unity-indexeddb', version: 3 });
+      const references = db.createObjectStore('archiveReferences', { keyPath: 'id' });
+      references.createIndex('workspace', ['workspaceId', 'id']);
+      references.createIndex('source', ['workspaceId', 'pin.archiveId', 'pin.cardId', 'pin.versionId'], { unique: true });
+      db.createObjectStore('archiveAssets', { keyPath: 'assetId' }).createIndex('locator', ['workspaceId', 'pin.archiveId', 'pin.cardId', 'pin.versionId', 'path'], { unique: true });
+      db.createObjectStore('archiveForks', { keyPath: 'cardId' });
+      db.createObjectStore('importClaims', { keyPath: ['workspaceId', 'kind', 'algorithm', 'hash', 'moduleHash', 'lineageHash'] }).createIndex('card', ['cardId', 'kind']);
+      db.createObjectStore('sharedAssets', { keyPath: ['workspaceId', 'hash', 'byteLength', 'mediaType'] });
+      db.createObjectStore('searchJobs', { keyPath: ['workspaceId', 'cardId'] }).createIndex('workspace', ['workspaceId', 'cardId']);
+      tx.objectStore('searchJobs').add({ workspaceId: 'w2', cardId: 'c2', revisionId: 'r2', operation: 'upsert', eventSequence: 9, pending: true, error: 'Waiting for index', queuedAt: '' });
+      tx.objectStore('assets').add({ id: 'a3', workspaceId: 'w2', hash, byteLength: bytes.length, mediaType: 'application/json', storageKey: 'originals/existing', state: 'ready' });
+      tx.objectStore('sources').add({ cardId: 'c2', workspaceId: 'w2', assetId: 'a3', provenance: { kind: 'file', filename: 'original.json' } });
+      tx.objectStore('blobs').add({ key: 'originals/existing', hash, byteLength: bytes.length, bytes: new Blob([bytes]) });
+    };
+    opening.onsuccess = () => resolve(opening.result); opening.onerror = () => reject(opening.error);
+  });
+  db.close(); return bytes;
+}
+
 beforeEach(() => { vi.stubGlobal('indexedDB', new IDBFactory()); vi.stubGlobal('IDBKeyRange', IDBKeyRange); });
 afterEach(() => { for (const handle of handles.splice(0)) handle.close(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe('browser storage', () => {
+  it('adds standalone-content storage without replacing a populated schema 3 library or requeuing its jobs', async () => {
+    const original = await versionThree();
+    const storage = await open();
+    expect(await storage.store.readiness()).toEqual({ schemaVersion: 4 });
+    expect((await storage.store.getRevision('w2', 'r2')).document).toEqual(input.document);
+    expect(await storage.store.getFavorite('w2', 'c2')).toBe(true);
+    expect(await new Response((await storage.blobs.get('originals/existing'))!.body).bytes()).toEqual(original);
+    expect(await storage.store.listSearchJobs()).toEqual([{ workspaceId: 'w2', cardId: 'c2', revisionId: 'r2', operation: 'upsert', eventSequence: 9, error: 'Waiting for index' }]);
+  });
   it('pins Archive membership without copying originals (S20)', async () => {
     const { store } = await open(); await archiveMembershipCases(store, (await store.createWorkspace({ ownerId: 'alice', name: 'References' })).id);
     expect(await counts()).toEqual([0, 0, 0]);
@@ -198,7 +233,7 @@ describe('browser storage', () => {
     });
     v1.close();
     const { store } = await open();
-    expect(await store.readiness()).toEqual({ schemaVersion: 3 });
+    expect(await store.readiness()).toEqual({ schemaVersion: 4 });
     expect(await store.getCard('w1', 'c1')).toMatchObject({ id: 'c1' });
     await store.deleteCard('w1', 'c1');
     await expect(store.getCard('w1', 'c1')).rejects.toMatchObject({ code: 'NOT_FOUND' });

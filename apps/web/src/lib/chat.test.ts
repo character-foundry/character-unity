@@ -99,4 +99,19 @@ describe('native chat account/workspace ownership', () => {
     expect(await api.targets()).toEqual([target]);
     expect(JSON.stringify(await api.targets())).not.toContain('private');
   });
+  it('reviews and accepts only byte/head-pinned edits through the captured account transport', async () => {
+    const { api, handler } = await fixture();
+    const review = { cardId: 'card', remoteId: 'copy/one?', baseRevisionId: 'base', expectedHead: 'head', remoteHash: 'a'.repeat(64),
+      targetKind: 'sillytavern', targetUrl: target.baseUrl, targetConfiguration: 1, changes: [{ field: 'description', before: 'Before', after: 'After' }], preserved: [] };
+    handler.mockResolvedValueOnce(Response.json(review));
+    expect(await api.reviewEdit(target.id, review.remoteId)).toEqual(review);
+    handler.mockResolvedValueOnce(Response.json({ cardId: 'fork', revisionId: 'fork-head', duplicate: false }));
+    expect(await api.acceptEdit(target.id, review)).toMatchObject({ cardId: 'fork' });
+    expect(handler.mock.calls[0][0]).toBe('/api/workspaces/workspace%2Fone/chat/targets/target%2Fone/edits/review');
+    expect(JSON.parse(String(handler.mock.calls[0][1].body))).toEqual({ remoteId: review.remoteId });
+    const submitted = JSON.parse(String(handler.mock.calls[1][1].body)) as Record<string, unknown>;
+    expect(submitted).not.toHaveProperty('changes'); expect(submitted).not.toHaveProperty('preserved');
+    expect(submitted.remoteHash).toBe(review.remoteHash);
+    for (const [, init] of handler.mock.calls) expect(new Headers(init.headers).get('x-unity-actor')).toBe('owner');
+  });
 });

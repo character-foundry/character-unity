@@ -1,4 +1,11 @@
-# Archive selection import
+# Earlier copied Archive selection import (historical)
+
+This document describes the retired scaffold's copied-selection workflow, not
+the active UI or recommended setup. Its host commands below are historical.
+Native Unity uses exact-version Archive references and cross-store import
+deduplication; it does not duplicate the corpus or run this selection UI.
+See [existing storage](archive-existing-storage.md) and
+[native retirement](native-retirement.md) for current behavior.
 
 Architect and hub import copies from the configured Archive read source.
 `packages/archive-browser` supplies their common search, selection and review UI;

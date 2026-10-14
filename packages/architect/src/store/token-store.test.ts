@@ -12,7 +12,7 @@ function deferred() {
   const promise = new Promise<Result>((done) => { resolve = done; });
   return { promise, resolve };
 }
-function counted(total: number): Result { return { data: { model: 'gpt-4', fields: { name: total }, total } }; }
+function counted(total: number): Result { return { data: { model: 'gpt-4', fields: { name: total, description: 0 }, total } }; }
 function setup() {
   const controller = new AbortController();
   const tokenize = vi.fn<(request: TokenizeRequest) => Promise<Result>>();
@@ -27,7 +27,8 @@ describe('editor-owned token counts', () => {
     second.tokenize.mockResolvedValue(counted(8));
     await Promise.all([first.store.getState().updateTokenCounts(card('first')), second.store.getState().updateTokenCounts(card('second'))]);
     first.store.getState().setTokenizerModel('other-model');
-    expect(first.store.getState().tokenCounts.total).toBe(3);
+    expect(first.store.getState().tokenCounts.total).toBe(0);
+    expect(first.store.getState().status).toBe('idle');
     expect(second.store.getState().tokenCounts.total).toBe(8);
     expect(second.store.getState().tokenizerModel).toBe('gpt-4');
   });
@@ -60,5 +61,23 @@ describe('editor-owned token counts', () => {
     expect(store.getState().tokenCounts).toEqual({ total: 0 });
     await store.getState().updateTokenCounts(card('ignored'));
     expect(tokenize).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts greetings and enabled lore entries separately while reporting opaque values without coercion', async () => {
+    const { store, tokenize } = setup();
+    const input = card('Aster');
+    (input.data as unknown as { data: Record<string, unknown> }).data = { name: 'Aster', description: { opaque: true }, first_mes: 'Hello',
+      alternate_greetings: ['Hi', 'Welcome'], group_only_greetings: ['Together'], character_book: { entries: [
+        { content: 'First lore', enabled: true }, { content: 'Second lore' }, { content: 'Disabled', enabled: false },
+        { content: { opaque: true } }, { content: 'Unknown flag', enabled: 'sometimes' },
+      ] } };
+    tokenize.mockResolvedValue({ data: { model: 'gpt-4', fields: { name: 2, first_mes: 1, alternate_greeting_0: 1,
+      alternate_greeting_1: 2, group_only_greeting_0: 3, lorebook_entry_0: 4, lorebook_entry_1: 5 }, total: 18 } });
+    await store.getState().updateTokenCounts(input);
+    expect(tokenize.mock.calls[0]![0].payload).toEqual({ name: 'Aster', first_mes: 'Hello', alternate_greeting_0: 'Hi',
+      alternate_greeting_1: 'Welcome', group_only_greeting_0: 'Together', lorebook_entry_0: 'First lore', lorebook_entry_1: 'Second lore' });
+    expect(store.getState()).toMatchObject({ status: 'ready', omitted: ['Description', 'Enabled lorebook entries'], disabledLoreEntries: 1,
+      tokenCounts: { alternate_greetings: 3, group_only_greetings: 3, lorebook: 9, total: 18 } });
+    expect((input.data as unknown as { data: { description: unknown } }).data.description).toEqual({ opaque: true });
   });
 });

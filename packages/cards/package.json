@@ -13,6 +13,7 @@
     "./remote-outbox": "./src/remote-outbox.ts",
     "./connections": "./src/connections.ts",
     "./chat": "./src/chat.ts",
+    "./statistics": "./src/statistics.ts",
     "./native-archive": "./src/native-archive.ts",
     "./native-reader": "./src/native-reader.ts"
   },

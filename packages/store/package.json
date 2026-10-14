@@ -16,6 +16,8 @@
     "./sync-outbox": "./src/sync-outbox.ts",
     "./asset-maintenance": "./src/asset-maintenance.ts",
     "./chat": "./src/chat.ts",
+    "./statistics": "./src/statistics.ts",
+    "./content": "./src/content.ts",
     "./library-query": "./src/library-query.ts"
   },
   "scripts": {

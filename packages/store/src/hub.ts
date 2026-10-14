@@ -78,13 +78,17 @@ export function createHubStore(driver: StoreDriver) {
       const records = rows.slice(0, limit).map(decode);
       return { records, nextAfter: rows.length > limit ? records.at(-1)!.id : null };
     },
-    async list(actorId: string | null, options: { afterId?: string; limit?: number; parentId?: string } = {}) {
+    async list(actorId: string | null, options: { afterId?: string; limit?: number; parentId?: string;
+      /** Host eligibility policy: opaque modules cannot travel through the current signed-sync profile. */
+      excludeOpaqueResources?: boolean } = {}) {
       if (options.afterId) validate.text(options.afterId, 'afterId');
       if (options.parentId) validate.text(options.parentId, 'parentId');
       const limit = options.limit ?? 20;
       if (!Number.isInteger(limit) || limit < 1 || limit > 20) validate.invalid('Publication page size must be between 1 and 20');
       const rows = await driver.query<Row>({ sql: `SELECT ${columns} FROM unity_publications p
-        WHERE p.id > ? AND ${visible} ${options.parentId ? 'AND p.parent_id = ?' : ''} ORDER BY p.id LIMIT ?`,
+        WHERE p.id > ? AND ${visible} ${options.parentId ? 'AND p.parent_id = ?' : ''}
+        ${options.excludeOpaqueResources ? `AND NOT EXISTS (SELECT 1 FROM unity_revision_assets ra
+          WHERE ra.revision_id = p.revision_id AND ra.path = 'module.risum')` : ''} ORDER BY p.id LIMIT ?`,
       params: [options.afterId ?? '', actorId, actorId, ...(options.parentId ? [options.parentId] : []), limit] });
       return rows.map(decode);
     },

@@ -1,4 +1,4 @@
-import { ChatAppError, basicAuth, call, cardFingerprint, isObject } from './http.js';
+import { ChatAppError, basicAuth, call, cardFingerprint, isObject, readJsonSnapshot } from './http.js';
 import type { Fetch } from './http.js';
 import type { ChatApp, ChatConnection, RemoteCopy } from './index.js';
 
@@ -58,6 +58,12 @@ export function createMarinara(connection: ChatConnection, fetcher: Fetch): Chat
     },
     async read(remoteId) {
       return { spec: 'chara_card_v2', spec_version: '2.0', data: fields(await get(remoteId)) };
+    },
+    async readForImport(remoteId) {
+      const { bytes, value } = await readJsonSnapshot(await call(fetcher, app, `${base}/api/characters/${encodeURIComponent(remoteId)}`, { headers }));
+      const data = fields(value);
+      if (!Object.keys(data).length) throw new ChatAppError('UNEXPECTED', 'Marinara Engine returned invalid card fields');
+      return { bytes, fields: data };
     },
     async upload(file, target) {
       let id: string;

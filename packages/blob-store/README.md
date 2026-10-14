@@ -42,9 +42,11 @@ The API uses the documented [R2 conditional writes and checksums](https://develo
 Identical retries re-read and verify existing objects; different bytes at an
 existing key fail. Temporary objects are removed on normal completion and failure.
 Cleanup failures surface to the caller. Hard process termination/provider failures
-can leave temporary objects; an operational lifecycle/sweeper policy remains
-future work. Completed but unreferenced objects are retained for safe recovery,
-not deleted by a failed database transaction or an unproven garbage collector.
+can leave temporary objects. Explicit offline Node orphan maintenance rechecks
+reviewed physical-file tokens, age and SQL ownership before deletion; see
+[asset maintenance](../../docs/asset-maintenance.md). Remote R2 lifecycle policies
+remain operator work. Completed but unreferenced objects are retained for safe
+recovery until explicit retirement, never deleted by a failed database transaction.
 
 The [asset service](../assets/README.md) coordinates these bytes with staged store
 metadata. See [test coverage](tests/COVERAGE.md) for the tested guarantees and limits.

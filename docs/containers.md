@@ -1,10 +1,9 @@
 # Node containers
 
-The image packages the shared Node API, account CLI and native Unity UI. Both
+The image packages the shared Node API, operator CLIs and native Unity UI. Both
 account and single-owner local profiles serve that same application from
 `/app/web/unity` by default, including native sharing and configured remotes.
-The old Hub and Architect scaffold builds remain available only as explicit
-`UNITY_WEB_DIR=/app/web/hub` or `/app/web/architect` overrides.
+The old Hub and Architect scaffold builds are retired and are not staged.
 It uses a digest-pinned Node 24.19.0 Debian image, pnpm 11.20.0, frozen dependency
 lockfiles and the exact external Foundry commit in `foundry-sdk.json`. Docker
 fetches/builds that SDK inside the builder; no sibling checkout, developer
@@ -64,8 +63,10 @@ rehearsal enables both flags only on its isolated temporary hub.
 
 `docker compose stop` and `docker compose down` retain the named volume.
 `docker compose down --volumes` deletes it, including cards and account data.
-Use one API writer per volume. Backups and recovery still need an operational
-procedure covering the database, its WAL state and blob directory together.
+Use one API writer per volume. `backup-cli.js` creates a consistent SQLite snapshot
+and verified owned-blob bundle; restore writes only a new isolated directory.
+See [backup and recovery](asset-maintenance.md). Off-host backup scheduling and
+live recovery drills remain operator work.
 
 ## Local Unity on Linux
 
@@ -80,14 +81,8 @@ session. It uses Linux host networking so the server still binds to actual
 loopback. Setting `UNITY_PROFILE=local` while retaining the hub's wildcard HOST
 fails startup. There is no unauthenticated bridge-network exception.
 
-To explicitly reopen the retained scaffold at that same origin and volume:
-
-```sh
-UNITY_WEB_DIR=/app/web/architect docker compose -p unity-architect -f compose.architect.yaml up -d
-```
-
-Switching the UI does not delete or migrate browser-origin IndexedDB data. The
-separate browser-only profile remains available through `pnpm build:browser`;
+Retiring the old UI does not delete or migrate browser-origin IndexedDB data. The
+native browser-only profile remains available through `pnpm build:browser`;
 its existing origin/profile storage is not the native application's server library.
 Do not clear that site storage as part of this UI switch.
 
@@ -118,7 +113,7 @@ non-secret `runtime/container-rehearsal.json` report. Failure logs stay in ignor
 
 Checks cover native SQLite schema readiness, non-root/read-only operation, the
 native UI entry/deep links and exact tokenizer worker bytes, native local-session
-hosting plus the retained Architect override, two CLI-created accounts including explicit public actor
+hosting and native restart on the same volume, two CLI-created accounts including explicit public actor
 provisioning, HTTPS cookie attributes, rejected
 origins/hosts, ignored forwarded headers and actor-proof rejection for JSON/binary
 operations, an asset-bearing PNG edit/publication/
@@ -141,9 +136,9 @@ ARM images, remote ingress, Workers hosting or asset preservation through an
 external application. Dependency/base-image pins do not make networked apt/npm
 installation a bit-for-bit reproducible or offline build.
 
-The Worker profile is unchanged: its explicit legacy asset selection remains an
-optional separate profile. These Node image defaults do not claim native Worker
-asset hosting or migrate browser-only storage.
+The [Worker profiles](worker-profile.md) host the same native UI, either with
+account API/D1/R2 or browser-only storage. Their local verification does not
+provision remote resources or migrate existing browser data.
 
 The API image also includes `assets-cli.js` for explicit SQLite/filesystem
 maintenance. Preview and sweep packaging run in the container rehearsal. See

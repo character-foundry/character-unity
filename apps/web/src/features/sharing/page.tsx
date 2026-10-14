@@ -6,6 +6,7 @@ import { useLibraryClient } from '@/lib/library-client';
 import type { CardSummary } from '@/lib/unity';
 import { libraryChanged } from '@/lib/library-search';
 import { cn } from '@/lib/utils/cn';
+import { hasOpaqueModule, opaqueSyncNotice } from '@/lib/sync-policy';
 import { createSharingClient, defaultPolicy, publicationPageSize, publicationText, publicationTitle, selectRevision } from './client';
 import type { Publication, PublicationPolicy, PublishedLineage, ReviewedRevision, SelectedRevision, SharingClient } from './client';
 import { PolicyFields } from './policy';
@@ -158,6 +159,7 @@ function SharingContent({ client }: { client: SharingClient }) {
               </div>
               <h3 className="text-lg font-semibold">{publicationTitle(value.document)}</h3>
               <p className="mt-2 line-clamp-3 whitespace-pre-wrap text-sm leading-relaxed text-starlight/50">{publicationText(value.document, 'description') || 'No description.'}</p>
+              {hasOpaqueModule(value.assets) && <p className="mt-3 text-xs leading-relaxed text-amber-200/80">{opaqueSyncNotice}</p>}
               <div className="mt-auto flex flex-wrap gap-2 pt-5"><button type="button" className={secondary} disabled={busy} onClick={() => openDetail(value.id)}>View publication</button>
                 <button type="button" className={secondary} disabled={busy || (!value.allowFork && value.ownerId !== client.actorId)}
                   onClick={() => void run('Creating fork', (signal) => fork(value, signal))}>Fork to library</button>
@@ -206,6 +208,7 @@ function SharingContent({ client }: { client: SharingClient }) {
         {detailLoading ? <p role="status" className="text-sm text-starlight/50">Loading publication…</p> : detailError ? <div className="space-y-3"><p role="alert" className="text-sm text-red-200">{detailError}</p>
           <button type="button" className={secondary} onClick={() => setDetailRefresh((value) => value + 1)}>Retry publication</button></div> : detail && <>
           <p className="text-xs text-starlight/45">{detail.visibility} · policy version {detail.policyVersion} · {detail.assets.length} attached {detail.assets.length === 1 ? 'asset' : 'assets'}</p>
+          {hasOpaqueModule(detail.assets) && <p className="rounded-lg border border-amber-200/20 bg-amber-200/5 p-3 text-xs leading-relaxed text-amber-200/80">{opaqueSyncNotice}</p>}
           <div className="space-y-4">{[['description', 'Description'], ['personality', 'Personality'], ['scenario', 'Scenario'], ['first_mes', 'First message']].map(([field, label]) => {
             const value = publicationText(detail.document, field); return value ? <section key={field}><h3 className="mb-1 text-xs font-medium uppercase tracking-wide text-starlight/45">{label}</h3>
               <p className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed text-starlight/75">{value}</p></section> : null;

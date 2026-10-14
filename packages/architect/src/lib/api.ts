@@ -5,6 +5,7 @@ import { assetPlanForm, EditorAssetService } from '../unity/assets';
 import type { AssetMetadata } from '../unity/assets';
 
 export type Result<T> = { data?: T; error?: string };
+export interface ArchiveContextSnippet { id: string; versionId: string; name: string; excerpt: string }
 type Json = Record<string, unknown>;
 interface RequestOptions { signal?: AbortSignal }
 interface UnityRevision { id: string; sequence: number; document: Json; createdAt: string; assets?: { path: string; assetId: string }[] }
@@ -81,6 +82,30 @@ export class UnityApiClient {
       if (body === null) return { error: 'The server returned no saved result' };
       return { data: body };
     } catch (failure) { return { error: failure instanceof Error ? failure.message : 'Network error' }; }
+  }
+  /** Read the existing Archive/Lance projection and pinned documents. These
+   * auxiliary reads never register assets, index anything or advance heads. */
+  async archiveContext(query: string, mode: 'text' | 'hybrid' | 'semantic', signal?: AbortSignal): Promise<Result<{ snippets: ArchiveContextSnippet[]; complete: boolean }>> {
+    if (!query.trim() || query.length > 500 || !['text', 'hybrid', 'semantic'].includes(mode)) return { error: 'Enter an Archive query of 1–500 characters.' };
+    const prefix = `/api/workspaces/${encodeURIComponent(this.workspaceId)}/archive/v2/cards`;
+    // v2 uses lexical, and semantic relevance is selected by omitting sort.
+    const params = new URLSearchParams({ q: query.trim(), mode: mode === 'text' ? 'lexical' : mode, limit: '5' });
+    const page = await this.unity<{ cards: { id: string; versionId: string; name: string; libraryOwned?: boolean; libraryCardId?: string }[]; complete?: boolean }>(`${prefix}?${params}`, { signal });
+    if (page.error || !page.data) return { error: page.error ?? 'Archive context is unavailable.' };
+    const snippets: ArchiveContextSnippet[] = [];
+    for (const card of page.data.cards.slice(0, 5)) {
+      const path = card.libraryOwned ? `${this.base()}/${encodeURIComponent(card.libraryCardId ?? '')}/revisions/${encodeURIComponent(card.versionId)}`
+        : `${prefix}/${encodeURIComponent(card.id)}?${new URLSearchParams({ version: card.versionId })}`;
+      const detail = await this.unity<{ id?: string; versionId?: string; document: Json }>(path, { signal });
+      if (detail.error || !detail.data) return { error: detail.error ?? 'An exact Archive version is unavailable.' };
+      if ((card.libraryOwned ? detail.data.id : detail.data.versionId) !== card.versionId) return { error: 'The retrieved version changed. Search again before using its context.' };
+      const data = detail.data.document?.data;
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return { error: 'The retrieved version has no character document.' };
+      const fields = data as Json;
+      const excerpt = ['description', 'scenario', 'first_mes'].map((field) => text(fields[field])).filter(Boolean).join('\n\n').slice(0, 2000);
+      snippets.push({ id: card.id, versionId: card.versionId, name: text(fields.name) || card.name, excerpt });
+    }
+    return { data: { snippets, complete: page.data.complete !== false } };
   }
   private toCard(id: string, revision: UnityRevision, createdAt: string, remember = true): Card {
     const data = (revision.document.data ?? {}) as Json;
@@ -206,11 +231,13 @@ export class UnityApiClient {
   }
   async tokenize(req: TokenizeRequest, options: RequestOptions = {}): Promise<Result<TokenizeResponse>> {
     try {
-      this.signal.throwIfAborted(); options.signal?.throwIfAborted();
-      const { registry } = await import('@character-foundry/character-foundry/tokenizers');
-      this.signal.throwIfAborted(); options.signal?.throwIfAborted();
-      const tokenizer = registry.get(req.model), fields: Record<string, number> = {}; let total = 0;
-      for (const [key, value] of Object.entries(req.payload)) { fields[key] = tokenizer.count(value); total += fields[key]!; }
+      const signal = AbortSignal.any([this.signal, ...(options.signal ? [options.signal] : [])]); signal.throwIfAborted();
+      if (!['gpt-4', 'o200k_base'].includes(req.model)) return { error: 'Only o200k_base token counting is available in the native editor' };
+      const { createWorkerTokenizer } = await import('@character-unity/tokenizer'); signal.throwIfAborted();
+      const entries = Object.entries(req.payload), counts = await createWorkerTokenizer().count(entries.map(([, value]) => value), signal);
+      signal.throwIfAborted();
+      const fields = Object.fromEntries(entries.map(([key], index) => [key, counts[index]!]));
+      const total = counts.reduce((sum, count) => sum + count, 0);
       return { data: { model: req.model, fields, total } };
     } catch (failure) { return { error: failure instanceof Error ? failure.message : 'Tokenizer unavailable' }; }
   }

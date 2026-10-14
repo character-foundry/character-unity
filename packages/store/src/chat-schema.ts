@@ -31,6 +31,40 @@ export const chatSchema = [
  */
 export const chatFingerprintSchema = ['ALTER TABLE unity_chat_placements ADD COLUMN remote_fingerprint TEXT'];
 
+/** Migration 15: trusted receipts are separate from all authored JSON, including
+ * legacy local metadata. New receipt and fork commit in one atomic batch. */
+export const chatImportReceiptSchema = [
+  'ALTER TABLE unity_chat_targets ADD COLUMN configuration_version INTEGER NOT NULL DEFAULT 1 CHECK(configuration_version > 0)',
+  `CREATE TABLE unity_chat_import_receipts (
+    workspace_id TEXT NOT NULL, receipt_hash TEXT NOT NULL, author_id TEXT NOT NULL,
+    source_card_id TEXT NOT NULL, source_revision_id TEXT NOT NULL,
+    card_id TEXT NOT NULL, revision_id TEXT NOT NULL,
+    target_id TEXT NOT NULL,target_configuration INTEGER NOT NULL,remote_id TEXT NOT NULL,base_revision_id TEXT NOT NULL,
+    PRIMARY KEY(workspace_id,receipt_hash),
+    FOREIGN KEY(card_id,workspace_id) REFERENCES unity_cards(id,workspace_id),
+    FOREIGN KEY(revision_id,card_id) REFERENCES unity_revisions(id,card_id)
+  )`,
+  `CREATE TRIGGER unity_chat_import_connection_guard BEFORE INSERT ON unity_chat_import_receipts
+    WHEN NOT EXISTS (SELECT 1 FROM unity_chat_targets t WHERE t.id = NEW.target_id AND t.workspace_id = NEW.workspace_id
+      AND t.configuration_version = NEW.target_configuration
+      AND (EXISTS (SELECT 1 FROM unity_chat_placements p WHERE p.target_id = t.id AND p.workspace_id = NEW.workspace_id
+        AND p.remote_id = NEW.remote_id AND p.card_id = NEW.source_card_id AND p.revision_id = NEW.base_revision_id AND p.remote_state != 'missing')
+        OR EXISTS (SELECT 1 FROM unity_archive_chat_placements p WHERE p.target_id = t.id AND p.workspace_id = NEW.workspace_id
+          AND p.remote_id = NEW.remote_id AND p.reference_id = NEW.source_card_id AND p.revision_id = NEW.base_revision_id AND p.remote_state != 'missing')))
+    BEGIN SELECT RAISE(ABORT,'UNITY_CHAT_ACCESS_CHANGED'); END`,
+  `CREATE TRIGGER unity_chat_import_receipt_guard BEFORE INSERT ON unity_chat_import_receipts
+    WHEN NOT EXISTS (SELECT 1 FROM unity_revisions r JOIN unity_cards c ON c.id = r.card_id
+      WHERE r.id = NEW.revision_id AND r.card_id = NEW.card_id AND r.workspace_id = NEW.workspace_id
+        AND r.author_id = NEW.author_id AND r.sequence = 1
+        AND (EXISTS (SELECT 1 FROM unity_revisions source WHERE source.id = NEW.source_revision_id
+          AND source.card_id = NEW.source_card_id AND c.forked_from_revision_id = source.id)
+          OR EXISTS (SELECT 1 FROM unity_archive_fork_sources af WHERE af.card_id = c.id
+            AND af.reference_id = NEW.source_card_id AND af.archive_version_id = NEW.source_revision_id)))
+    BEGIN SELECT RAISE(ABORT,'UNITY_INVALID_CHAT_RECEIPT'); END`,
+  ...['UPDATE', 'DELETE'].map((operation) => `CREATE TRIGGER unity_chat_import_receipt_no_${operation.toLowerCase()}
+    BEFORE ${operation} ON unity_chat_import_receipts BEGIN SELECT RAISE(ABORT,'UNITY_IMMUTABLE_PROVENANCE'); END`),
+] as const;
+
 /** Reference placements contain only observations and identity digests. External
  * Archive versions never become Unity cards or revisions merely by being sent. */
 export const chatReferenceSchema = [

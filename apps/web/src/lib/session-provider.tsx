@@ -97,16 +97,16 @@ export function SessionProvider({ children, runtime: supplied, confirmDiscard = 
       className="m-auto w-[calc(100%_-_2rem)] max-w-md max-h-[90dvh] overflow-y-auto space-y-5 rounded-2xl border border-line bg-surface p-6 text-ink shadow-2xl backdrop:bg-black/80">
       {recovery && <>
         <div><h1 id="unity-sign-in" className="text-xl font-semibold">{connection ? `Reconnect as ${connection.name}` : 'Sign in to Unity'}</h1>
-          <p className="mt-2 text-sm text-starlight/60">{connection ? 'Your draft is still here. Reconnect with the same account to continue.' : profile?.profile === 'local' ? 'Connect to this installation’s local owner session.' : 'Use the access key supplied by your hub operator.'}</p></div>
+          <p className="mt-2 text-sm text-starlight/60">{connection ? 'Your draft is still here. Reconnect with the same account to continue.' : profile?.profile === 'browser' ? 'Open the library stored in this browser. No server account is needed.' : profile?.profile === 'local' ? 'Connect to this installation’s local owner session.' : 'Use the access key supplied by your hub operator.'}</p></div>
         {value.error && <p role="alert" className="text-sm text-red-300">{value.error}</p>}
         {profile?.profile === 'hub' && <form className="space-y-3" onSubmit={(event) => { event.preventDefault(); void login(key).catch(() => undefined); }}>
           <label className="block text-sm">Access key<input autoFocus type="password" name="unity-access-key" autoComplete="off" value={key} onChange={(event) => setKey(event.target.value)} disabled={busy}
             className="mt-2 w-full rounded-lg border border-white/15 bg-void px-3 py-2" /></label>
           <button type="submit" disabled={busy || !key.trim()} className="rounded-lg bg-nebula px-4 py-2 text-white disabled:opacity-50">{busy ? 'Connecting…' : 'Sign in'}</button>
         </form>}
-        {profile?.profile === 'local' && <button type="button" disabled={busy} onClick={() => {
+        {profile && profile.profile !== 'hub' && <button type="button" disabled={busy} onClick={() => {
           void run(async (signal) => { if (connection) await connection.reconnect(signal); else { const next = await runtime.connectLocal(signal); owner.current = next; setConnection(next); } }).catch(() => undefined);
-        }} className="rounded-lg bg-nebula px-4 py-2 text-white disabled:opacity-50">Reconnect local session</button>}
+        }} className="rounded-lg bg-nebula px-4 py-2 text-white disabled:opacity-50">{profile.profile === 'browser' ? 'Reopen browser library' : 'Reconnect local session'}</button>}
         {!profile && <button type="button" disabled={busy} onClick={() => { setError(null); setAttempt((value) => value + 1); }}>Retry connection</button>}
         {connection && <button type="button" disabled={busy} onClick={() => { void leave().catch(() => undefined); }} className="block text-sm text-starlight/60">Discard draft and switch accounts</button>}
       </>}

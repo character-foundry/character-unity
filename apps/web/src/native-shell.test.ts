@@ -13,6 +13,12 @@ function sources(directory: string): string[] {
 }
 
 describe('native web application boundary', () => {
+  it('keeps the browser development origin so existing IndexedDB libraries remain visible', () => {
+    const manifest = JSON.parse(readFileSync(resolve(app, '../../package.json'), 'utf8')) as { scripts: Record<string, string> };
+    expect(manifest.scripts['dev:browser']).toContain('VITE_UNITY_STORAGE=browser');
+    expect(manifest.scripts['dev:browser']).toMatch(/--host 127\.0\.0\.1 --port 9310(?:\s|$)/);
+  });
+
   it('does not depend on Next imports, framework directives, or replacement aliases', () => {
     const frameworkFiles = [...sources(source), join(app, 'vite.config.ts'), join(app, 'tsconfig.json')]
       .filter((path) => /(?:['"]next(?:\/|['"])|['"]use client['"]|shims\/next-)/.test(readFileSync(path, 'utf8')))

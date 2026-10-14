@@ -21,6 +21,8 @@ export interface ChatConnection {
  * Apps that rebuild cards on export report a `fingerprint` of the copy as stored, for edit detection.
  */
 export interface RemoteCopy { remoteId: string; name: string; extensions: Record<string, unknown> | null; fingerprint?: string }
+/** Exact response bytes plus the app's card fields. Full exports also expose their envelope. */
+export interface RemoteEditSnapshot { bytes: Uint8Array; fields: Record<string, unknown>; envelope?: Record<string, unknown> }
 /** The exported file plus the same card as JSON (`card`), for apps that update fields instead of files. */
 export interface UploadFile { bytes: Uint8Array; type: 'png' | 'json'; fileName: string; card: Record<string, unknown>; portrait: Uint8Array | null }
 export interface ChatApp {
@@ -30,6 +32,8 @@ export interface ChatApp {
   list(): Promise<RemoteCopy[]>;
   /** The card exactly as the app would export it, for identity checks. */
   read(remoteId: string): Promise<unknown>;
+  /** A bounded, byte-pinned snapshot used only by the explicit inbound edit review. */
+  readForImport(remoteId: string): Promise<RemoteEditSnapshot>;
   /** `replace` overwrites an existing copy in place; otherwise `preferredName` seeds a new one. */
   upload(file: UploadFile, target: { replace?: string; preferredName: string }): Promise<{ remoteId: string; fingerprint?: string }>;
 }

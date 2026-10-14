@@ -14,7 +14,7 @@ import { createAccountStore } from '../../src/accounts.js';
 import { createStore } from '../../src/index.js';
 import { createHubStore } from '../../src/hub.js';
 import type { PublishInput } from '../../src/hub.js';
-import { migrate, inspectSchema } from '../../src/migrations.js';
+import { migrate, inspectSchema, schemaVersion } from '../../src/migrations.js';
 import { migrations } from '../../src/schema.js';
 import type { StoreDriver } from '../../src/driver.js';
 
@@ -260,7 +260,7 @@ for (const adapter of ['sqlite', 'd1']) describe(`sync-operations contract / ${a
     const faulty: StoreDriver = { query: (query) => driver.query(query), batch: (statements) => driver.batch(statements.length > 1 ? [...statements, { sql: 'INSERT INTO nonexistent_table VALUES (1)' }] : statements) };
     await expect(migrate(faulty)).rejects.toThrow(); expect(await inspectSchema(driver)).toBe(6);
     expect(await driver.query({ sql: "SELECT name FROM sqlite_master WHERE name IN ('unity_sync_receipts', 'unity_sync_write_guards')" })).toEqual([]);
-    await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(13);
+    await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(schemaVersion);
     expect(await driver.query({ sql: 'SELECT * FROM unity_migrations WHERE version <= 6 ORDER BY version' })).toEqual(before);
     expect(await driver.query({ sql: 'SELECT * FROM unity_sync_nonces' })).toEqual(nonces);
     expect(await createHubStore(driver).publish(accountId, rows, context)).toHaveLength(1);

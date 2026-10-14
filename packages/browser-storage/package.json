@@ -11,7 +11,8 @@
   },
   "dependencies": {
     "@character-unity/blob-store": "workspace:*",
-    "@character-unity/store": "workspace:*"
+    "@character-unity/store": "workspace:*",
+    "@character-unity/content": "workspace:*"
   },
   "devDependencies": {
     "fake-indexeddb": "6.2.5"

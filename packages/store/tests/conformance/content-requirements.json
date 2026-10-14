@@ -1,0 +1,6 @@
+{
+  "D01": "Explicit standalone JSON kinds retain immutable exact source text, deduplicate byte/canonical imports, and never create counterfeit character cards.",
+  "D02": "Typed content saves use immutable CAS history, exact-revision local forks share original source records, and foreign/deleted content stays isolated.",
+  "D03": "Native sharing pins exact saved revisions; current ancestor visibility/fork policies and versioned policy writes fence shared reads, originals and private recipient forks.",
+  "D04": "Concurrent imports create one membership, failed writes roll back sources/revisions/import claims, and a policy revoked immediately before private-fork commit creates no recipient content."
+}

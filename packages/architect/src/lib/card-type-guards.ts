@@ -13,13 +13,8 @@ import type {
   CCv2Wrapped,
   CharacterBook,
 } from '@character-foundry/character-foundry/schemas';
-import {
-  isV3Card as isV3CardData,
-  isV2CardData,
-  isWrappedV2 as isWrappedV2Data,
-  getV2Data,
-  getV3Data,
-} from '@character-foundry/character-foundry/schemas';
+import { isV2CardData } from '@character-foundry/character-foundry/schemas';
+import { extractCardData, isCharacterEnvelope, isRecord } from './card-utils';
 import type { CardExtensions } from './extension-types';
 
 // ============================================================================
@@ -32,7 +27,7 @@ import type { CardExtensions } from './extension-types';
  */
 export function isV3Card(card: Card): card is Card & { meta: CardMeta & { spec: 'v3' | 'chara_card_v3' }; data: CCv3Data } {
   const spec = card.meta.spec;
-  return (spec === 'v3' || spec === 'chara_card_v3') && isV3CardData(card.data);
+  return (spec === 'v3' || spec === 'chara_card_v3') && isCharacterEnvelope(card.data) && card.data.spec === 'chara_card_v3';
 }
 
 /**
@@ -40,7 +35,7 @@ export function isV3Card(card: Card): card is Card & { meta: CardMeta & { spec: 
  */
 export function isV2Card(card: Card): card is Card & { meta: CardMeta & { spec: 'v2' | 'chara_card_v2' }; data: CCv2Data | CCv2Wrapped } {
   const spec = card.meta.spec;
-  return (spec === 'v2' || spec === 'chara_card_v2') && isV2CardData(card.data);
+  return (spec === 'v2' || spec === 'chara_card_v2') && (isWrappedV2(card.data) || isV2CardData(card.data));
 }
 
 /**
@@ -73,14 +68,14 @@ export function isCharacterCard(card: Card): card is Card & { data: CCv2Data | C
  * Check if data is wrapped v2 format { spec: 'chara_card_v2', data: {...} }
  */
 export function isWrappedV2(data: unknown): data is CCv2Wrapped {
-  return isWrappedV2Data(data);
+  return isCharacterEnvelope(data) && data.spec === 'chara_card_v2';
 }
 
 /**
  * Check if data is unwrapped v2 format (direct fields, no wrapper)
  */
 export function isUnwrappedV2(data: CCv2Data | CCv2Wrapped): data is CCv2Data {
-  return !isWrappedV2Data(data);
+  return !isWrappedV2(data);
 }
 
 /**
@@ -141,7 +136,7 @@ export function getCardFields(card: Card): CardFields {
   }
 
   if (isV3Card(card)) {
-    const inner = getV3Data(card.data);
+    const inner = card.data.data;
     return {
       name: inner.name,
       description: inner.description,
@@ -163,7 +158,7 @@ export function getCardFields(card: Card): CardFields {
   }
 
   if (isV2Card(card)) {
-    const v2 = getV2Data(card.data as CCv2Data | CCv2Wrapped);
+    const v2 = isWrappedV2(card.data) ? card.data.data : card.data;
     return {
       name: v2.name,
       description: v2.description,
@@ -204,7 +199,7 @@ export function getCardFields(card: Card): CardFields {
  */
 export function getExtensions(card: Card): CardExtensions {
   const fields = getCardFields(card);
-  return fields.extensions || {};
+  return isRecord(fields.extensions) ? fields.extensions : {};
 }
 
 /**
@@ -225,30 +220,12 @@ export function getCharacterBook(card: Card): CharacterBook | undefined {
  * Use for read access or when you know what you're doing.
  */
 export function getInnerData(card: Card): CCv3DataInner | CCv2Data {
-  if (isV3Card(card)) {
-    return card.data.data;
-  }
-
-  if (isV2Card(card)) {
-    if (isWrappedV2(card.data)) {
-      return card.data.data;
-    }
-    return card.data;
-  }
-
-  // Fallback - try to unwrap
-  const data = card.data as { data?: unknown };
-  if (data.data && typeof data.data === 'object') {
-    return data.data as CCv2Data;
-  }
-  return card.data as CCv2Data;
+  return extractCardData(card);
 }
 
 /**
  * Check if a card's data is in wrapped format (v3 or wrapped v2)
  */
 export function isWrappedFormat(card: Card): boolean {
-  if (isV3Card(card)) return true;
-  if (isV2Card(card)) return isWrappedV2(card.data);
-  return false;
+  return isCharacterEnvelope(card.data);
 }

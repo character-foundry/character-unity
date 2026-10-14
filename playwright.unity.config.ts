@@ -1,6 +1,6 @@
 import { defineConfig } from '@playwright/test';
 
-/** The real Unity shell and Architect editor; the original config covers the older hosts. */
+/** The native Unity shell and isolated editor over the disposable local host. */
 export default defineConfig({
   testDir: './e2e/unity-editor',
   testIgnore: 'sharing.spec.ts',

@@ -1,6 +1,14 @@
 import type { Card, CCv2Data } from './types';
-import type { CCv3DataInner, CCv2Wrapped } from '@character-foundry/character-foundry/schemas';
-import { isV3Card as isV3CardData, isWrappedV2 as isWrappedV2Data } from '@character-foundry/character-foundry/schemas';
+import type { CCv3DataInner } from '@character-foundry/character-foundry/schemas';
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Locate an existing envelope, not validate or normalize its authored fields. */
+export function isCharacterEnvelope(value: unknown): value is Record<string, unknown> & { spec: 'chara_card_v2' | 'chara_card_v3'; data: Record<string, unknown> } {
+  return isRecord(value) && (value.spec === 'chara_card_v2' || value.spec === 'chara_card_v3') && isRecord(value.data);
+}
 
 /**
  * Extract actual card data fields from card.data, handling both wrapped and unwrapped formats
@@ -11,16 +19,8 @@ import { isV3Card as isV3CardData, isWrappedV2 as isWrappedV2Data } from '@chara
 export function extractCardData(card: Card): CCv2Data | CCv3DataInner {
   const data = card.data;
 
-  // Check if data has V3 wrapper structure (spec: 'chara_card_v3' with nested data)
-  if (isV3CardData(data)) {
-    return data.data;
-  }
-
-  // Check if data has V2 wrapper structure
-  if (isWrappedV2Data(data)) {
-    return (data as CCv2Wrapped).data;
-  }
-
-  // Unwrapped/legacy format - return as-is with fallback
-  return (data as CCv2Data) || ({ name: 'Unknown' } as CCv2Data);
+  // Optional fields may contain opaque values. A strict SDK validation failure
+  // must never change which layer an editor reads or writes.
+  if (isCharacterEnvelope(data)) return data.data as unknown as CCv2Data | CCv3DataInner;
+  return data as CCv2Data;
 }

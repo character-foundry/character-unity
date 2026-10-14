@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { once } from 'node:events';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
 import { serve } from '@hono/node-server';
@@ -15,6 +16,7 @@ import { openLibraryIndex } from '../src/library-index.js';
 import { createNativeArchiveApp } from '../src/native/app.js';
 import { createScheduler } from '../src/native/scheduler.js';
 import { sources } from '../src/sources/index.js';
+import { captureNativeArchiveInvariant, assertNativeArchiveInvariant } from './native-fixture-invariant.js';
 
 // Only a new directory created by e2e-unity-server may be passed here. No inherited
 // Archive configuration or live corpus is read by this disposable fixture.
@@ -91,11 +93,38 @@ const search = await openExistingSearch({ lanceDirectory, databasePath, embedder
 const libraryIndex = await openLibraryIndex({ lanceDirectory, space: embedder.space, queryEmbedder: embedder, documentEmbedder });
 const archive = await openExistingArchive({ databasePath, filesDirectory, objectsDirectory, search, libraryIndex });
 const scheduler = createScheduler(archive, sources);
-const app = createNativeArchiveApp(archive, scheduler, sources, { adminToken: 'unity-browser-test-admin-token', libraryIndex });
-const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => {
-  void scheduler.stop().finally(() => {
-    provider.close(); provider.closeAllConnections();
-    server.close(() => { archive.close(); search.close(); libraryIndex.close(); });
-  });
+const app = createNativeArchiveApp(archive, scheduler, sources, { adminToken: 'unity-browser-test-admin-token', libraryIndex,
+  readOrigins: (process.env.UNITY_ARCHIVE_READ_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean),
 });
+// Complete all fixture boot bookkeeping before recording logical SQL and the
+// original file/index state. Unity projections use their own permitted table.
+const before = await captureNativeArchiveInvariant(directory);
+const invariantRoot = directory;
+const runId = process.env.UNITY_E2E_ARCHIVE_RUN ?? randomUUID();
+const reportPath = process.env.UNITY_E2E_ARCHIVE_REPORT ?? join(directory, '.unity-native-archive-report.json');
+const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port });
+let stopping = false;
+async function stop() {
+  if (stopping) return;
+  stopping = true;
+  try {
+    await scheduler.stop();
+    await Promise.all([
+      new Promise<void>((done) => { provider.close(() => done()); provider.closeAllConnections(); }),
+      new Promise<void>((done) => { server.close(() => done()); if ('closeAllConnections' in server) server.closeAllConnections(); }),
+    ]);
+    archive.close(); search.close(); libraryIndex.close();
+    await assertNativeArchiveInvariant(invariantRoot, before);
+    await writeFile(reportPath, JSON.stringify({ version: 'unity.native-archive-invariant.v1', runId, checkedAt: new Date().toISOString(),
+      passed: true, logicalSql: true, acceptedOriginals: true, retainedVersions: true, originalLanceTables: true,
+      permittedProjection: 'unity_library_search_v1',
+    }) + '\n', { mode: 0o600 });
+  } catch (error) {
+    process.exitCode = 1;
+    console.error('Native Archive fixture immutability verification failed:', error);
+    await writeFile(reportPath, JSON.stringify({ version: 'unity.native-archive-invariant.v1', runId,
+      checkedAt: new Date().toISOString(), passed: false, error: error instanceof Error ? error.message : String(error),
+    }) + '\n', { mode: 0o600 }).catch(() => undefined);
+  }
+}
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void stop(); });

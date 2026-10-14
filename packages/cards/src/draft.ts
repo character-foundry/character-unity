@@ -5,6 +5,7 @@ import type { Asset, CardDocument, UnityStore } from '@character-unity/store';
 import { documentByteLimit } from '@character-unity/store/validation';
 import { CardError, declaredAssetLimit, importByteLimit } from './types.js';
 import type { Actor, AssetBinding, AssetUpload } from './types.js';
+import { setChatImportReceipt } from './private-chat-receipt.js';
 
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
@@ -12,7 +13,7 @@ const object = (value: unknown): value is Record<string, unknown> => !!value && 
  * storing bytes, then publish its first revision and references in one batch. */
 export async function createAssetDraft(store: UnityStore, assets: AssetService, actorInput: Actor, workspaceId: string,
   input: CardDocument, bindingsInput: readonly AssetBinding[], uploadsInput: readonly AssetUpload[], signal?: AbortSignal) {
-  const actor = { ...actorInput }, document = JSON.parse(canonicalJson(input)) as CardDocument;
+  const actor = { ...actorInput }, document = setChatImportReceipt(JSON.parse(canonicalJson(input)) as CardDocument);
   const original = new TextEncoder().encode(canonicalJson(document));
   if (original.byteLength > documentByteLimit) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
   if (!Array.isArray(bindingsInput) || bindingsInput.length > declaredAssetLimit + 1 || !Array.isArray(uploadsInput)

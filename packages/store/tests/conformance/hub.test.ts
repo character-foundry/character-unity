@@ -151,4 +151,24 @@ for (const adapter of ['sqlite', 'd1']) describe(`hub contract / ${adapter}`, ()
     for (const limit of [0, 21]) await expect(hub.rootPage('bob', a.card.originalHash!, { limit })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
     await expect(hub.rootPage('bob', 'not-a-hash')).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
+
+  it('filters opaque-resource publications before pagination only when the signed-sync host requests it', async () => {
+    const asset = await store.stageAsset({ workspaceId: alice, hash: 'd'.repeat(64), byteLength: 4, mediaType: 'application/octet-stream' });
+    await store.completeAsset({ workspaceId: alice, assetId: asset.id, measuredHash: asset.hash, measuredByteLength: asset.byteLength });
+    const supported = [await publish(await source()), await publish(await source())];
+    const opaque = [];
+    for (let i = 0; i < 3; i++) {
+      const card = await store.createCard({ ...input, workspaceId: alice, originalHash: 'b'.repeat(64), assets: [{ path: 'module.risum', assetId: asset.id }] });
+      opaque.push(await publish(card));
+    }
+    const ids: string[] = []; let cursor: string | undefined;
+    do {
+      const page = await hub.list('bob', { limit: 1, excludeOpaqueResources: true, ...(cursor ? { afterId: cursor } : {}) });
+      if (!page.length) break;
+      expect(page).toHaveLength(1); ids.push(page[0]!.id); cursor = page[0]!.id;
+    } while (ids.length < 10);
+    expect(ids).toEqual(supported.map((value) => value.id).sort());
+    expect((await hub.list('bob')).map((value) => value.id).sort()).toEqual([...supported, ...opaque].map((value) => value.id).sort());
+    for (const value of opaque) expect((await hub.get('bob', value.id)).revisionId).toBe(value.revisionId);
+  });
 });

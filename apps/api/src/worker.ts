@@ -5,7 +5,9 @@ import { createSyncStore } from '@character-unity/store/sync';
 import { createApi } from '@character-unity/api';
 import { createAccountApi, hubOrigin } from '@character-unity/api/sessions';
 import { createD1Driver } from '@character-unity/store/d1';
-import { createStore } from '@character-unity/store';
+import { createStore, StoreError } from '@character-unity/store';
+import { createStatisticsStore } from '@character-unity/store/statistics';
+import { createContentStore } from '@character-unity/store/content';
 import { createHubStore } from '@character-unity/store/hub';
 import { createAccountStore, createSessionDriver } from '@character-unity/store/accounts';
 import { createR2BlobStore } from '@character-unity/blob-store/r2';
@@ -15,7 +17,8 @@ import { workerArchive } from './worker-archive.js';
 export default {
   async fetch(request, env) {
     const path = new URL(request.url).pathname;
-    if (path !== '/api' && !path.startsWith('/api/')) return Response.json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, { status: 404 });
+    if (path !== '/api' && !path.startsWith('/api/')) return env.ASSETS.fetch(request);
+    if (path === '/api') return Response.json({ error: { code: 'NOT_FOUND', message: 'Route not found' } }, { status: 404, headers: { 'cache-control': 'no-store' } });
     if (path === '/api/health') return createApi().fetch(request);
     try {
       const origin = hubOrigin(env.UNITY_PUBLIC_ORIGIN).origin;
@@ -36,6 +39,7 @@ export default {
       await store.readiness(); // Fail closed on absent, older or modified schemas; never migrate here.
       const connections = await parseRemoteConnections(env.UNITY_REMOTE_CONNECTIONS_JSON);
       const archive = workerArchive(env.UNITY_ARCHIVE_ORIGIN, origin);
+      const nativeArchive = archive ? { origin: env.UNITY_ARCHIVE_ORIGIN, maxReadBytes: 8 * 1024 * 1024 } : undefined;
       const blobs = createR2BlobStore(env.UNITY_BLOBS, (length) => new FixedLengthStream(length));
       const sync = syncEnabled ? createSyncApi({ origin, writes: syncWritesEnabled, sync: createSyncStore(driver),
         hub: composeServices({ store, hub: createHubStore(driver), outbox: createSyncOutboxStore(driver) }, blobs).hub,
@@ -44,13 +48,15 @@ export default {
         admitLogin: async () => (await env.UNITY_LOGIN_LIMITER.limit({ key: `unity:login:${origin}` })).success,
         forSession(proof) {
           const scoped = createSessionDriver(driver, proof);
-          return composeServices({ store: createStore(scoped), hub: createHubStore(scoped), outbox: createSyncOutboxStore(scoped) }, blobs, archive, connections, { maxSelectionBytes: 8 * 1024 * 1024 });
+          return composeServices({ store: createStore(scoped), hub: createHubStore(scoped), outbox: createSyncOutboxStore(scoped), statistics: createStatisticsStore(scoped), content: createContentStore(scoped) },
+            blobs, archive, connections, { maxSelectionBytes: 8 * 1024 * 1024 }, undefined, nativeArchive);
         },
       });
       return await app.fetch(request);
-    } catch {
+    } catch (error) {
+      console.error(JSON.stringify({ event: 'worker_unavailable', code: error instanceof StoreError ? error.code : 'CONFIGURATION' }));
       return Response.json({ error: { code: 'UNAVAILABLE', message: 'Worker service unavailable' } },
         { status: 503, headers: { 'cache-control': 'no-store' } });
     }
   },
-} satisfies ExportedHandler<Env & { UNITY_REMOTE_CONNECTIONS_JSON?: string }>;
+} satisfies ExportedHandler<Env>;

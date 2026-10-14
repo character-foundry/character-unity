@@ -11,13 +11,9 @@ import {
   type CCFieldName,
   type FocusField,
 } from '../../../lib/types';
-import type { CardExtensions } from '../../../lib/extension-types';
-import {
-  getVisualDescription,
-  getDepthPrompt,
-  updateVoxtaExtension,
-  updateDepthPrompt,
-} from '../../../lib/extension-types';
+import { getFieldById } from '../config/field-definitions';
+import { readFieldValue, writeFieldValue, type FieldValue } from './field-value';
+import { PreservedField } from './FieldRenderer';
 import { MilkdownProvider } from '@milkdown/react';
 import { Crepe } from '@milkdown/crepe';
 import '@milkdown/crepe/theme/common/style.css';
@@ -236,48 +232,18 @@ function FocusedEditorInner() {
     });
   }, [editor.extendedFocusedFields]);
 
-  const getFieldValue = useCallback(
-    (field: LocalFocusField) => {
-      if (!cardData) return '';
-
-      // Handle first_mes (Greetings) specially - can be first_mes or alternate_greetings based on index
-      if (field === 'first_mes') {
-        if (alternateGreetingIndex === -1) {
-          return cardData.first_mes || '';
-        }
-        const greetings = cardData.alternate_greetings;
-        if (Array.isArray(greetings) && greetings.length > alternateGreetingIndex) {
-          return greetings[alternateGreetingIndex] || '';
-        }
-        return '';
-      }
-
-      // Handle legacy alternate_greetings field access
-      if (field === 'alternate_greetings') {
-        const greetings = cardData.alternate_greetings;
-        if (Array.isArray(greetings) && greetings.length > 0) {
-          return greetings[Math.max(0, alternateGreetingIndex)] || '';
-        }
-        return '';
-      }
-
-      // Handle appearance specially - stored in extensions.voxta.appearance or extensions.visual_description
-      if (field === 'appearance') {
-        const extensions = (cardData.extensions || {}) as CardExtensions;
-        return getVisualDescription(extensions) || '';
-      }
-
-      // Handle character_note specially - stored in extensions.depth_prompt.prompt
-      if (field === 'character_note') {
-        const extensions = (cardData.extensions || {}) as CardExtensions;
-        return getDepthPrompt(extensions)?.prompt || '';
-      }
-
-      const raw = (cardData as unknown as Record<string, unknown>)[field];
-      return typeof raw === 'string' ? raw : '';
-    },
-    [cardData, alternateGreetingIndex]
-  );
+  const readFocusField = useCallback((field: LocalFocusField): FieldValue => {
+    if (!cardData) return { value: undefined, editable: false };
+    const isAlternate = field === 'alternate_greetings' || (field === 'first_mes' && alternateGreetingIndex >= 0);
+    const definition = getFieldById(isAlternate ? 'alternate_greetings' : field)!;
+    const state = readFieldValue(definition, cardData as unknown as Record<string, unknown>);
+    if (!isAlternate || !state.editable) return state;
+    return { value: (state.value as string[] | undefined)?.[Math.max(0, alternateGreetingIndex)], editable: true };
+  }, [cardData, alternateGreetingIndex]);
+  const getFieldValue = useCallback((field: LocalFocusField): string => {
+    const state = readFocusField(field);
+    return state.editable && typeof state.value === 'string' ? state.value : '';
+  }, [readFocusField]);
 
   useEffect(() => {
     if (!currentCard) return;
@@ -371,77 +337,17 @@ function FocusedEditorInner() {
   }
 
   const applyChanges = () => {
+    if (!readFocusField(selectedField).editable) return;
     const value = drafts[selectedField] ?? '';
-
-    // Handle first_mes (Greetings) - can apply to first_mes or alternate_greetings based on index
-    if (selectedField === 'first_mes') {
-      if (alternateGreetingIndex === -1) {
-        // Editing First Message
-        if (isV3) {
-          updateCardData({
-            data: {
-              ...(currentCard.data as CCv3Data).data,
-              first_mes: value,
-            },
-          } as Partial<CCv3Data>);
-        } else {
-          updateCardData({ first_mes: value } as Partial<CCv2Data>);
-        }
-      } else {
-        // Editing an alternate greeting
-        const greetings = [...(cardData?.alternate_greetings || [])];
-        if (alternateGreetingIndex < greetings.length) {
-          greetings[alternateGreetingIndex] = value;
-        } else {
-          greetings.push(value);
-        }
-        if (isV3) {
-          updateCardData({
-            data: {
-              ...(currentCard.data as CCv3Data).data,
-              alternate_greetings: greetings,
-            },
-          } as Partial<CCv3Data>);
-        } else {
-          updateCardData({ alternate_greetings: greetings } as Partial<CCv2Data>);
-        }
-      }
-    } else if (selectedField === 'appearance') {
-      // Handle appearance specially - stored in extensions.voxta.appearance or visual_description
-      // Use the store's type-safe updateExtensions helper
-      const { updateExtensions } = session.cards.getState();
-      const extensions = (cardData?.extensions || {}) as CardExtensions;
-      // Use voxta extension if it already exists, otherwise visual_description
-      if (extensions.voxta) {
-        updateExtensions(updateVoxtaExtension(extensions, { appearance: value }));
-      } else {
-        updateExtensions({ visual_description: value });
-      }
-    } else if (selectedField === 'character_note') {
-      // Handle character_note specially - stored in extensions.depth_prompt.prompt
-      // Use the store's type-safe updateExtensions helper
-      const { updateExtensions } = session.cards.getState();
-      const extensions = (cardData?.extensions || {}) as CardExtensions;
-      const currentDepth = getDepthPrompt(extensions);
-      updateExtensions(
-        updateDepthPrompt(extensions, {
-          prompt: value,
-          depth: currentDepth?.depth ?? 4,
-          role: 'system',
-        })
-      );
-    } else {
-      if (isV3) {
-        updateCardData({
-          data: {
-            ...(currentCard.data as CCv3Data).data,
-            [selectedField]: value,
-          },
-        } as Partial<CCv3Data>);
-      } else {
-        updateCardData({ [selectedField]: value } as Partial<CCv2Data>);
-      }
+    if (selectedField === 'first_mes' && alternateGreetingIndex >= 0) {
+      const greetings = [...(cardData.alternate_greetings as string[])];
+      greetings[alternateGreetingIndex] = value;
+      updateCardData({ alternate_greetings: greetings });
+      return;
     }
+    const definition = getFieldById(selectedField)!;
+    const change = writeFieldValue(definition, cardData as unknown as Record<string, unknown>, value);
+    updateCardData({ [change.field]: change.value } as Partial<CCv2Data>);
   };
 
   const resetCurrentField = () => {
@@ -456,6 +362,7 @@ function FocusedEditorInner() {
   };
 
   const handleAddAlternateGreeting = () => {
+    if (!readFieldValue(getFieldById('alternate_greetings')!, cardData as unknown as Record<string, unknown>).editable) return;
     const greetings = [...(cardData?.alternate_greetings || [])];
     greetings.push('');
 
@@ -475,6 +382,7 @@ function FocusedEditorInner() {
   };
 
   const handleDeleteAlternateGreeting = () => {
+    if (!readFieldValue(getFieldById('alternate_greetings')!, cardData as unknown as Record<string, unknown>).editable) return;
     if (alternateGreetingIndex < 0) return; // Can't delete First Message
     if (!confirm('Delete this alternate greeting?')) return;
 
@@ -501,6 +409,7 @@ function FocusedEditorInner() {
   };
 
   const handleApplyTemplate = (template: Template, mode: 'replace' | 'append' | 'prepend') => {
+    if (!readFocusField(selectedField).editable) return;
     if (template.targetFields === 'all') {
       // Apply to all fields - show confirmation
       if (!confirm(`This will ${mode} content in all fields. Continue?`)) {
@@ -511,6 +420,7 @@ function FocusedEditorInner() {
       Object.entries(template.content).forEach(([field, content]) => {
         // template.content keys are FocusField (from schema), cast to LocalFocusField
         const localField = field as LocalFocusField;
+        if (!readFocusField(localField).editable) return;
         const currentValue = newDrafts[localField] ?? '';
 
         if (mode === 'replace') {
@@ -564,6 +474,7 @@ function FocusedEditorInner() {
   };
 
   const handleInsertSnippet = (snippet: Snippet) => {
+    if (!readFocusField(selectedField).editable) return;
     const currentValue = drafts[selectedField] ?? '';
     // Simple append for now - could be enhanced to insert at cursor position
     const newValue = currentValue + snippet.content;
@@ -577,6 +488,7 @@ function FocusedEditorInner() {
   };
 
   const handleLLMApply = (value: string, action: 'replace' | 'append' | 'insert') => {
+    if (!readFocusField(selectedField).editable) return;
     const currentValue = drafts[selectedField] ?? '';
     let newValue = '';
 
@@ -716,8 +628,11 @@ function FocusedEditorInner() {
     );
   };
 
-  const alternateGreetings = cardData?.alternate_greetings || [];
+  const greetingState = readFieldValue(getFieldById('alternate_greetings')!, cardData as unknown as Record<string, unknown>);
+  const alternateGreetings = greetingState.editable && Array.isArray(greetingState.value) ? greetingState.value as string[] : [];
   const hasAlternateGreetings = alternateGreetings.length > 0;
+  const selectedState = readFocusField(selectedField);
+  const fieldLabel = ALL_FIELDS.find(field => field.id === selectedField)?.label ?? selectedField;
 
   return (
     <div className="h-full flex flex-col bg-dark-bg">
@@ -766,6 +681,7 @@ function FocusedEditorInner() {
           <div className="flex items-center gap-1">
             <button
               onClick={() => setShowTemplatePanel(true)}
+              disabled={!selectedState.editable}
               className="text-base px-1.5 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors"
               title="Templates & Snippets"
             >
@@ -773,15 +689,16 @@ function FocusedEditorInner() {
             </button>
             <button
               onClick={() => setLLMAssistOpen(true)}
+              disabled={!selectedState.editable || !session.capabilities.browserLLM}
               className="text-base px-1.5 py-1 bg-purple-600 text-white rounded hover:bg-purple-700 transition-colors"
               title="AI Assist"
             >
               ✨
             </button>
-            <button onClick={resetCurrentField} className="btn-secondary px-3 py-1.5 text-sm">
+            <button onClick={resetCurrentField} disabled={!selectedState.editable} className="btn-secondary px-3 py-1.5 text-sm">
               Reset
             </button>
-            <button onClick={applyChanges} className="btn-primary px-3 py-1.5 text-sm">
+            <button onClick={applyChanges} disabled={!selectedState.editable} className="btn-primary px-3 py-1.5 text-sm">
               Apply
             </button>
           </div>
@@ -807,6 +724,7 @@ function FocusedEditorInner() {
             </select>
             <button
               onClick={handleAddAlternateGreeting}
+              disabled={!greetingState.editable}
               className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-sm transition-colors"
             >
               + Add Alt
@@ -820,13 +738,14 @@ function FocusedEditorInner() {
               </button>
             )}
           </div>
+          {!greetingState.editable && <PreservedField label="Alternate Greetings" value={greetingState.value} />}
         </div>
       )}
 
       <div className="flex-1 flex flex-col p-6 space-y-4 relative">
         {/* Editor Container with relative positioning for chevron */}
         <div className="flex-1 flex gap-4 min-h-0 relative">
-          {isHtmlMode ? (
+          {!selectedState.editable ? <PreservedField label={fieldLabel} value={selectedState.value} /> : isHtmlMode ? (
             <>
               {/* HTML Mode: Code editor on left, preview on right */}
               {renderHtmlEditor()}
@@ -849,7 +768,7 @@ function FocusedEditorInner() {
           )}
 
           {/* LLM Assist Sidebar - positioned within editor area */}
-          {llmAssistOpen && (
+          {llmAssistOpen && selectedState.editable && session.capabilities.browserLLM && (
             <LLMAssistSidebar
               isOpen={llmAssistOpen}
               onClose={() => setLLMAssistOpen(false)}

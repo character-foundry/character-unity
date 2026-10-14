@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { expect, it } from 'vitest';
 import { openNodeStore } from '../src/node.js';
+import { schemaVersion } from '../src/migrations.js';
 
 it('persists through reopen and rejects stale writers across separate SQLite connections', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'unity-store-'));
@@ -29,7 +30,7 @@ it('persists through reopen and rejects stale writers across separate SQLite con
     for (const handle of handles.splice(0)) handle.close();
     const reopened = await openNodeStore(filename);
     handles.push(reopened);
-    expect(await reopened.store.readiness()).toEqual({ schemaVersion: 13 });
+    expect(await reopened.store.readiness()).toEqual({ schemaVersion });
     expect(await reopened.store.listRevisions(workspaceId, base.card.id)).toHaveLength(2);
   } finally {
     for (const handle of handles) handle.close();

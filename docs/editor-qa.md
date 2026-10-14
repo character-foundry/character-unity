@@ -2,6 +2,14 @@
 
 ## Active unified application
 
+Current aggregate: `pnpm test:e2e` builds and runs native local, real account/TLS
+and static browser-only suites sequentially. `pnpm check` adds module/conformance,
+types, lint, smoke, SDK, Archive and Worker gates. See
+[native replacement coverage](native-retirement.md) and
+[latest verification status](implementation.md). The counts below describe the
+earlier isolation checkpoint; the scaffold inventory is historical, not a second
+required application.
+
 `pnpm test:e2e:unity` builds `apps/web` plus a separate two-host fixture beneath
 the test build's `/assets/` route. It runs the actual production Node host with
 isolated temporary SQLite/blobs, never a live Archive or inherited API process.
@@ -20,7 +28,7 @@ writes and ownership. Screenshots are separately inspected; Playwright interacti
 uses real controls rather than evaluating stores to simulate user actions.
 
 Recovery covers saved-card text only. Staged files and unsaved New/Fork drafts
-remain memory-only. Wizard workflow QA is separately deferred at low priority.
+remain memory-only. Deterministic native wizard/tools QA is now included.
 Evidence: `runtime/unity-e2e-report` and `runtime/unity-e2e-results`; the final
 frozen-clock rerun preserves that full report and uses separate recovery results.
 
@@ -32,9 +40,8 @@ browser-only test gets a fresh browser context and isolated IndexedDB storage. I
 The runner stops only its child process and removes only its own temporary files.
 
 Run `pnpm exec playwright install chromium --only-shell` once, then `pnpm check`.
-For iteration after rebuilding the affected apps, run `pnpm build:e2e`, then
-`pnpm test:e2e`. That explicit test build supplies a fixture Archive origin and
-lives in `dist/browser-test`; regular `dist/browser` remains independently configured.
+The retired scaffold used a separate `dist/browser-test` fixture build. Its old
+`build:e2e` command is removed; use the native profile scripts above.
 CI installs the matching browser and system dependencies. See Playwright's
 [web server configuration](https://playwright.dev/docs/test-webserver) and
 [browser installation](https://playwright.dev/docs/browsers).

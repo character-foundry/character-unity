@@ -11,7 +11,9 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { FieldRenderer } from './FieldRenderer';
 import type { FieldDefinition } from '../config/field-definitions';
-import { getValueByPath, setValueByPath, isFieldVisible } from '../config/field-definitions';
+import { isFieldVisible } from '../config/field-definitions';
+import { readFieldValue, writeFieldValue } from './field-value';
+import { isRecord } from '../../../lib/card-utils';
 import type { FocusField, LLMProvider } from '../../../lib/types';
 import { invokeClientLLM } from '../../../lib/client-llm';
 import { clientProvider } from '../../../store/llm-store';
@@ -51,160 +53,6 @@ export interface DynamicFieldProps {
 }
 
 // ============================================================================
-// SPECIAL FIELD VALUE GETTERS
-// ============================================================================
-
-/**
- * Get appearance value - checks voxta extension first, then visual_description
- */
-function getAppearanceValue(cardData: Record<string, unknown>): string {
-  const extensions = (cardData.extensions || {}) as Record<string, unknown>;
-  const voxta = extensions.voxta as Record<string, unknown> | undefined;
-  if (voxta?.appearance) return voxta.appearance as string;
-  if (extensions.visual_description) return extensions.visual_description as string;
-  return '';
-}
-
-/**
- * Get character note value from depth_prompt extension
- */
-function getCharacterNoteValue(cardData: Record<string, unknown>): string {
-  const extensions = (cardData.extensions || {}) as Record<string, unknown>;
-  const depthPrompt = extensions.depth_prompt as Record<string, unknown> | undefined;
-  return (depthPrompt?.prompt as string) || '';
-}
-
-/**
- * Get character note depth from depth_prompt extension
- */
-function getCharacterNoteDepth(cardData: Record<string, unknown>): number {
-  const extensions = (cardData.extensions || {}) as Record<string, unknown>;
-  const depthPrompt = extensions.depth_prompt as Record<string, unknown> | undefined;
-  return (depthPrompt?.depth as number) ?? 4;
-}
-
-/**
- * Get value for a field, handling special cases
- */
-function getFieldValue(definition: FieldDefinition, cardData: Record<string, unknown>): unknown {
-  // Special case: appearance field
-  if (definition.id === 'appearance') {
-    return getAppearanceValue(cardData);
-  }
-
-  // Special case: character_note
-  if (definition.id === 'character_note') {
-    return getCharacterNoteValue(cardData);
-  }
-
-  // Special case: character_note_depth
-  if (definition.id === 'character_note_depth') {
-    return getCharacterNoteDepth(cardData);
-  }
-
-  // Special case: timestamps (read-only)
-  if (definition.id === 'timestamps') {
-    return {
-      creation_date: (cardData as Record<string, unknown>).creation_date,
-      modification_date: (cardData as Record<string, unknown>).modification_date,
-      packageId: undefined, // This comes from meta, not data
-    };
-  }
-
-  // Standard path-based value retrieval
-  return getValueByPath(cardData, definition.path);
-}
-
-// ============================================================================
-// SPECIAL FIELD VALUE SETTERS
-// ============================================================================
-
-/**
- * Set appearance value - prefers voxta extension if present
- */
-function setAppearance(
-  cardData: Record<string, unknown>,
-  value: string,
-  onFieldChange: (field: string, value: unknown) => void
-): void {
-  const existingExtensions = (cardData.extensions || {}) as Record<string, unknown>;
-  const extensions = { ...existingExtensions };
-
-  // Prefer voxta extension if it exists, otherwise use visual_description
-  if (extensions.voxta) {
-    extensions.voxta = {
-      ...(extensions.voxta as Record<string, unknown>),
-      appearance: value,
-    };
-  } else {
-    extensions.visual_description = value;
-  }
-
-  onFieldChange('extensions', extensions);
-}
-
-/**
- * Set character note value
- */
-function setCharacterNote(
-  cardData: Record<string, unknown>,
-  value: string,
-  onFieldChange: (field: string, value: unknown) => void
-): void {
-  const existingExtensions = (cardData.extensions || {}) as Record<string, unknown>;
-  const currentDepth = getCharacterNoteDepth(cardData);
-
-  const extensions = {
-    ...existingExtensions,
-    depth_prompt: {
-      ...((existingExtensions.depth_prompt || {}) as Record<string, unknown>),
-      prompt: value,
-      depth: currentDepth,
-      role: 'system',
-    },
-  };
-
-  onFieldChange('extensions', extensions);
-}
-
-/**
- * Set character note depth
- */
-function setCharacterNoteDepth(
-  cardData: Record<string, unknown>,
-  depth: number,
-  onFieldChange: (field: string, value: unknown) => void
-): void {
-  const existingExtensions = (cardData.extensions || {}) as Record<string, unknown>;
-  const currentPrompt = getCharacterNoteValue(cardData);
-
-  const extensions = {
-    ...existingExtensions,
-    depth_prompt: {
-      ...((existingExtensions.depth_prompt || {}) as Record<string, unknown>),
-      prompt: currentPrompt,
-      depth,
-      role: 'system',
-    },
-  };
-
-  onFieldChange('extensions', extensions);
-}
-
-/**
- * Set tagline in extensions
- */
-function setTagline(
-  cardData: Record<string, unknown>,
-  value: string,
-  onFieldChange: (field: string, value: unknown) => void
-): void {
-  const existingExtensions = (cardData.extensions || {}) as Record<string, unknown>;
-  const extensions = { ...existingExtensions, tagline: value };
-  onFieldChange('extensions', extensions);
-}
-
-// ============================================================================
 // DYNAMIC FIELD COMPONENT
 // ============================================================================
 
@@ -239,7 +87,7 @@ export function DynamicField({
   }, [session, generation, definition.id]);
 
   // Check if field should be visible
-  const hasVoxtaExtension = !!(cardData.extensions as Record<string, unknown> | undefined)?.voxta;
+  const hasVoxtaExtension = isRecord(cardData.extensions) && Object.hasOwn(cardData.extensions, 'voxta');
   const isVisible = isFieldVisible(definition, {
     spec,
     showV3Fields,
@@ -247,7 +95,7 @@ export function DynamicField({
   });
 
   // Get current value
-  const value = useMemo(() => getFieldValue(definition, cardData), [definition, cardData]);
+  const { value, editable } = useMemo(() => readFieldValue(definition, cardData), [definition, cardData]);
 
   // Get token count
   const tokenCount = useMemo(() => {
@@ -257,10 +105,10 @@ export function DynamicField({
 
   // Get item token counts for array fields
   const itemTokenCounts = useMemo(() => {
-    if (definition.type !== 'array') return undefined;
+    if (definition.type !== 'array' || !Array.isArray(value)) return undefined;
 
     const counts: Record<string, number> = {};
-    const items = (value as string[]) || [];
+    const items = value;
 
     items.forEach((_, index) => {
       const key = `${definition.id}_${index}`;
@@ -268,6 +116,7 @@ export function DynamicField({
       const tokenKey =
         definition.id === 'alternate_greetings'
           ? `alternate_greeting_${index}`
+          : definition.id === 'group_only_greetings' ? `group_only_greeting_${index}`
           : `${definition.id}_${index}`;
       if (tokenCounts[tokenKey] !== undefined) {
         counts[key] = tokenCounts[tokenKey];
@@ -280,55 +129,15 @@ export function DynamicField({
   // Handle value change
   const handleChange = useCallback(
     (newValue: unknown) => {
-      // Special case: appearance
-      if (definition.id === 'appearance') {
-        setAppearance(cardData, newValue as string, onFieldChange);
-        return;
-      }
-
-      // Special case: character_note
-      if (definition.id === 'character_note') {
-        setCharacterNote(cardData, newValue as string, onFieldChange);
-        return;
-      }
-
-      // Special case: character_note_depth
-      if (definition.id === 'character_note_depth') {
-        setCharacterNoteDepth(cardData, newValue as number, onFieldChange);
-        return;
-      }
-
-      // Special case: tagline
-      if (definition.id === 'tagline') {
-        setTagline(cardData, newValue as string, onFieldChange);
-        return;
-      }
-
-      // For simple top-level fields, use the path directly
-      if (!definition.path.includes('.')) {
-        onFieldChange(definition.path, newValue);
-        return;
-      }
-
-      // For nested paths (extensions, etc.), update the parent object
-      const parts = definition.path.split('.');
-      if (parts[0] === 'extensions') {
-        const existingExtensions = (cardData.extensions || {}) as Record<string, unknown>;
-        const updated = setValueByPath(existingExtensions, parts.slice(1).join('.'), newValue);
-        onFieldChange('extensions', updated);
-      } else {
-        // Generic nested path handling
-        const updated = setValueByPath(cardData, definition.path, newValue);
-        // This would need the parent to handle full object updates
-        onFieldChange(parts[0], (updated as Record<string, unknown>)[parts[0]]);
-      }
+      const updated = writeFieldValue(definition, cardData, newValue);
+      onFieldChange(updated.field, updated.value);
     },
     [definition, cardData, onFieldChange]
   );
 
   // Handle AI generation (tags, tagline)
   const handleGenerate = useCallback(async () => {
-    if (!session.capabilities.browserLLM) return;
+    if (!editable || !session.capabilities.browserLLM) return;
     if (!llmSettings || !aiPrompts) return;
 
     let activeProvider = llmSettings.providers.find(
@@ -400,7 +209,7 @@ export function DynamicField({
         const jsonMatch = content.match(/\[[\s\S]*?\]/);
         if (jsonMatch) {
           const tags = JSON.parse(jsonMatch[0]) as string[];
-          if (Array.isArray(tags) && tags.length > 0) {
+          if (Array.isArray(tags) && tags.length > 0 && tags.every(tag => typeof tag === 'string')) {
             // Merge with existing tags, avoiding duplicates
             const existingTags = (value as string[]) || [];
             const newTags = [
@@ -443,6 +252,7 @@ export function DynamicField({
     cardData,
     value,
     handleChange,
+    editable,
     session,
   ]);
 
@@ -455,6 +265,7 @@ export function DynamicField({
     <FieldRenderer
       definition={definition}
       value={value}
+      editable={editable}
       onChange={handleChange}
       tokenCount={tokenCount}
       generating={generating}

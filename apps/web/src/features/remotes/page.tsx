@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import type { CardSummary } from '@character-unity/cards';
 import { AppShell } from '@/components/layout';
 import { useLibraryClient } from '@/lib/library-client';
+import { remoteListingPolicy } from '@/lib/sync-policy';
 import { createRemotesClient, type RemoteDescriptor, type RemotesClient, type ReturnJobView, type SyncReadPublication } from './client';
 import { clearPreparation, createPreparation, loadPreparation, type ReturnPreparation } from './intent';
 import { RevisionPicker } from '../sharing/revision-picker';
@@ -137,6 +138,7 @@ function RemotesContent({ client }: { client: RemotesClient }) {
       <section className="remote-panel" aria-labelledby="remote-browse-title">
         <div className="remote-section-heading"><div><p className="remote-eyebrow">Discover</p><h2 id="remote-browse-title">Remote publications</h2></div></div>
         <p className="remote-muted">Connections are configured by your operator. This page never accepts signing keys or destination URLs.</p>
+        <p className="remote-notice">{remoteListingPolicy}</p>
         {connections?.length === 0 && <div className="remote-empty"><h3>No connected hubs</h3><p>Ask your operator to configure a connection for this account.</p></div>}
         {!!connections?.length && <>
           <label htmlFor={connectionSelectId}>Connected hub</label>
@@ -148,7 +150,7 @@ function RemotesContent({ client }: { client: RemotesClient }) {
             const page = await client.publications(connectionId, '', signal); signal.throwIfAborted();
             setPublications(page.publications); setNextPublication(page.nextAfter); setBrowsed(true);
           })}>Browse remote publications</button>
-          {browsed && publications.length === 0 && <p className="remote-empty">No publications are visible on this hub.</p>}
+          {browsed && publications.length === 0 && <p className="remote-empty">No compatible publications are visible through this connection.</p>}
           <ul className="remote-items">{publications.map((value) => <li key={value.id}>
             <div className="remote-item-heading"><h3>{title(value.document)}</h3><span className="remote-pill">{value.policy.allowFork ? 'Forks allowed' : 'Read-only'}</span></div>
             {field(value.document, 'description') && <p className="remote-excerpt">{field(value.document, 'description')}</p>}

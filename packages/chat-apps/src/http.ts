@@ -35,6 +35,36 @@ export function isObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
+/** Preserve the exact response for review pins; never buffer an unbounded app export. */
+export async function readJsonSnapshot(response: Response): Promise<{ bytes: Uint8Array; value: Record<string, unknown> }> {
+  const limit = 16 * 1024 * 1024;
+  if (Number(response.headers.get('content-length')) > limit) {
+    await response.body?.cancel(); throw new ChatAppError('REJECTED', 'Chat export exceeds the 16 MiB review limit');
+  }
+  if (!response.body) throw new ChatAppError('UNEXPECTED', 'Chat app returned an empty export');
+  const reader = response.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
+  const deadline = AbortSignal.timeout(30_000);
+  const cancel = () => { void reader.cancel().catch(() => undefined); };
+  deadline.addEventListener('abort', cancel, { once: true });
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (deadline.aborted) throw new ChatAppError('UNREACHABLE', 'Chat export timed out');
+      if (next.done) break;
+      size += next.value.byteLength;
+      if (size > limit) throw new ChatAppError('REJECTED', 'Chat export exceeds the 16 MiB review limit');
+      chunks.push(new Uint8Array(next.value));
+    }
+    const bytes = new Uint8Array(size); let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    let value: unknown;
+    try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes)); }
+    catch { throw new ChatAppError('UNEXPECTED', 'Chat app returned invalid JSON'); }
+    if (!isObject(value)) throw new ChatAppError('UNEXPECTED', 'Chat app returned an invalid character export');
+    return { bytes, value };
+  } finally { deadline.removeEventListener('abort', cancel); await reader.cancel().catch(() => undefined); reader.releaseLock(); }
+}
+
 const fingerprintFields = ['name', 'description', 'personality', 'scenario', 'first_mes', 'mes_example', 'creator', 'creator_notes',
   'system_prompt', 'post_history_instructions', 'tags', 'alternate_greetings'] as const;
 function canonical(value: unknown): string {

@@ -1,11 +1,11 @@
 import { hashBytes } from '@character-foundry/character-foundry/identity';
-import type { ArchivePin } from '@character-unity/store';
+import type { ArchivePin, Asset, UnityStore } from '@character-unity/store';
 import { documentByteLimit } from '@character-unity/store/validation';
 import { prepareArchiveImport, type ArchiveImportObject } from './import.js';
 import { CardError, importByteLimit } from './types.js';
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
-export interface NativeArchiveOptions { origin: string; adminToken?: string; fetch?: Fetch; libraryIndex?: boolean }
+export interface NativeArchiveOptions { origin: string; adminToken?: string; fetch?: Fetch; libraryIndex?: boolean; maxReadBytes?: number }
 export class NativeArchiveUnavailable extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string) { super(message); this.name = 'NativeArchiveUnavailable'; }
 }
@@ -23,6 +23,8 @@ export interface ArchiveIdentityResult { archiveId: string; matches: ArchiveIden
 /** Immutable, bounded reads of a configured Archive. No byte cache, repair,
  * index population, migration or ingestion is triggered by these operations. */
 export function createNativeArchiveReader(options: NativeArchiveOptions) {
+  const maxReadBytes = options.maxReadBytes ?? importByteLimit;
+  if (!Number.isSafeInteger(maxReadBytes) || maxReadBytes < 1 || maxReadBytes > importByteLimit) throw new CardError('INVALID_INPUT', 'Invalid Archive read byte limit');
   const configured = new URL(options.origin);
   if (!['http:', 'https:'].includes(configured.protocol) || configured.username || configured.password || configured.pathname !== '/' || configured.search || configured.hash) {
     throw new CardError('INVALID_INPUT', 'Archive configuration must be an HTTP(S) origin without credentials');
@@ -74,7 +76,7 @@ export function createNativeArchiveReader(options: NativeArchiveOptions) {
     const response = await call(path, init, admin);
     if (response.headers.get('content-type')?.split(';')[0] !== 'application/json') { await response.body?.cancel(); throw new NativeArchiveUnavailable(503, 'PROTOCOL', 'Archive metadata was not JSON'); }
     // A maximum-sized valid card still needs room for its metadata/version envelope.
-    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(await read(response, documentByteLimit + 4 * 1024 * 1024))) as T; }
+    try { return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(await read(response, Math.min(documentByteLimit, maxReadBytes) + 4 * 1024 * 1024))) as T; }
     catch (error) {
       if (error instanceof CardError || (error instanceof Error && ['AbortError', 'TimeoutError'].includes(error.name))) throw error;
       throw new NativeArchiveUnavailable(503, 'PROTOCOL', 'Archive metadata was invalid');
@@ -95,7 +97,7 @@ export function createNativeArchiveReader(options: NativeArchiveOptions) {
     return { detail, version };
   }
   async function object(ref: ArchiveImportObject, signal?: AbortSignal) {
-    if (!/^[a-f0-9]{64}$/.test(ref.sha256) || !Number.isSafeInteger(ref.byteLength) || ref.byteLength < 0 || ref.byteLength > importByteLimit) throw new CardError('TOO_LARGE', 'Archive file exceeds the read limit');
+    if (!/^[a-f0-9]{64}$/.test(ref.sha256) || !Number.isSafeInteger(ref.byteLength) || ref.byteLength < 0 || ref.byteLength > maxReadBytes) throw new CardError('TOO_LARGE', `Archive file exceeds this host's ${maxReadBytes} byte read limit`);
     const bytes = await read(await call(`/api/archive/v2/objects/${ref.sha256}`, signal ? { signal } : {}), ref.byteLength);
     if (bytes.length !== ref.byteLength || await hashBytes(bytes) !== ref.sha256) throw new CardError('INVALID_INPUT', 'An Archive file did not match its digest');
     return bytes;
@@ -104,9 +106,9 @@ export function createNativeArchiveReader(options: NativeArchiveOptions) {
     let total = 0;
     const prepared = await prepareArchiveImport(version.objects, async (ref) => {
       total += ref.byteLength;
-      if (total > importByteLimit) throw new CardError('TOO_LARGE', 'Archive version exceeds the read limit');
+      if (total > maxReadBytes) throw new CardError('TOO_LARGE', `Archive version exceeds this host's ${maxReadBytes} byte read limit`);
       return object(ref, signal);
-    });
+    }, { maxBytes: maxReadBytes });
     signal?.throwIfAborted();
     return { detail, version, prepared };
   }
@@ -144,3 +146,16 @@ export function createNativeArchiveReader(options: NativeArchiveOptions) {
   };
 }
 export type NativeArchiveReader = ReturnType<typeof createNativeArchiveReader>;
+
+/** Inherited metadata always selects its exact Archive locator, even while the
+ * Archive is disconnected. Never fall back to a local blob or permit overwrite. */
+export function createNativeArchiveAssetResolver(store: Pick<UnityStore, 'getArchiveAsset'>, reader?: Pick<NativeArchiveReader, 'resource'>) {
+  return {
+    has: async (workspaceId: string, assetId: string) => (await store.getArchiveAsset(workspaceId, assetId)) !== null,
+    async download(asset: Asset, signal?: AbortSignal) {
+      const locator = await store.getArchiveAsset(asset.workspaceId, asset.id);
+      if (!reader || !locator) throw new NativeArchiveUnavailable(503, 'SOURCE_UNAVAILABLE', 'The referenced Archive is not connected');
+      return reader.resource(locator.pin, locator.path, signal);
+    },
+  };
+}

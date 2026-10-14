@@ -7,11 +7,18 @@
     "nodejs_compat"
   ],
   "workers_dev": false,
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*"]
+  },
   "vars": {
     "UNITY_PUBLIC_ORIGIN": "http://127.0.0.1:9312",
     "UNITY_ARCHIVE_ORIGIN": "",
     "UNITY_SYNC_ENABLED": "false",
-    "UNITY_SYNC_WRITES_ENABLED": "false"
+    "UNITY_SYNC_WRITES_ENABLED": "false",
+    "UNITY_REMOTE_CONNECTIONS_JSON": "{\"version\":\"unity.remote-connections.v1\",\"connections\":[]}"
   },
   "d1_databases": [
     {

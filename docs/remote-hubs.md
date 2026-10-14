@@ -10,17 +10,19 @@ Connections belong to a local account and its immutable HTTPS actor. Operators
 configure destinations and signing keys on the host. Browser requests select a
 connection ID; they never supply a URL, private key, filesystem path or different
 account. Foundry owns the signed protocol, verification and bundle encoding.
-The same shell provides local publication controls at `/sharing`. The earlier
-`apps/hub` remote UI remains for regression checks, not as a second required app.
+The same shell provides local publication controls at `/sharing`; the earlier
+`apps/hub` scaffold has been retired.
 
 ## Current opaque-resource limit
 
 Same-hub publication preserves opaque Risu `module.risum` bytes. The current
-Unity-to-sync mapping cannot represent that binding, however: a remote publication
-page containing it reports unavailable rather than stripping the module or
-claiming an empty result. Ordinary PNG/JSON and declared-attachment returns are
-covered by the native TLS browser rehearsal. Explicit unsupported-resource
-diagnostics or a versioned wire extension remain open in `cu-1o2.13.1`.
+Unity-to-sync mapping cannot represent that binding. Such publications are
+excluded as whole records before signed-list pagination; direct signed reads
+return an explicit unsupported-resource error (422). Ordinary publications remain
+visible, and neither local publication nor original bytes are stripped. Sharing
+discloses the limitation. Ordinary PNG/JSON and declared-attachment returns are
+covered by the native TLS browser rehearsal. A future wire extension is separate
+work, not a silent conversion.
 
 ## Configure the sender
 
@@ -125,8 +127,7 @@ require explicit dismissal; they are not silently replaced. The server's
 saved-return list is authoritative once a job exists. Clearing browser storage
 can lose an unconfirmed preparation notice; refresh saved returns before
 preparing another. Dismissing the notice never deletes an existing server job.
-The retained scaffold uses its earlier session-storage notice; neither notice
-is a substitute for the durable server outbox.
+The browser notice is not a substitute for the durable server outbox.
 
 Archive references cannot be selected for return: they are read-only links, not
 remote-owned drafts. Saving unchanged content creates no copy. Save a changed
@@ -155,8 +156,7 @@ The native JSON and binary clients use the same captured authenticated connectio
 | `GET /api/remotes/workspaces/:workspace/jobs/:id` | Read one saved job and historical acknowledgment |
 | `POST /api/remotes/workspaces/:workspace/jobs/:id/send` | Send or retry its existing bytes; body must be `{}` |
 
-Final validation of the native Sharing/Remotes UI pass is pending; see
-[implementation status](implementation.md). The existing HTTP tests cover
+See [implementation status](implementation.md) for verification gates. HTTP tests cover
 connection/account isolation, URL/key injection rejection,
 cookie separation, redacted descriptors, removed connections, peer-error mapping
 and local revocation against SQLite and workerd receivers. Additional tests run
@@ -165,7 +165,7 @@ R2 assets, D1 jobs, response loss and receipt recovery after restarting the send
 Those Worker tests bridge outbound requests through the test harness; they do not
 establish deployed networking or platform limits.
 
-`e2e/remote-hubs.spec.ts` runs two compiled Node hosts behind a local HTTPS peer
+`e2e/unity-editor/sharing.spec.ts` runs two compiled Node hosts behind a local HTTPS peer
 proxy with a test-only trusted certificate. Real browser actions publish a card
 with an attachment, pull/edit it, recover a lost enqueue response across reload,
 retain a newer head and unsaved draft, and retry after the proxy loses a successful

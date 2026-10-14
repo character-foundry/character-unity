@@ -9,7 +9,7 @@ import { once } from 'node:events';
 
 // Two disposable real Node hosts. The HTTPS proxy can lose one successful return
 // response via a test-owned file; no application test routes or login bypasses exist.
-const webDirectory = resolve(process.argv[2] ?? 'apps/hub/dist');
+const webDirectory = resolve(process.argv[2] ?? 'apps/web/dist');
 await access(join(webDirectory, 'index.html'));
 const hostArgs = process.argv[2]
   ? ['--import', resolve('apps/api/node_modules/tsx/dist/loader.mjs'), 'apps/api/src/node.ts']

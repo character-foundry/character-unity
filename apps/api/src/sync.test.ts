@@ -7,6 +7,8 @@ import { Miniflare, Response as MiniflareResponse, convertV4MiniflareOptions } f
 import type { V4FetchHandler } from 'miniflare';
 import { beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest';
 import { createCardRevision, readCardLineage, hashBytes } from '@character-foundry/character-foundry/identity';
+import { writeCharX } from '@character-foundry/character-foundry/charx';
+import type { CCv3Data } from '@character-foundry/character-foundry/schemas';
 import type { SyncReadPublication } from '@character-foundry/character-foundry/sync';
 import { encodeSyncForkSubmission, SYNC_FORK_VERSION, SYNC_FORK_MAX_BYTES, createSyncCommandClient, SYNC_COMMAND_VERSION, encodeSyncCommand, createSyncReadClient, signSyncHttp, createSyncToken } from '@character-foundry/character-foundry/sync';
 import { createRemoteCardService } from '@character-unity/cards/remote';
@@ -140,6 +142,33 @@ for (const adapter of ['sqlite', 'worker']) describe(`signed publication sync / 
       policy: { visibility: 'public', allowOriginal: false, allowFork: false } });
     expect(updated.status, await updated.clone().text()).toBe(200);
     await expect(client.asset(value, 'declared/0')).rejects.toMatchObject({ code: 'CHANGED' });
+  }, 30_000);
+
+  it('keeps supported signed pages usable while opaque Risu publications remain complete on the source hub', async () => {
+    const first = await publish('public', true), second = await publish('members');
+    const moduleRisum = new Uint8Array([82, 73, 83, 85, 0, 250, 251]);
+    const document = { spec: 'chara_card_v3', spec_version: '3.0', data: { name: 'Opaque Risu module', description: 'Keep the module intact', extensions: {} } };
+    const bytes = writeCharX(document as unknown as CCv3Data, [], { moduleRisum }).buffer;
+    const imported = await json<{ card: { id: string }; revision: { id: string } }>(await dispatch(new Request(`${origin}/api/workspaces/${workspaceId}/imports`, {
+      method: 'POST', headers: { cookie: alice, origin, 'content-type': 'application/octet-stream' }, body: new Uint8Array(bytes),
+    })), 201);
+    const published = await json<{ publications: { id: string }[] }>(await browser('hub/publications', alice, 'POST', {
+      workspaceId, revisionIds: [imported.revision.id], policy: { visibility: 'public', allowOriginal: true, allowFork: true },
+    }), 201);
+    const id = published.publications[0]!.id;
+    const ids: string[] = []; let after: string | undefined;
+    do {
+      const page = await client.list({ limit: 1, ...(after ? { after } : {}) });
+      ids.push(...page.publications.map((value) => value.id)); after = page.nextAfter ?? undefined;
+    } while (after && ids.length < 10);
+    expect(ids).toEqual([first.id, second.id].sort());
+    const direct = await dispatch(await signed(`/publications/${id}`));
+    expect(direct.status).toBe(422);
+    expect(await direct.json()).toMatchObject({ error: { code: 'UNAVAILABLE', message: expect.stringContaining('module.risum') } });
+    const local = await json<{ assets: { path: string }[] }>(await browser(`hub/publications/${id}`, bob));
+    expect(local.assets.some((value) => value.path === 'module.risum')).toBe(true);
+    expect(new Uint8Array(await (await browser(`hub/publications/${id}/asset?path=module.risum`, bob)).arrayBuffer())).toEqual(moduleRisum);
+    expect(new Uint8Array(await (await browser(`hub/publications/${id}/original`, bob)).arrayBuffer())).toEqual(new Uint8Array(bytes));
   }, 30_000);
 
   it('rejects unsigned, replayed, tampered, ambient and revoked credentials without session fallback', async () => {

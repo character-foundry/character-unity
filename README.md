@@ -40,13 +40,13 @@ link cannot be published or returned to a remote hub; first save a changed owned
 fork. An unchanged Save deliberately creates no copy. See
 [in-place setup and explicit indexing gates](docs/archive-existing-storage.md).
 
-The earlier `apps/architect`, `apps/hub` and `packages/editor` scaffolds remain for
-regression checks pending retirement. The separate browser-only IndexedDB profile
-also remains available; its stored cards and upgrade path have not been discarded.
-The active app depends on the small [tokenizer package](docs/text-token-counts.md),
-not on the scaffold editor for token counting. [Implementation history and open
-gates](docs/implementation.md) distinguish current native capabilities from those
-earlier profiles. No live data, accounts or secrets are included.
+The earlier Architect/hub scaffolds and form editor are retired. Local API,
+account and browser-only profiles use the same native UI. The browser profile
+keeps its existing IndexedDB database and upgrades in place; retirement does not
+discard stored cards. Content supports standalone lorebooks, presets and personas
+with exact originals and immutable revisions. Statistics reports the selected
+workspace and explicit Archive coverage. See [implementation status and open
+gates](docs/implementation.md). No live data, accounts or secrets are included.
 
 ## Run locally
 
@@ -62,8 +62,7 @@ pnpm dev
 | Unified application | http://127.0.0.1:9430 | `pnpm dev:web` |
 | Shared API | http://127.0.0.1:9312/api/health | `pnpm dev:api` |
 | Archive service | http://127.0.0.1:9313/api/health | `pnpm dev:archive` |
-| Legacy Architect scaffold | http://127.0.0.1:9310 | `pnpm dev:architect` |
-| Legacy hub scaffold | http://127.0.0.1:9311 | `pnpm dev:hub` |
+| Native browser-only profile (optional) | http://127.0.0.1:9310 | `pnpm dev:browser` |
 
 `pnpm dev` starts the unified web application and one API process. Archive starts separately;
 its default mode opens no database or search/scraper jobs. Explicit copied-SQLite
@@ -93,12 +92,12 @@ Known client routes support direct reloads; API misses never fall back to HTML.
 Run `pnpm test:e2e:unity` to build and test the active application in Chromium.
 For the hub, create accounts and start the explicit account profile as described
 in [hub accounts](docs/hub-accounts.md). A dependency-locked Node container serves
-either profile; see [containers](docs/containers.md) for hub Compose, standalone
-Architect on Linux, account setup and the HTTPS/persistence rehearsal. Remote
+either profile; see [containers](docs/containers.md) for hub Compose, native local
+Unity on Linux, account setup and the HTTPS/persistence rehearsal. Remote
 deployment remains outstanding.
 
 For browser-only storage, use `pnpm dev:browser`, or run `pnpm build:browser`
-and serve `apps/architect/dist/browser` with a static web server. This profile
+and serve `apps/web/dist-browser` with a static web server with SPA fallback. This profile
 requires no API. It uses IndexedDB for revisions and original/asset bytes and
 calls the same Foundry-backed card service in the browser. Use localhost or HTTPS
 for Web Crypto. Data belongs to that site's origin and browser profile; it does
@@ -113,7 +112,7 @@ foundation; Unity supplies presentation, editing, forks and sharing.
 
 Run `UNITY_ARCHIVE_MODE=fixture pnpm dev:archive` to enable synthetic Archive
 list/search, stable selection manifests and exact original reads. To connect
-Architect or hub, follow [Archive selection import](docs/archive-import.md). Default mode
+the native app, follow [existing Archive storage](docs/archive-existing-storage.md). Default mode
 is `off`, with read routes reporting 503. See [the read contract](docs/archive-read-contract.md).
 
 Node hosts accept `HOST` (default `127.0.0.1`) and `PORT`; the API's local session
@@ -132,7 +131,7 @@ operator migration; see [Worker setup and verification](docs/worker-profile.md).
 Byte storage defaults to `apps/api/runtime/blobs`; `UNITY_BLOB_DIR` selects another
 Unity-owned directory. Uploads are verified before completion and existing objects
 cannot be overwritten. Publication and card-revision asset downloads are available.
-Explicit asset revision/upload routes are connected to all editor hosts.
+Explicit asset revision/upload routes are connected to the native editor.
 Remote R2 configuration remains pending. See [asset revisions](docs/asset-revisions.md)
 and [the asset lifecycle](packages/assets/README.md). Explicit `pnpm assets`
 commands preview, retire and sweep old unreferenced objects; see
@@ -142,9 +141,10 @@ commands preview, retire and sweep old unreferenced objects; see
 pnpm exec playwright install chromium --only-shell  # once per browser update
 pnpm check                 # lint, types, tests, builds, Worker dry run, smoke, browser tests
 pnpm build                 # static web outputs and bundled Node executables
-pnpm build:worker          # local bundle only; no Cloudflare deployment
+pnpm build:worker          # native account UI/API bundle; no Cloudflare deployment
+pnpm build:worker:browser  # native browser-only static Worker bundle
 pnpm dev:worker            # local Worker API; initialize its separate state first
-pnpm verify:worker         # built hub + local Wrangler, two accounts and restart
+pnpm verify:worker         # native UI + local Wrangler, accounts, light profile and restart
 pnpm verify:sync ../.unity-foundry-sdk/packages/character-foundry # public signed transport/read checks
 docker build -t character-unity:foundation .
 pnpm verify:container character-unity:foundation # isolated Linux Docker rehearsal
@@ -158,7 +158,7 @@ Generated Worker types and build outputs are ignored. `pnpm type-check` generate
 the types first. Built Node hosts run with
 `pnpm --filter @character-unity/api-host start` and
 `pnpm --filter @character-unity/archive start`. The active static output is
-`apps/web/dist`; regression hosts still build `apps/architect/dist` and `apps/hub/dist`.
+`apps/web/dist`; browser-only output is `apps/web/dist-browser`.
 Archive's separate native image and synthetic search/restart checks are described
 in [Archive runtime](docs/archive-native-runtime.md). Fixture/copied modes remain
 for isolated rehearsals; the active in-house path reads existing storage in place.
@@ -168,8 +168,6 @@ Real-source runs, provider quality and coordinated writer takeover remain open.
 
 - `apps/archive`: local Archive service; owns the existing database, originals and LanceDB.
 - `apps/web`: active library, Archive, viewer, Architect editor, sharing and connected-hub UI.
-- `apps/architect`: earlier editor host and retained browser-only storage profile.
-- `apps/hub`: earlier account-host scaffold retained for regressions.
 - `apps/api`: Node and Workers entrypoints for the shared API.
 - `packages/api`: portable Hono routes used by both hosts.
 - `packages/store`: common schema/repositories, native SQLite and D1 adapters,
@@ -178,10 +176,8 @@ Real-source runs, provider quality and coordinated writer takeover remain open.
 - `packages/browser-storage`: atomic IndexedDB revisions, sources and verified blobs.
 - `packages/assets`: upload completion, retry and workspace-scoped asset reads.
 - `packages/cards`: authorized import/save, publication and fork operations using Foundry identity and immutable sources.
+- `packages/content`: standalone typed JSON originals, revisions, forks and local sharing.
 - `packages/archive-client`: bounded, verified reads from the independent Archive service.
-- `packages/archive-browser`: shared Archive search, selection and import UI with an injected host port.
-- `packages/ui`: shared React presentation and CSS, with no application state.
-- `packages/editor`: per-instance draft controller, core CCv2/CCv3 field forms and injected save port.
 - `packages/architect`: active session-isolated native editor.
 - `packages/tokenizer`: browser token worker shared without importing scaffold editor UI.
 - `packages/scraper-kit`: plugin contracts shared by the Archive source adapters.
@@ -193,5 +189,5 @@ API on Node and Workers. See [SDK development](docs/foundry-development.md).
 
 See [architecture decisions](docs/architecture.md) and
 [implementation gates](docs/implementation.md) before beginning the ports.
-See [hub publication](docs/hub-publication.md) for the initial backend policy,
-API routes and remaining hosting/UI work.
+See [hub publication](docs/hub-publication.md) for backend policy and API routes.
+Public resource provisioning/deployment and live Archive activation remain separate gates.

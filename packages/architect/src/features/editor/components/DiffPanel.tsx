@@ -25,6 +25,9 @@ const CodeMirrorMergeView = lazy(() =>
     default: m.CodeMirrorMergeView,
   }))
 );
+const CodeMirrorUnifiedDiff = lazy(() =>
+  import('../../../components/ui/CodeMirrorMergeView').then((m) => ({ default: m.CodeMirrorUnifiedDiff }))
+);
 
 const LorebookDiffView = lazy(() =>
   import('./LorebookDiffView').then((m) => ({ default: m.LorebookDiffView }))
@@ -119,17 +122,18 @@ export function DiffPanel() {
   const [isRestoring, setIsRestoring] = useState(false);
   const [loadingVersionId, setLoadingVersionId] = useState<string | null>(null);
   const request = useRef(0);
+  const auxiliary = useRef(new AbortController());
   const lifetime = useRef(new AbortController());
   useEffect(() => {
     lifetime.current = new AbortController();
-    return () => { lifetime.current.abort(); request.current++; };
+    return () => { lifetime.current.abort(); auxiliary.current.abort(); request.current++; };
   }, []);
 
   // Check if current card has a lorebook
   const hasLorebook = currentCard ? cardHasLorebook(currentCard) : false;
 
   useEffect(() => {
-    request.current++;
+    request.current++; auxiliary.current.abort(); setIsLoading(false);
     setVersions([]);
     setSelectedVersion(null);
     setLoadingVersionId(null);
@@ -159,9 +163,10 @@ export function DiffPanel() {
 
   const loadVersions = async () => {
     if (!currentCard?.meta.id) return;
-    const generation = request.current;
-    setIsLoading(true);
-    const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal]);
+    const generation = ++request.current;
+    auxiliary.current.abort(); auxiliary.current = new AbortController();
+    setIsLoading(true); setError(null); setSelectedVersion(null); setLoadingVersionId(null);
+    const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal, auxiliary.current.signal]);
     const result = await api.listVersions(currentCard.meta.id, { signal });
     if (request.current !== generation || signal.aborted || session.selection() !== selection) return;
     if (result.error) setError(result.error);
@@ -174,6 +179,7 @@ export function DiffPanel() {
     if (session.cards.getState().isSaving || session.cards.getState().isRestoring) return;
     const warning = session.cards.getState().isDirty ? '\nUnsaved edits will be discarded.' : '';
     if (!confirm(`Restore Version ${version.version} as a new saved revision?${warning}`)) return;
+    request.current++; auxiliary.current.abort(); setLoadingVersionId(null); setIsLoading(false);
     setIsRestoring(true);
     const selection = session.selection();
     const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal]);
@@ -198,7 +204,8 @@ export function DiffPanel() {
 
   const handleVersionClick = async (version: UnityVersion) => {
     const generation = ++request.current;
-    const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal]);
+    auxiliary.current.abort(); auxiliary.current = new AbortController(); setLoadingVersionId(null);
+    const signal = AbortSignal.any([session.liveSignal(), lifetime.current.signal, auxiliary.current.signal]);
     if (selectedVersion?.id === version.id) {
       setSelectedVersion(null);
       return;
@@ -236,11 +243,12 @@ export function DiffPanel() {
       <div className="h-full flex flex-col">
         {/* Header */}
         <div className="p-4 bg-dark-surface border-b border-dark-border">
-          <div className="flex justify-between items-center mb-3">
+          <div className="flex flex-wrap justify-between items-center gap-3 mb-3">
             <h3 className="font-semibold">
               Comparing Version {selectedVersion.version} with Current
             </h3>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => { void loadVersions(); }} disabled={isRestoring || isLoading} className="btn-secondary">Refresh history</button>
               <button
                 onClick={() => handleRestore(selectedVersion)}
                 disabled={isRestoring}
@@ -258,7 +266,7 @@ export function DiffPanel() {
           </div>
 
           {/* View mode selector */}
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm text-dark-muted">View:</span>
             <ViewModeSelector
               mode={viewMode}
@@ -285,6 +293,9 @@ export function DiffPanel() {
                 originalData={selectedVersion.data}
                 currentData={currentCard.data}
               />
+            ) : viewMode === 'unified' ? (
+              <CodeMirrorUnifiedDiff originalText={originalText} currentText={revisedText} language="json"
+                height="calc(100vh - 250px)" originalLabel={`Version ${selectedVersion.version}`} currentLabel="Current" />
             ) : (
               <CodeMirrorMergeView
                 originalText={originalText}
@@ -305,7 +316,7 @@ export function DiffPanel() {
   // Version list view
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 bg-dark-surface border-b border-dark-border flex justify-between items-center">
+      <div className="p-4 bg-dark-surface border-b border-dark-border flex flex-wrap gap-3 justify-between items-center">
         <div>
           <h3 className="font-semibold">Version History</h3>
           {hasLorebook && (
@@ -314,7 +325,8 @@ export function DiffPanel() {
             </p>
           )}
         </div>
-        <p className="text-sm text-dark-muted">Each Save keeps a permanent revision.</p>
+        <div className="space-y-2 text-right"><p className="text-sm text-dark-muted">Each Save keeps a permanent revision.</p>
+          <button type="button" disabled={isLoading || isRestoring} onClick={() => { void loadVersions(); }} className="btn-secondary">{error ? 'Retry history' : 'Refresh history'}</button></div>
       </div>
 
       <div className="flex-1 overflow-auto p-4">
@@ -337,15 +349,10 @@ export function DiffPanel() {
                 <div>
                   <div className="font-medium flex items-center gap-2">
                     Version {version.version}
-                    {version.message?.startsWith('[Auto]') && (
-                      <span className="text-[10px] px-1.5 py-0.5 bg-dark-muted/30 text-dark-muted rounded">
-                        Auto
-                      </span>
-                    )}
                   </div>
                   {version.message && (
                     <div className="text-sm text-dark-muted">
-                      {version.message.replace('[Auto] ', '')}
+                      {version.message}
                     </div>
                   )}
                   <div className="text-xs text-dark-muted">

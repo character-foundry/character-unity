@@ -6,7 +6,7 @@ export interface UnityHostConfig {
   actorId?: string;
   /** Observable state of the same immutable transport; never a current-session lookup. */
   connection?: {
-    readonly profile: 'local' | 'hub';
+    readonly profile: 'local' | 'hub' | 'browser';
     subscribe(listener: () => void): () => void;
     snapshot(): { status: 'active' | 'locked' | 'disposed' };
   };

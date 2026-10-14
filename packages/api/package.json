@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@character-unity/cards": "workspace:*",
+    "@character-unity/content": "workspace:*",
     "hono": "4.13.13",
     "@character-unity/store": "workspace:*",
     "@character-unity/archive-client": "workspace:*",

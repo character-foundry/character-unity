@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { createRequire } from 'node:module';
+import { schemaVersion } from './schema-version.mjs';
 
 const { createSyncCommandClient, createSyncReadClient, createSyncToken, encodeSyncForkSubmission, SYNC_FORK_VERSION } = createRequire(new URL('../packages/api/package.json', import.meta.url))('@character-foundry/character-foundry/sync');
 
@@ -59,7 +60,7 @@ async function ready(id, url) {
     try {
       const response = await fetch(`${url}/api/ready`, { signal: AbortSignal.timeout(1000) });
       if (response.ok) {
-        assert.deepEqual(await response.json(), { status: 'ready', storage: { schemaVersion: 13 } });
+        assert.deepEqual(await response.json(), { status: 'ready', storage: { schemaVersion } });
         return;
       }
     } catch { /* Retry only this live container's startup. */ }
@@ -150,7 +151,7 @@ try {
   }
   const home = await request('/');
   assert.deepEqual(home.bytes, nativeIndex, 'The default image serves the exact native application entry');
-  for (const path of ['/explore', '/archive', '/new', '/search', '/settings', '/sharing', '/remotes', '/chat-apps',
+  for (const path of ['/explore', '/archive', '/new', '/search', '/settings', '/content', '/stats', '/sharing', '/remotes', '/chat-apps',
     '/card/container-saved-card', '/card/container-saved-card/edit', '/card/container-saved-card/fork']) {
     const page = await request(path);
     assert.match(page.headers['content-type'], /text\/html/);
@@ -293,7 +294,7 @@ try {
   const listener = tcpServer(); listener.listen(0, '127.0.0.1'); await once(listener, 'listening');
   const port = listener.address().port; await new Promise((done) => listener.close(done));
   const architectOrigin = `http://127.0.0.1:${port}`;
-  const localData = await volume('architect');
+  const localData = await volume('native-local');
   const nativeLocal = await run('unity-local', localData, ['--network', 'host', '-e', 'UNITY_PROFILE=local', '-e', 'HOST=127.0.0.1', '-e', `PORT=${port}`]);
   await ready(nativeLocal, architectOrigin);
   for (const path of ['/', '/sharing', '/remotes', '/card/local-saved-card/edit']) {
@@ -308,12 +309,14 @@ try {
   assert.equal(nativeWorkspace.status, 201);
   const nativeWorkspaceId = (await nativeWorkspace.json()).id;
   await healthy(nativeLocal); await stop(nativeLocal);
-  // Explicitly retained scaffold, same local origin and volume: no browser or server data migration.
-  const architect = await run('architect', localData, ['--network', 'host', '-e', 'UNITY_PROFILE=local', '-e', 'HOST=127.0.0.1',
-    '-e', `PORT=${port}`, '-e', 'UNITY_WEB_DIR=/app/web/architect']);
-  await ready(architect, architectOrigin);
+  // Restart the native local profile at the same origin and disposable volume.
+  // Reusing its existing library is not a scaffold cutover or data migration.
+  const nativeRestart = await run('unity-local-recreated', localData, ['--network', 'host', '-e', 'UNITY_PROFILE=local', '-e', 'HOST=127.0.0.1',
+    '-e', `PORT=${port}`]);
+  await ready(nativeRestart, architectOrigin);
   const page = await fetch(architectOrigin); assert.equal(page.status, 200);
-  const html = await page.text(); assert.match(html, /Character Unity/);
+  const restartedIndex = Buffer.from(await page.arrayBuffer()); assert.deepEqual(restartedIndex, nativeIndex);
+  const html = restartedIndex.toString();
   const localAsset = html.match(/src="([^"]+\.js)"/); assert.ok(localAsset);
   const localScript = await fetch(`${architectOrigin}${localAsset[1]}`);
   assert.equal(localScript.status, 200); assert.match(localScript.headers.get('content-type'), /javascript/);
@@ -322,17 +325,17 @@ try {
   const localCookie = local.headers.get('set-cookie').split(';')[0];
   const retainedWorkspaces = await fetch(`${architectOrigin}/api/workspaces`, { headers: { origin: architectOrigin, cookie: localCookie } });
   assert.equal(retainedWorkspaces.status, 200);
-  assert.ok((await retainedWorkspaces.json()).workspaces.some((workspace) => workspace.id === nativeWorkspaceId), 'Explicit legacy UI selection preserves the existing local library');
-  const workspace = await fetch(`${architectOrigin}/api/workspaces`, { method: 'POST', headers: { origin: architectOrigin, cookie: localCookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Local Architect' }) });
+  assert.ok((await retainedWorkspaces.json()).workspaces.some((workspace) => workspace.id === nativeWorkspaceId), 'Native local restart preserves the existing local library');
+  const workspace = await fetch(`${architectOrigin}/api/workspaces`, { method: 'POST', headers: { origin: architectOrigin, cookie: localCookie, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Local Unity after restart' }) });
   assert.equal(workspace.status, 201);
-  await healthy(architect); await stop(architect);
+  await healthy(nativeRestart); await stop(nativeRestart);
 
   const report = { version: 'unity.container-rehearsal.v2', imageId: metadata.Id, platform: `${metadata.Os}/${metadata.Architecture}`,
     node, foundryCommit,
-    schemaVersion: 13, nonRoot: true, readOnlyRoot: true, httpsProxy: true, secureCookieAttributes: true,
+    schemaVersion, nonRoot: true, readOnlyRoot: true, httpsProxy: true, secureCookieAttributes: true,
     nativeUiDefault: true, nativeUiDeepLinks: true, nativeEntryAndTokenizerBytes: true, actorProofJsonAndBinary: true, nativeLocalLinuxHostNetwork: true,
     twoAccountPublishFork: true, immutablePublicActorProvisioning: true, signedReadPublishFork: true, verifiedRemoteForkReturn: true, signedReceiptsSurviveContainerReplacement: true, assetBearingCharxReimport: true, unchangedOriginal: true,
-    sessionAndStorageSurviveContainerReplacement: true, accountRevocation: true, architectLinuxHostNetwork: true, gracefulStop: true };
+    sessionAndStorageSurviveContainerReplacement: true, accountRevocation: true, nativeLocalStorageSurvivesReplacement: true, gracefulStop: true };
   await mkdir('runtime', { recursive: true }); await writeFile('runtime/container-rehearsal.json', JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
 } finally {

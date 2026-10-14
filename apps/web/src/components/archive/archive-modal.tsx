@@ -7,6 +7,7 @@ import { useSettings } from '@/lib/settings';
 import { FollowButton } from '@/components/cards/card-actions';
 import { providerLabels, useArchiveApi, useObjectUrl } from '@/lib/archive';
 import { ProtectedImage } from '@/components/ui/protected-media';
+import { useLibraryClient } from '@/lib/library-client';
 import type { ArchiveCard, ArchiveCardDetail } from '@/lib/archive';
 import { AddToLibrary } from './archive-card';
 
@@ -25,6 +26,7 @@ function Section({ title, value }: { title: string; value: string }) {
 /** Archive quick view. Library membership references a pinned version without copying files. */
 export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCard | null; onClose: () => void; onRemoved: () => void }) {
   const archiveApi = useArchiveApi();
+  const canAdministerArchive = useLibraryClient().connection.profile === 'local';
   const { settings } = useSettings();
   const [detail, setDetail] = useState<ArchiveCardDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -71,14 +73,14 @@ export function ArchiveCardModal({ card, onClose, onRemoved }: { card: ArchiveCa
               <a href={card.url} target="_blank" rel="noreferrer noopener" className="rounded-lg border border-nebula/30 px-3 py-1.5 text-sm text-starlight/80 hover:border-nebula">
                 Open on {providerLabels[card.provider] ?? card.provider} ↗
               </a>
-              <button type="button" disabled={busy} className="rounded-lg border border-red-500/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-40"
+              {canAdministerArchive && <button type="button" disabled={busy} className="rounded-lg border border-red-500/40 px-3 py-1.5 text-sm text-red-300 hover:bg-red-500/10 disabled:opacity-40"
                 onClick={async () => {
                   if (!window.confirm(`Remove “${card.name}” from the Archive? It will be hidden and never fetched again. Its files stay on disk.`)) return;
                   const controller = new AbortController(); operation.current = controller; setBusy(true); setError(null);
                   try { await archiveApi.block(card.id, controller.signal); if (!controller.signal.aborted) onRemoved(); }
                   catch (failure) { if (!controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'Could not remove it'); }
                   finally { if (operation.current === controller) operation.current = null; if (!controller.signal.aborted) setBusy(false); }
-                }}>{busy ? 'Removing…' : 'Remove from Archive'}</button>
+                }}>{busy ? 'Removing…' : 'Remove from Archive'}</button>}
             </div>
             <p className="text-xs text-starlight/50">Adding or favoriting keeps a library link to this archived version. The original and its files stay in Archive; saving a changed edit creates your fork. Unfavoriting keeps the link.</p>
 

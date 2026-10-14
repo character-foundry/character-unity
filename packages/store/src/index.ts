@@ -8,9 +8,10 @@ import { fold, libraryFilterSql, librarySortSql, librarySourceSql, libraryTokens
 import { archiveForkStatement, createArchiveOperations, importClaimStatements } from './archive.js';
 import { createLibraryOperations } from './library.js';
 import { createSearchOutbox } from './search-outbox.js';
+import { chatImportStatements } from './chat-receipts.js';
 
 const notDeleted = 'NOT EXISTS (SELECT 1 FROM unity_card_deletions d WHERE d.card_id = c.id)';
-import type { ArchivePin, Asset, Card, CardSource, CardSourceInput, CardSummaryPage, CardSummaryQuery, ContentIdentity, ImportCardResult, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
+import type { ArchivePin, Asset, Card, CardSource, CardSourceInput, CardSummaryPage, CardSummaryQuery, ChatImportReceiptInput, ContentIdentity, ImportCardResult, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
 import * as validate from './validation.js';
 export * from './types.js';
 export type { SearchJob } from './search-outbox.js';
@@ -31,6 +32,7 @@ const revisionColumns = `id, sequence, card_id AS cardId, workspace_id AS worksp
 function translate(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('UNITY_PUBLICATION_ACCESS')) throw new StoreError('ACCESS_CHANGED', 'Publication access changed; reload before forking', { cause: error });
+  if (message.includes('UNITY_CHAT_ACCESS_CHANGED')) throw new StoreError('ACCESS_CHANGED', 'The chat connection or tracked copy changed; review it again', { cause: error });
   if (message.includes('UNITY_HEAD_CONFLICT')) throw new StoreError('HEAD_CONFLICT', 'The card has a newer revision; reload before saving', { cause: error });
   if (message.includes('UNITY_ASSET_NOT_READY')) throw new StoreError('ASSET_NOT_READY', 'An asset is missing, staged, or belongs to another workspace', { cause: error });
   if (/constraint|UNITY_IMMUTABLE/i.test(message)) throw new StoreError('INTEGRITY', 'A store integrity constraint rejected the operation', { cause: error });
@@ -124,13 +126,14 @@ export function createStore(driver: StoreDriver) {
     return { card: await insertedCard(workspaceId, id), revision: await getRevision(workspaceId, revision.id) };
   }
   const archive = createArchiveOperations(driver, batch);
-  async function createArchiveFork(input: RevisionInput & { workspaceId: string; pin: ArchivePin; referenceId?: string; originalHash?: string; sourceProvider?: string; source?: CardSourceInput }) {
+  async function createArchiveFork(input: RevisionInput & { workspaceId: string; pin: ArchivePin; referenceId?: string; originalHash?: string; sourceProvider?: string; source?: CardSourceInput; chatImport?: ChatImportReceiptInput }) {
     const workspaceId = validate.text(input.workspaceId, 'workspaceId'), pin = validate.archivePin(input.pin);
     const referenceId = input.referenceId === undefined ? undefined : validate.text(input.referenceId, 'referenceId');
     const originalHash = input.originalHash === undefined ? null : validate.hash(input.originalHash), id = crypto.randomUUID();
     let sourceProvider = input.sourceProvider === undefined ? 'file' : validate.text(input.sourceProvider, 'sourceProvider', 80);
     const revision = revisionStatements(workspaceId, id, null, input);
     const source = sourceStatements(workspaceId, id, input.source);
+    const receipt = chatImportStatements(input.chatImport, workspaceId, input.authorId, referenceId, pin.versionId, id, revision.id);
     await workspace(workspaceId);
     if (referenceId) {
       const reference = await archive.getArchiveReference(workspaceId, referenceId);
@@ -139,7 +142,7 @@ export function createStore(driver: StoreDriver) {
     }
     await batch([
       { sql: 'INSERT INTO unity_cards(id,workspace_id,original_hash,created_at) VALUES (?,?,?,?)', params: [id, workspaceId, originalHash, new Date().toISOString()] },
-      ...source, archiveForkStatement(workspaceId, id, pin, sourceProvider, referenceId), ...revision.statements,
+      ...source, archiveForkStatement(workspaceId, id, pin, sourceProvider, referenceId), ...revision.statements, ...receipt,
     ]);
     return { card: await insertedCard(workspaceId, id), revision: await getRevision(workspaceId, revision.id) };
   }
@@ -183,10 +186,12 @@ export function createStore(driver: StoreDriver) {
     await requireSyncWrite(driver, context, target);
     return { card, revision };
   }
-  async function forkCard(input: RevisionInput & { workspaceId: string; sourceWorkspaceId: string; sourceRevisionId: string; expectedSourceHead?: string; source?: CardSourceInput; publication?: PublicationForkGuard }, syncContext?: SyncWriteContext) {
+  async function forkCard(input: RevisionInput & { workspaceId: string; sourceWorkspaceId: string; sourceRevisionId: string; expectedSourceHead?: string; source?: CardSourceInput; publication?: PublicationForkGuard; chatImport?: ChatImportReceiptInput }, syncContext?: SyncWriteContext) {
     const context = snapshotSyncContext(syncContext);
+    const chatImport = input.chatImport ? { ...input.chatImport } : undefined;
     const { workspaceId, sourceWorkspaceId, sourceRevisionId, expectedSourceHead } = input;
     if (expectedSourceHead !== undefined) validate.text(expectedSourceHead, 'expectedSourceHead');
+    if (chatImport && (expectedSourceHead === undefined || context || input.publication)) validate.invalid('Chat import requires an explicit local expected-head fork');
     const id = crypto.randomUUID();
     const revision = revisionStatements(workspaceId, id, sourceRevisionId, input);
     const sourceRows = sourceStatements(workspaceId, id, input.source);
@@ -204,13 +209,14 @@ export function createStore(driver: StoreDriver) {
     await workspace(workspaceId);
     const source = await getRevision(sourceWorkspaceId, sourceRevisionId);
     const parent = await getCard(sourceWorkspaceId, source.cardId);
+    const receipt = chatImportStatements(chatImport, workspaceId, input.authorId, parent.id, expectedSourceHead ?? sourceRevisionId, id, revision.id);
     if (expectedSourceHead !== undefined && parent.headRevisionId !== expectedSourceHead) throw new StoreError('HEAD_CONFLICT', 'The source card has changed; reload before forking');
     const statements: Statement[] = [
       { sql: `INSERT INTO unity_cards(id, workspace_id, original_hash, forked_from_revision_id, created_at)
           SELECT ?, ?, ?, ?, ? ${expectedSourceHead === undefined ? '' : `WHERE EXISTS (SELECT 1 FROM unity_cards c WHERE c.workspace_id = ? AND c.id = ? AND c.head_revision_id = ? AND NOT EXISTS (SELECT 1 FROM unity_card_deletions d WHERE d.card_id = c.id))`}`,
         params: [id, workspaceId, parent.originalHash, sourceRevisionId, new Date().toISOString(),
           ...(expectedSourceHead === undefined ? [] : [sourceWorkspaceId, source.cardId, expectedSourceHead])] },
-      ...sourceRows, ...revision.statements,
+      ...sourceRows, ...revision.statements, ...receipt,
       ...(guard ? [{ sql: 'INSERT INTO unity_publication_forks(card_id, publication_id, actor_id, policy_version) VALUES (?, ?, ?, ?)',
         params: [id, guard.publicationId, guard.actorId, guard.policyVersion] }] : []),
     ];

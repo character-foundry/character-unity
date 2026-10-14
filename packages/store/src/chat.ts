@@ -8,6 +8,7 @@ export const chatKinds: readonly ChatKind[] = ['sillytavern', 'lumiverse', 'mari
 export interface ChatCredentials { username?: string; password?: string; apiKey?: string }
 export interface ChatTarget {
   id: string; workspaceId: string; kind: ChatKind; name: string; baseUrl: string;
+  configurationVersion: number;
   createdAt: string; scannedAt: string | null; scanError: string | null;
 }
 export interface ChatTargetWithCredentials extends ChatTarget { credentials: ChatCredentials }
@@ -33,7 +34,7 @@ export interface ObservedPlacement {
 }
 
 interface TargetRow extends ChatTarget { credentials: string }
-const targetColumns = `id, workspace_id AS workspaceId, kind, name, base_url AS baseUrl, credentials_json AS credentials,
+const targetColumns = `id, workspace_id AS workspaceId, kind, name, base_url AS baseUrl, configuration_version AS configurationVersion, credentials_json AS credentials,
   created_at AS createdAt, scanned_at AS scannedAt, scan_error AS scanError`;
 function publicTarget({ credentials, ...target }: TargetRow): ChatTarget { void credentials; return target; }
 
@@ -67,13 +68,22 @@ export function createChatStore(driver: StoreDriver) {
   }
   return {
     target,
+    /** Only an actual authored fork can satisfy a private inbound receipt. An
+     * imported document merely claiming this metadata is never a receipt. */
+    async importedEdit(workspaceId: string, authorId: string, receiptHash: string, expectedHead: string) {
+      validate.hash(receiptHash);
+      const [row] = await driver.query<{ cardId: string; revisionId: string }>({ sql: `SELECT card_id AS cardId,revision_id AS revisionId
+        FROM unity_chat_import_receipts WHERE workspace_id = ? AND author_id = ? AND receipt_hash = ? AND source_revision_id = ?`,
+      params: [workspaceId, authorId, receiptHash, expectedHead] });
+      return row ?? null;
+    },
     async targets(workspaceId: string): Promise<ChatTarget[]> {
       const rows = await driver.query<TargetRow>({ sql: `SELECT ${targetColumns} FROM unity_chat_targets WHERE workspace_id = ? ORDER BY created_at, id`, params: [workspaceId] });
       return rows.map(publicTarget);
     },
     async addTarget(input: { workspaceId: string; kind: ChatKind; name: string; baseUrl: string; credentials: ChatCredentials }): Promise<ChatTarget> {
       const row = { id: crypto.randomUUID(), workspaceId: validate.text(input.workspaceId, 'workspaceId'), kind: kind(input.kind),
-        name: validate.text(input.name, 'name', 80), baseUrl: baseUrl(input.baseUrl), createdAt: new Date().toISOString() };
+        name: validate.text(input.name, 'name', 80), baseUrl: baseUrl(input.baseUrl), configurationVersion: 1, createdAt: new Date().toISOString() };
       try {
         await driver.batch([{ sql: `INSERT INTO unity_chat_targets(id, workspace_id, kind, name, base_url, credentials_json, created_at)
           VALUES (?, ?, ?, ?, ?, ?, ?)`, params: [row.id, row.workspaceId, row.kind, row.name, row.baseUrl, credentials(input.credentials), row.createdAt] }]);
@@ -87,7 +97,7 @@ export function createChatStore(driver: StoreDriver) {
     async updateTarget(workspaceId: string, id: string, input: { name?: string; baseUrl?: string; credentials?: ChatCredentials }): Promise<ChatTarget> {
       const current = await target(workspaceId, id);
       const merged = input.credentials ? { ...current.credentials, ...input.credentials } : current.credentials;
-      await driver.batch([{ sql: 'UPDATE unity_chat_targets SET name = ?, base_url = ?, credentials_json = ? WHERE id = ? AND workspace_id = ?',
+      await driver.batch([{ sql: 'UPDATE unity_chat_targets SET name = ?, base_url = ?, credentials_json = ?, configuration_version = configuration_version + 1 WHERE id = ? AND workspace_id = ?',
         params: [input.name === undefined ? current.name : validate.text(input.name, 'name', 80), input.baseUrl === undefined ? current.baseUrl : baseUrl(input.baseUrl), credentials(merged), id, workspaceId] }]);
       const { credentials: secrets, ...updated } = await target(workspaceId, id);
       void secrets;

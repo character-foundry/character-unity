@@ -6,7 +6,7 @@ import { openCopiedArchive } from './copied.js';
 import { createDemoArchive } from './fixture.js';
 import { openNativeArchive } from './native/store.js';
 import { createScheduler } from './native/scheduler.js';
-import { createNativeArchiveApp } from './native/app.js';
+import { createNativeArchiveApp, validateReadOrigins } from './native/app.js';
 import { sources } from './sources/index.js';
 import { openExistingArchive } from './existing/store.js';
 import { openExistingSearch, readExistingVectorMetadata } from './existing/search.js';
@@ -17,6 +17,8 @@ if (!Number.isInteger(port) || port < 0 || port > 65535) {
   throw new Error('PORT must be an integer between 0 and 65535');
 }
 const hostname = process.env.HOST ?? '127.0.0.1';
+// Reject malformed browser read grants before opening any Archive writer/path.
+const readOrigins = validateReadOrigins((process.env.UNITY_ARCHIVE_READ_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean));
 const mode = process.env.UNITY_ARCHIVE_MODE ?? 'off';
 if (!['off', 'fixture', 'copy', 'native', 'existing'].includes(mode)) throw new Error('UNITY_ARCHIVE_MODE must be off, fixture, copy, native or existing');
 if (['copy', 'native', 'existing'].includes(mode) && !['127.0.0.1', '::1', 'localhost'].includes(hostname)) throw new Error('Archive storage modes require a loopback listener');
@@ -79,8 +81,8 @@ const scheduler = native ? createScheduler(native, sources, {
   } } : {}),
 }) : undefined;
 const app = native && scheduler
-  ? createNativeArchiveApp(native, scheduler, sources, { ...(adminToken ? { adminToken } : {}), ...(libraryIndex ? { libraryIndex } : {}) })
-  : createArchiveApp(source, { readOrigins: (process.env.UNITY_ARCHIVE_READ_ORIGINS ?? '').split(',').map((value) => value.trim()).filter(Boolean) });
+  ? createNativeArchiveApp(native, scheduler, sources, { readOrigins, ...(adminToken ? { adminToken } : {}), ...(libraryIndex ? { libraryIndex } : {}) })
+  : createArchiveApp(source, { readOrigins });
 if (scheduler && !readOnly && process.env.UNITY_ARCHIVE_SCHEDULE !== 'off') scheduler.begin();
 const server = serve({ fetch: app.fetch, hostname, port }, (address) => {
   console.log(JSON.stringify({ event: 'listening', service: 'unity-archive', host: hostname, port: address.port }));

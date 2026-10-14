@@ -12,6 +12,10 @@
   "dependencies": {
     "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry",
     "@character-unity/cards": "workspace:*",
+    "@character-unity/api": "workspace:*",
+    "@character-unity/assets": "workspace:*",
+    "@character-unity/browser-storage": "workspace:*",
+    "@character-unity/content": "workspace:*",
     "@character-unity/tokenizer": "workspace:*",
     "@character-unity/store": "workspace:*",
     "clsx": "2.1.1",
@@ -23,6 +27,7 @@
     "@character-unity/architect": "workspace:*"
   },
   "devDependencies": {
+    "fake-indexeddb": "6.2.5",
     "@tailwindcss/postcss": "4.1.18",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",

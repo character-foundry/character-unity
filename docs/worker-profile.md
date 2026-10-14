@@ -1,12 +1,14 @@
-# Local Worker account profile
+# Native Worker profiles
 
-The Workers entrypoint now mounts the shared account, workspace, card, asset and
-publication API using D1 and R2. It runs the same domain composition as Node.
+The account Worker hosts the native `apps/web` UI and shared account, workspace,
+card, asset, statistics, content and publication modules using D1 and R2. It runs
+the same domain composition as Node. A separate browser-light Worker hosts the
+same native UI with IndexedDB and has no server database or account services.
 All bindings and session-scoped services are created within the request; there
 is no shared mutable account, driver, request or response state.
 
 This profile has been exercised in local workerd and through the actual Wrangler
-CLI with the built hub and two independent Chromium sessions. No Cloudflare
+CLI with the native UI and two independent Chromium sessions. No Cloudflare
 account, remote resource, production origin or deployment has been configured.
 The checked-in database ID is a local placeholder, not a provisioned database.
 
@@ -19,14 +21,13 @@ pnpm build
 mkdir -p runtime
 pnpm accounts migrate --worker-state "$PWD/runtime/worker-state"
 pnpm accounts create --name Alice --key-file "$PWD/runtime/worker-alice.json" --worker-state "$PWD/runtime/worker-state"
-pnpm dev:worker --persist-to "$PWD/runtime/worker-state" --assets ../hub/dist
+pnpm dev:worker --persist-to "$PWD/runtime/worker-state"
 ```
 
 Open `http://127.0.0.1:9312`. Use the `key` value from the private account file to
-sign in. The hub and API share this origin; the separate Vite hub development
-server is not needed. Node and Worker use port 9312 by default, so run one at a
-time. `--assets ../hub/dist` is relative to the API package, where Wrangler runs.
-Without that option, the Worker serves only the API.
+sign in. The native UI and API share this origin. The checked-in configuration
+serves `apps/web/dist`; no extra asset override or scaffold host is needed. Node
+and Worker use port 9312 by default, so run one at a time.
 
 `--worker-state` and Wrangler's `--persist-to` must identify the same absolute
 local directory. The operator opens its `v3` persistence root using Wrangler's
@@ -58,7 +59,9 @@ browser's address. Forwarded headers do not select it.
 origin and current checksummed schema. An absent, older or altered schema fails
 closed with 503; an HTTP request never creates tables, migrates or repairs data.
 `/api/ready` is successful only after operator initialization. Unknown API paths
-remain JSON rather than returning the static application's HTML.
+remain JSON rather than returning the static application's HTML. Both `/api` and
+`/api/*` are Worker-first routes, even for browser navigation or a colliding static
+filename. Other native UI deep links use the SPA shell.
 
 D1 queries use the primary database directly. Read replicas and client-supplied
 session bookmarks are not enabled. This keeps authorization and publication
@@ -83,30 +86,25 @@ abuse-control claim. A deployment must choose an appropriate unique namespace.
 See the [rate-limit binding contract](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)
 and [D1 primary/session behavior](https://developers.cloudflare.com/d1/worker-api/d1-database/).
 
-## Archive reads and imports
+## Read-only native Archive attachment
 
 `UNITY_ARCHIVE_ORIGIN` is an optional, operator-selected read-service origin.
-Its checked-in value is empty, which leaves Archive routes unavailable. To use
-the local fixture service, start it in a separate terminal:
+Its checked-in value is empty, which leaves Archive routes unavailable. Start an
+explicitly configured native/existing Archive read service separately, then start
+the already initialized local Worker with its read origin:
 
 ```sh
-UNITY_ARCHIVE_MODE=fixture pnpm dev:archive
-```
-
-Then start the already initialized local Worker with that source:
-
-```sh
-pnpm dev:worker --persist-to "$PWD/runtime/worker-state" --assets ../hub/dist \
+pnpm dev:worker --persist-to "$PWD/runtime/worker-state" \
   --var UNITY_ARCHIVE_ORIGIN:http://127.0.0.1:9313
 ```
 
-For indexed search, run Archive in its explicitly prepared
-[copy profile](archive-copied-source.md) instead. The built hub's **Browse Archive**
-uses the same metadata, lexical, filter-only, numeric/date, semantic and hybrid
-contracts as the Node hub. Modes depend on source capabilities. Embeddings and
-Lance queries execute in the separate Archive service. Neither native modules
-nor database paths enter the Worker bundle, and the browser uses same-origin
-Worker routes; it needs no direct Archive CORS access.
+The native Archive page uses exact-version references, favorites and existing
+metadata/lexical/semantic/hybrid contracts. Available modes depend on the source.
+Embedding and Lance queries execute in the separate Archive service. Favoriting
+adds a lightweight library link, not a copy of the corpus or its files. Changed
+saves create an owned fork with inherited bytes still in Archive. No native
+modules or Archive database paths enter the Worker bundle, and browser requests
+use same-origin Worker routes without direct Archive CORS access.
 
 The configured URL must be an exact HTTPS origin without credentials, path,
 query, fragment or trailing slash. HTTP is allowed only when both the Worker
@@ -125,12 +123,17 @@ reject imports if authority changes during downloads. A configured source is
 available to authorized workspace owners on this hub; per-account source
 selection and source-service credentials are not implemented.
 
-The Worker limits each import selection to **8 MiB** of declared original and
-available-asset bytes, checked before any object download. The Node/browser
-default remains 64 MiB. Every byte still passes the shared digest/length checks
-before import, with original bytes retained in R2. This reduces admitted input
-size; it is not a production memory guarantee for large compressed containers,
-parsed documents or concurrent requests. An unavailable source or invalid
+The Worker grants no Archive administration, indexing or scraper writer capability
+to hub accounts. It sends no admin token. Local scraper/settings controls remain
+the operator's local installation's responsibility, not a public hub capability.
+
+Native Archive reads are limited to **8 MiB** per object and prepared version.
+The bound is passed into Foundry's uncompressed asset/container parsing as well,
+so a small compressed file cannot bypass it. Metadata envelopes are also bounded.
+Digest/length verification still applies before a read is accepted. Local readers
+retain their larger existing limit. The older portable copied-selection contract
+also retains its 8 MiB hosted budget. These limits reduce admitted input size;
+they are not production CPU/memory/concurrency guarantees. An unavailable source or invalid
 response is an explicit failure, never a switch to another source/search mode.
 
 Configuration uses request-scoped bindings and generated Env types, following
@@ -156,12 +159,35 @@ for new public identities on local D1. The optional secret binding
 `UNITY_REMOTE_CONNECTIONS_JSON` enables the shared account-scoped sender routes
 and hub controls. It contains operator-selected account/destination/key records;
 no private keys go in public vars or browser requests. See [connected hubs](remote-hubs.md).
-Remote peer provisioning remains separate.
+Remote peer provisioning remains separate. The checked-in variable contains only
+a versioned empty connection list. Remove that public variable before configuring
+the same name as a secret; never put actual private-key records in public vars or
+commit them to the repository.
+
+## Browser-light static profile
+
+Build the native browser entry and validate the separate Worker bundle locally:
+
+```sh
+pnpm build:browser
+pnpm build:worker:browser
+pnpm --filter @character-unity/api-host exec wrangler dev --config wrangler.browser.jsonc --local --ip 127.0.0.1 --port 9312
+```
+
+This profile serves `apps/web/dist-browser` without D1, R2, sessions, scraper
+administration or a server-side provider proxy. The native UI opens the existing
+`character-unity:architect` IndexedDB profile directly. Keeping the same origin
+keeps that browser library accessible; changing origins does not move browser
+data. No automatic export, import, reset or data migration occurs. Any network
+request to `/api` or `/api/*` receives a JSON `BROWSER_STORAGE_ONLY` error rather
+than HTML or a silent fallback to server storage. Real browser edits stay in
+IndexedDB and survive a static Worker restart.
 
 ## Evidence and remaining gates
 
-Seven account/Archive Vitest cases execute the actual bundled Worker in workerd
-with D1 and R2; a separate configuration case checks accepted origins:
+Account/Archive Vitest cases execute the actual bundled Worker in workerd
+with D1 and R2; separate configuration and static-routing cases check accepted
+origins, browser-light deep links and non-shadowable JSON API misses:
 
 - Empty/altered schemas and invalid origins fail without HTTP migration or repair.
 - Two real account sessions import exact originals, save an attachment and edit,
@@ -194,20 +220,21 @@ secret connection, outbound SDK requests, D1/R2 persistence and receipt recovery
 after process replacement. Its
 outbound traffic uses a harness bridge; deployed networking is not established.
 
-`pnpm verify:worker` separately starts the actual Wrangler CLI with a temporary
-state root and built hub assets. Two independent Chromium sessions complete
-import → edit → publication → fork → edit and recover saved data and sessions
-after restarting Wrangler. It also starts a separate Node copied-Archive service
-and exercises real Worker-to-Archive HTTP, filtered/ordered UI search, reviewed
-imports, preservation of unsaved drafts, exact originals in R2 after restart and
-unchanged copied SQLite/Lance/queue bytes. These browser requests go through the
-Worker, with no direct browser-to-Archive request or test fetch bridge. It checks
-unchanged original bytes and no browser errors. It stops only its own processes and removes its own temporary account
-files/state. Its non-secret report is `runtime/worker-rehearsal.json`.
+`pnpm verify:worker` separately starts the actual Wrangler CLI with temporary
+state and native assets. Two independent Chromium sessions complete import → edit
+→ publication → fork → edit and recover saved data/sessions after a restart. A
+disposable existing-schema SQLite/Lance Archive supplies actual native HTTP search
+and exact-version favorites. The probe checks zero copied asset rows/bytes on
+reference creation, protected originals, denied hosted administration, actor
+headers, token-worker assets and collection stats. A second static Worker run
+checks browser-light import/edit/restart with no hosted API calls. The probe
+captures desktop/mobile viewport screenshots and verifies unchanged Archive files,
+rows and queues. It stops only its own processes and removes its own scratch
+state. Reports are `runtime/worker-rehearsal.json` and `runtime/worker-ui/`.
 Both sets of checks run in `pnpm check`; the Worker production bundle is also
 built with a local dry run. No remote calls or credentials are needed.
 
 Remote resource provisioning, operator tooling for remote D1, ingress/TLS setup,
 remote D1/R2 validation, platform CPU/memory limits under large imports and
-concurrency, backups, rate-limit tuning and blob garbage collection remain
+concurrency, remote backups, rate-limit tuning and remote blob garbage collection remain
 unproven. Local workerd results do not establish production deployment readiness.

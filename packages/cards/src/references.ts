@@ -8,6 +8,7 @@ import { NativeArchiveUnavailable } from './native-reader.js';
 import type { NativeArchiveCard, NativeArchiveReader } from './native-reader.js';
 import { CardError } from './types.js';
 import type { Actor, AssetBinding, AssetUpload, ExportFormat } from './types.js';
+import { chatImportCommit, type ChatImportAuthorization } from './private-chat-receipt.js';
 
 const text = (value: unknown) => typeof value === 'string' ? value : '';
 function summary(detail: NativeArchiveCard): ArchiveReferenceInput['summary'] {
@@ -89,7 +90,7 @@ export function createReferenceService(store: UnityStore, assets: AssetService, 
     async open(reference: ArchiveReference, signal?: AbortSignal) { return (await resolve(reference, signal)).opened; },
     async original(reference: ArchiveReference, signal?: AbortSignal) { return reader().resource(reference.pin, 'original', signal); },
     async fork(actor: Actor, reference: ArchiveReference, expectedHead: string, document: CardDocument,
-      bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal) {
+      bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal, chatImport?: ChatImportAuthorization) {
       if (reference.pin.versionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The referenced version changed; reopen before saving');
       const loaded = await resolve(reference, signal), { card, revision: current } = loaded.opened;
       const revision = await saveAssetRevision(loaded.virtualStore, assets, actor, reference.workspaceId, reference.id,
@@ -106,9 +107,10 @@ export function createReferenceService(store: UnityStore, assets: AssetService, 
               hash: loaded.prepared.acceptedHash, byteLength: loaded.prepared.bytes.length, mediaType: loaded.prepared.mediaType });
             signal?.throwIfAborted();
             return (await store.createArchiveFork({ ...input, workspaceId: reference.workspaceId, pin: reference.pin, referenceId: reference.id,
-              originalHash: card.originalHash!, assets: inherited, source: { assetId: original.id, provenance: loaded.opened.source.provenance } })).revision;
+              originalHash: card.originalHash!, assets: inherited, source: { assetId: original.id, provenance: loaded.opened.source.provenance },
+              ...(chatImport ? { chatImport: chatImportCommit(chatImport)! } : {}) })).revision;
           },
-        });
+        }, chatImport);
       return { cardId: revision.cardId, revisionId: revision.id, revision,
         ...(revision.cardId === reference.id ? { reference: reference.pin } : {}) };
     },

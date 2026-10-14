@@ -7,7 +7,7 @@ import type { CardDocument, RevisionInput, UnityStore } from '../../src/index.js
 import { createNodeDriver } from '../../src/node.js';
 import { createD1Driver } from '../../src/d1.js';
 import { documentByteLimit } from '../../src/validation.js';
-import { inspectSchema, migrate } from '../../src/migrations.js';
+import { inspectSchema, migrate, schemaVersion } from '../../src/migrations.js';
 import { librarySearchCases } from './library-search.cases.js';
 import { migrations } from '../../src/schema.js';
 import type { StoreDriver } from '../../src/driver.js';
@@ -125,7 +125,7 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
         const card = await legacy.createCard({ ...input, workspaceId: workspace.id, originalHash });
         expect(await inspectSchema(old.driver)).toBe(1);
         await migrate(old.driver);
-        expect(await inspectSchema(old.driver)).toBe(13);
+        expect(await inspectSchema(old.driver)).toBe(schemaVersion);
         expect(await legacy.getRevision(workspace.id, card.revision.id)).toEqual(card.revision);
         expect(await legacy.getCard(workspace.id, card.card.id)).toEqual(card.card);
         expect(await legacy.getSource(workspace.id, card.card.id)).toBeNull();
@@ -136,8 +136,8 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
 
     it('[S01] applies versioned migrations idempotently and rejects drift or future history', async () => {
       await migrate(fixture.driver);
-      expect(await inspectSchema(fixture.driver)).toBe(13);
-      expect(await store.readiness()).toEqual({ schemaVersion: 13 });
+      expect(await inspectSchema(fixture.driver)).toBe(schemaVersion);
+      expect(await store.readiness()).toEqual({ schemaVersion });
       await fixture.driver.batch([{ sql: "UPDATE unity_migrations SET checksum = 'changed' WHERE version = 1" }]);
       await expect(migrate(fixture.driver)).rejects.toMatchObject({ code: 'SCHEMA_MISMATCH' });
       await fixture.driver.batch([{ sql: 'UPDATE unity_migrations SET version = 99 WHERE version = 1' }]);
@@ -350,7 +350,7 @@ for (const [adapter, createFixture] of Object.entries(factories)) {
         expect(await other.driver.query({ sql: 'SELECT * FROM unity_migrations' })).toEqual([]);
         expect(await other.driver.query({ sql: "SELECT name FROM sqlite_master WHERE name = 'unity_cards'" })).toEqual([]);
         await Promise.all([migrate(other.driver), migrate(other.driver)]);
-        expect(await inspectSchema(other.driver)).toBe(13);
+        expect(await inspectSchema(other.driver)).toBe(schemaVersion);
       } finally { await other.close(); }
     });
   });

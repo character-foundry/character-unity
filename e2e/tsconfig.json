@@ -9,6 +9,7 @@
     "**/*.ts",
     "../playwright.config.ts",
     "../playwright.unity.config.ts",
-    "../playwright.account.config.ts"
+    "../playwright.account.config.ts",
+    "../playwright.browser.config.ts"
   ]
 }

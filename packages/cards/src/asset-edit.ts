@@ -8,6 +8,7 @@ import { revisionIdentityOptions } from './revision-assets.js';
 import { documentByteLimit } from '@character-unity/store/validation';
 import { CardError, declaredAssetLimit, importByteLimit, risuModulePath } from './types.js';
 import type { Actor, AssetBinding, AssetUpload } from './types.js';
+import { chatImportCommit, setChatImportReceipt, type ChatImportAuthorization } from './private-chat-receipt.js';
 
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -33,7 +34,7 @@ function archiveComparable(document: CardDocument): string {
  * in this card's expected revision, never arbitrary asset/storage identifiers. */
 export async function saveAssetRevision(store: UnityStore, assets: AssetService, actorInput: Actor, workspaceId: string, cardId: string,
   expectedHead: string, input: CardDocument, bindingsInput: readonly AssetBinding[], uploadsInput: readonly AssetUpload[], signal?: AbortSignal, operation: 'edit' | 'fork' = 'edit',
-  archiveSource?: { card: Card; revision: Revision; commit(input: RevisionInput): Promise<Revision> }) {
+  archiveSource?: { card: Card; revision: Revision; commit(input: RevisionInput): Promise<Revision> }, chatImport?: ChatImportAuthorization) {
   const actor = { ...actorInput };
   const document = JSON.parse(canonicalJson(input)) as CardDocument;
   if (new TextEncoder().encode(JSON.stringify(document)).byteLength > documentByteLimit) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
@@ -53,6 +54,7 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   const card = archiveSource?.card ?? await store.getCard(workspaceId, cardId);
   if (card.headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before saving');
   const current = archiveSource?.revision ?? await store.getRevision(workspaceId, expectedHead);
+  setChatImportReceipt(document, operation === 'edit' ? current.document : undefined, chatImport);
   if (current.cardId !== cardId) throw new StoreError('NOT_FOUND', 'Revision does not belong to this card');
   if (!card.originalHash) throw new CardError('INVALID_LINEAGE', 'Card has no accepted original root');
   const previousOptions = await revisionIdentityOptions(store, current);
@@ -135,7 +137,8 @@ export async function saveAssetRevision(store: UnityStore, assets: AssetService,
   // Domain batch checks the expected head and every ready asset atomically. Account
   // hosts additionally guard this batch against session revocation during uploads.
   if (operation === 'fork') return (await store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: expectedHead,
-    expectedSourceHead: expectedHead, authorId: actor.id, document: saved.card, identity: saved.lineage.content, assets: references })).revision;
+    expectedSourceHead: expectedHead, authorId: actor.id, document: saved.card, identity: saved.lineage.content, assets: references,
+    ...(chatImport ? { chatImport: chatImportCommit(chatImport)! } : {}) })).revision;
   return store.saveRevision({ workspaceId, cardId, expectedHead, authorId: actor.id,
     document: saved.card, identity: saved.lineage.content, assets: references });
 }

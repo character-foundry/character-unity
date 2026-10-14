@@ -23,10 +23,11 @@ export function LibraryIndexStatus({ archive, searchKey }: { archive: ArchiveSta
     } finally { if (request === generation.current && !controller.signal.aborted) setBusy(false); }
   }, [client]);
   useEffect(() => {
-    if (archive) void load();
+    if (archive && client.connection.profile !== 'browser') void load();
     return () => { generation.current++; pending.current?.abort(); };
-  }, [archive, searchKey, load]);
+  }, [archive, searchKey, load, client]);
   if (!archive) return null;
+  if (client.connection.profile === 'browser') return <p className="border-b border-nebula/20 px-3 py-2 text-[12px] text-starlight/60 sm:px-4">Browser-only cards and edits stay in this browser. They are not sent to the Archive search index.</p>;
   return <section aria-label="Saved-card search indexing" className="border-b border-nebula/20 px-3 py-2 text-[12px] text-starlight/60 sm:px-4">
     {status && <>
       <p>{status.enabled ? 'Saved-card search indexing' : 'Saved-card search indexing disabled'}:

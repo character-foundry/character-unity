@@ -4,6 +4,7 @@ import { useSession } from './session-provider';
 import { createLibraryClient } from './unity';
 import type { LibraryClient } from './unity';
 import type { SessionConnection } from './session';
+import { loadWorkspacePreference, saveWorkspacePreference } from './workspace-preference';
 
 export interface WorkspaceChoice { id: string; name: string }
 interface LibraryState {
@@ -18,7 +19,9 @@ function openLibrary(connection: SessionConnection) {
     pending = (async () => {
       const { workspaces } = await connection.request<{ workspaces: WorkspaceChoice[] }>('/api/workspaces');
       connection.signal.throwIfAborted();
-      let selected = workspaces.find((workspace) => workspace.name === 'Library') ?? workspaces[0];
+      const preferred = loadWorkspacePreference(connection, workspaces);
+      let selected = workspaces.find((workspace) => workspace.id === preferred)
+        ?? workspaces.find((workspace) => workspace.name === 'Library') ?? workspaces[0];
       if (!selected) {
         selected = await connection.request<WorkspaceChoice>('/api/workspaces', { method: 'POST',
           headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: 'Library' }) });
@@ -55,12 +58,16 @@ export function LibraryClientProvider({ children }: { children: ReactNode }) {
       : <p role="status">Opening your library…</p>}
   </div>;
   const selectWorkspace = (id: string) => {
+    connection.signal.throwIfAborted();
     if (!state.workspaces.some((workspace) => workspace.id === id)) throw new Error('Workspace does not belong to this connection');
+    saveWorkspacePreference(connection, id);
     setState({ ...state, selected: id });
   };
   const createWorkspace = async (name: string) => {
     const owner = connection.scopeKey;
     const workspace = await connection.request<WorkspaceChoice>('/api/workspaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name }) });
+    connection.signal.throwIfAborted();
+    saveWorkspacePreference(connection, workspace.id);
     setState((current) => current?.owner === owner ? { ...current, workspaces: [...current.workspaces, workspace], selected: workspace.id } : current);
   };
   return <Context.Provider value={{ client, workspaces: state.workspaces, selectWorkspace, createWorkspace }}>{children}</Context.Provider>;

@@ -12,8 +12,11 @@ import ArchivePage from '@/app/archive';
 import SettingsPage from '@/app/settings';
 import SharingPage from '@/features/sharing/page';
 import RemotesPage from '@/features/remotes/page';
+import StatisticsPage from '@/features/statistics/page';
+import ContentPage from '@/features/content/page';
 import { SessionProvider } from '@/lib/session-provider';
 import { LibraryClientProvider, useLibraryClient } from '@/lib/library-client';
+import { createWebSessionRuntime } from '@/lib/runtime';
 import './styles.css';
 
 /** The search page merged into the library; old links keep their query. */
@@ -50,12 +53,19 @@ function NativeRoutes() {
           </Route>
           <Route path="/search" element={<SearchRedirect />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/stats" element={<StatisticsPage />} />
+          <Route path="/content" element={<ContentPage />} />
           <Route path="/sharing" element={<SharingPage />} />
           <Route path="/remotes" element={<RemotesPage />} />
           <Route path="/chat-apps" element={<Navigate to="/settings#chat-apps" replace />} />
           <Route path="*" element={<NotFoundPage />} />
         </Routes>;
 }
-createRoot(root).render(<StrictMode><SettingsProvider><BrowserRouter><SessionProvider>
-  <LibraryClientProvider><NativeRoutes /></LibraryClientProvider>
-</SessionProvider></BrowserRouter></SettingsProvider></StrictMode>);
+void createWebSessionRuntime().then((runtime) => {
+  createRoot(root).render(<StrictMode><SettingsProvider><BrowserRouter><SessionProvider runtime={runtime}>
+    <LibraryClientProvider><NativeRoutes /></LibraryClientProvider>
+  </SessionProvider></BrowserRouter></SettingsProvider></StrictMode>);
+}).catch((error: unknown) => {
+  root.setAttribute('role', 'alert');
+  root.textContent = `Unity could not open: ${error instanceof Error ? error.message : 'Unknown startup failure'}. Reload to retry.`;
+});

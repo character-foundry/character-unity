@@ -47,7 +47,7 @@ describe('editor import state', () => {
     expect(saveRecovery).not.toHaveBeenCalled();
   });
 
-  it('activates only the opened native card after a successful import', async () => {
+  it('activates only the opened native card without eagerly loading its tokenizer', async () => {
     const document = { spec: 'chara_card_v3', spec_version: '3.0', opaque_root: { preserved: true }, data: { name: 'Imported', tags: [] } };
     vi.stubGlobal('fetch', vi.fn<typeof fetch>()
       .mockResolvedValueOnce(Response.json({ card: { id: 'native-card' } }, { status: 201 }))
@@ -58,7 +58,7 @@ describe('editor import state', () => {
 
     expect(cards.getState().currentCard?.data).toEqual(document);
     expect(cards.getState().isDirty).toBe(false);
-    expect(tokenCounts).toHaveBeenCalledWith(cards.getState().currentCard);
+    expect(tokenCounts).not.toHaveBeenCalled();
     expect(saveRecovery).not.toHaveBeenCalled();
   });
 

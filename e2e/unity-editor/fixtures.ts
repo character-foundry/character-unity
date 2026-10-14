@@ -60,11 +60,30 @@ export async function importCard(page: Page, name: string, format: 'json' | 'png
   const received = await response;
   expect(received.status(), await received.text()).toBe(201);
   const imported: Imported = await received.json();
-  await expect(page.getByRole('status')).toContainText('Imported 1 card');
+  await expect(page.getByRole('status').filter({ hasText: 'Imported 1 card' })).toBeVisible();
   await page.getByRole('button', { name: `Quick view ${name}`, exact: true }).click();
   await page.getByRole('link', { name: 'Edit', exact: true }).click();
   await expect(page.getByLabel('Name', { exact: true })).toHaveValue(name);
   return { ...imported, bytes, path: `/api/workspaces/${imported.card.workspaceId}/cards/${imported.card.id}` };
+}
+
+/** Scope corpus-sensitive browser cases without depending on prior suites'
+ * shared local-owner library or the first page of their search projections. */
+export async function freshWorkspace(page: Page) {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Account and workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'New workspace', exact: true }).click();
+  await page.getByLabel('Workspace name', { exact: true }).fill(`Isolated QA ${crypto.randomUUID()}`);
+  const created = page.waitForResponse((response) => response.url().endsWith('/api/workspaces') && response.request().method() === 'POST');
+  await page.getByRole('button', { name: 'Create workspace', exact: true }).click();
+  const response = await created;
+  expect(response.status()).toBe(201);
+  const workspace = await response.json() as { id: string; name: string };
+  const account = page.getByRole('button', { name: 'Account and workspace', exact: true });
+  await expect(account).toHaveAttribute('title', `Local owner · ${workspace.name}`);
+  if (await account.getAttribute('aria-expanded') !== 'true') await account.click();
+  await expect(page.getByLabel('Workspace', { exact: true })).toHaveValue(workspace.id);
+  await page.keyboard.press('Escape');
 }
 
 export async function save(page: Page) {

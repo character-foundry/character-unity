@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { verifySyncHttp, SyncHttpError, SyncReadError, SYNC_READ_VERSION, SYNC_READ_MAX_JSON_BYTES, SYNC_READ_PAGE_SIZE,
   SYNC_FORK_MAX_BYTES, decodeSyncCommand, parseSyncCommandReceipt, syncCommandCapabilities, SyncCommandError, SYNC_COMMAND_VERSION, SYNC_COMMAND_MAX_BYTES,
   syncReadCapabilities, parseSyncReadSelection, syncResourceId } from '@character-foundry/character-foundry/sync';
-import { publicationToSyncRead } from '@character-unity/cards/hub';
+import { publicationToSyncRead, UnsupportedSyncResourceError } from '@character-unity/cards/hub';
 import type { HubService } from '@character-unity/cards/hub';
 import { StoreError } from '@character-unity/store';
 import type { SyncStore } from '@character-unity/store/sync';
@@ -80,7 +80,10 @@ export function createSyncApi(options: { origin: string; hub: HubService; sync: 
         result = syncReadCapabilities();
       } else if (path === '/publications') {
         const selection = parseSyncReadSelection(params); const limit = selection.limit ?? SYNC_READ_PAGE_SIZE;
-        const values = await options.hub.list(actor, { limit, ...(selection.after ? { afterId: selection.after } : {}), ...(selection.parent ? { parentId: selection.parent } : {}) });
+        // Host eligibility is applied before SQL pagination. Never remove an
+        // opaque file from a publication to make its manifest appear portable.
+        const values = await options.hub.list(actor, { limit, excludeOpaqueResources: true,
+          ...(selection.after ? { afterId: selection.after } : {}), ...(selection.parent ? { parentId: selection.parent } : {}) });
         const publications = values.map(publicationToSyncRead);
         result = { version: SYNC_READ_VERSION, publications, nextAfter: publications.length === limit ? publications.at(-1)!.id : null };
       } else {
@@ -113,6 +116,10 @@ export function createSyncApi(options: { origin: string; hub: HubService; sync: 
       await options.sync.authorize(verified, scope);
       return json(result);
     } catch (error) {
+      if (error instanceof UnsupportedSyncResourceError) {
+        return Response.json({ version: commandRoute ? SYNC_COMMAND_VERSION : SYNC_READ_VERSION,
+          error: { code: 'UNAVAILABLE', message: error.message } }, { status: 422, headers });
+      }
       const code = error instanceof SyncHttpError ? (error.code === 'TOO_LARGE' ? 'TOO_LARGE' : 'UNAUTHENTICATED')
         : error instanceof SyncReadError || error instanceof SyncCommandError ? error.code
           : error instanceof CardError ? error.code === 'FORBIDDEN' || error.code === 'TOO_LARGE' ? error.code : 'INVALID_REQUEST'

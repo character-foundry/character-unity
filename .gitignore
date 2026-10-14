@@ -1,7 +1,9 @@
 node_modules/
 dist/
+dist-browser/
 .wrangler/
 worker-configuration.d.ts
+worker-browser-configuration.d.ts
 coverage/
 .env
 .env.*

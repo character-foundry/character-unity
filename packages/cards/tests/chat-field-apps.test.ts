@@ -43,7 +43,9 @@ function fakeLumiverse(options: { auth: boolean }) {
     if (path === '/import' && method === 'POST') {
       const data = await fileCard(); const id = `uuid-${next++}`;
       const stored: Stored = { id, name: data.name, ...Object.fromEntries(textFields.map((key) => [key, data[key]])),
-        extensions: { ...data.extensions as object, _lumiverse_source_filename: 'x' }, avatar_path: null, updated_at: 1 };
+        extensions: { ...data.extensions as object, character_book: data.character_book, character_version: data.character_version,
+          _lumiverse_source_filename: 'x', _lumiverse_library_scope: 'mine' }, avatar_path: null, image_id: null,
+        avatar_crop_image_id: null, folder: '', user_id: 'app-owner', library_scope: 'mine', created_at: 1, updated_at: 1 };
       characters.set(id, stored);
       return json({ character: stored }, 201);
     }
@@ -169,6 +171,22 @@ describe.each<{ kind: ChatKind; credentials: Record<string, string> }>([
     expect(await chat.placements(alice, workspaceId, [imported.card.id])).toEqual([]);
     expect(await chat.scan(alice, workspaceId, target.id)).toEqual({ found: 1 });
     expect((await chat.placements(alice, workspaceId, [imported.card.id]))[0]).toMatchObject({ remoteId: sent.remoteId, status: 'current' });
+  });
+
+  it('reviews and imports text edits while preserving source lorebooks and app-local metadata', async () => {
+    const imported = await cards.import(alice, workspaceId, new TextEncoder().encode(JSON.stringify(card('Aster', 'Source description.'))));
+    const target = await chat.addTarget(alice, workspaceId, { kind, baseUrl: `http://${kind}.test`, credentials });
+    const sent = await chat.send(alice, workspaceId, imported.card.id, target.id);
+    editInApp(sent.remoteId);
+    const review = await chat.reviewEdit(alice, workspaceId, target.id, sent.remoteId);
+    expect(review.changes.map((change) => change.field)).toEqual(['description']);
+    const result = await chat.acceptEdit(alice, workspaceId, target.id, review);
+    const fork = await cards.open(alice, workspaceId, result.cardId);
+    expect(fork.revision.document.data).toMatchObject({ description: kind === 'lumiverse' ? 'Rewritten inside Lumiverse.' : 'Rewritten inside Marinara.',
+      character_book: { entries: [{ keys: ['map'], content: 'Maps.' }] } });
+    expect(JSON.stringify(fork.revision.document)).not.toContain(kind === 'lumiverse' ? '_lumiverse_source_filename' : 'importMetadata');
+    expect(appExtensions(sent.remoteId)).toHaveProperty(kind === 'lumiverse' ? '_lumiverse_source_filename' : 'importMetadata');
+    expect(await chat.acceptEdit(alice, workspaceId, target.id, review)).toMatchObject({ cardId: result.cardId, duplicate: true });
   });
 
   it('sends and checks Archive references through the field-app fingerprint path without creating owned revisions', async () => {

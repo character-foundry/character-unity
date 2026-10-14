@@ -2,15 +2,12 @@ import type { StoreDriver } from './driver.js';
 import type { Asset } from './types.js';
 import { StoreError } from './types.js';
 import { limit, text } from './validation.js';
+import { assetInUse } from './asset-maintenance-schema.js';
 
 export interface AssetCandidate extends Asset { createdAt: string }
 export interface RetiredAsset extends AssetCandidate { retiredAt: string }
 const columns = `a.id, a.workspace_id AS workspaceId, a.content_hash AS hash, a.byte_length AS byteLength,
   a.media_type AS mediaType, a.storage_key AS storageKey, a.state, l.created_at AS createdAt`;
-const unused = `NOT EXISTS (SELECT 1 FROM unity_revision_assets WHERE asset_id = a.id)
-  AND NOT EXISTS (SELECT 1 FROM unity_card_sources WHERE asset_id = a.id)
-  AND NOT EXISTS (SELECT 1 FROM unity_sync_outbox WHERE asset_id = a.id)
-  AND NOT EXISTS (SELECT 1 FROM unity_archive_assets WHERE asset_id = a.id)`;
 function date(value: string) {
   if (!/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value) {
     throw new StoreError('INVALID_INPUT', 'Use a canonical UTC timestamp, for example 2026-10-01T00:00:00.000Z');
@@ -25,12 +22,22 @@ export function createAssetMaintenanceStore(driver: StoreDriver, options: { now?
     return { before, now };
   }
   return {
+    /** Every SQL-owned key, including staged, retired and external locators, is
+     * excluded from orphan deletion. Those keys use the retirement ledger. */
+    async trackedStorageKeys(keys: readonly string[]) {
+      const selected = [...keys];
+      if (selected.length > 100 || new Set(selected).size !== selected.length) throw new StoreError('INVALID_INPUT', 'Check at most 100 unique storage keys');
+      if (!selected.length) return [];
+      selected.forEach((key) => text(key, 'storageKey', 160));
+      const rows = await driver.query<{ key: string }>({ sql: `SELECT storage_key AS key FROM unity_assets WHERE storage_key IN (${selected.map(() => '?').join(',')})`, params: selected });
+      return rows.map((row) => row.key);
+    },
     async preview(before: string, page: { afterId?: string; limit?: number } = {}) {
       const cut = cutoff(before);
       return driver.query<AssetCandidate>({ sql: `SELECT ${columns} FROM unity_assets a JOIN unity_asset_lifetimes l ON l.asset_id = a.id
-        WHERE l.created_at <= ? AND a.id > ? AND ${unused}
+        WHERE l.created_at <= ? AND a.id > ? AND NOT (${assetInUse('a.id', '?')})
         AND NOT EXISTS (SELECT 1 FROM unity_asset_retirements WHERE asset_id = a.id) ORDER BY a.id LIMIT ?`,
-      params: [cut.before, page.afterId === undefined ? '' : text(page.afterId, 'afterId'), limit(page.limit)] });
+      params: [cut.before, page.afterId === undefined ? '' : text(page.afterId, 'afterId'), cut.before, cut.before, limit(page.limit)] });
     },
     async retire(ids: readonly string[], before: string) {
       const cut = cutoff(before), selected = [...ids];

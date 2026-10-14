@@ -1,5 +1,5 @@
 export interface ClientProfile {
-  profile: 'local' | 'hub';
+  profile: 'local' | 'hub' | 'browser';
   capabilities: { browserLLM: boolean };
 }
 export interface SessionInfo {
@@ -31,13 +31,13 @@ async function responseError(response: Response): Promise<SessionError> {
   return new SessionError(response.status, typeof value?.error?.code === 'string' ? value.error.code : 'UNAVAILABLE',
     typeof value?.error?.message === 'string' ? value.error.message : `Request failed (${response.status})`);
 }
-function sessionInfo(input: unknown, local = false): SessionInfo {
+function sessionInfo(input: unknown, local: false | 'local' | 'browser' = false): SessionInfo {
   const value = input as Partial<SessionInfo> | null;
   if (!value?.actor || typeof value.actor.id !== 'string' || !value.actor.id || typeof value.actor.uri !== 'string'
     || (!local && (typeof value.name !== 'string' || typeof value.expiresAt !== 'number'))) {
     throw new SessionError(503, 'UNAVAILABLE', 'The host returned an invalid session');
   }
-  return { actor: { id: value.actor.id, uri: value.actor.uri }, name: local ? 'Local owner' : value.name!, expiresAt: local ? null : value.expiresAt! };
+  return { actor: { id: value.actor.id, uri: value.actor.uri }, name: local === 'browser' ? 'Browser owner' : local ? 'Local owner' : value.name!, expiresAt: local ? null : value.expiresAt! };
 }
 
 /** One explicit host profile and immutable actor per connection. No request ever
@@ -67,7 +67,7 @@ export function createSessionRuntime(options: { fetch?: typeof fetch } = {}) {
     signal?.throwIfAborted();
     if (discovered) return discovered;
     const value = await json<unknown>('/api/client', signal ? { signal } : {}) as Partial<ClientProfile> | null;
-    if (!value || !['local', 'hub'].includes(value.profile ?? '') || typeof value.capabilities?.browserLLM !== 'boolean'
+    if (!value || !['local', 'hub', 'browser'].includes(value.profile ?? '') || typeof value.capabilities?.browserLLM !== 'boolean'
       || (value.profile === 'hub' && value.capabilities.browserLLM)) throw new SessionError(503, 'UNAVAILABLE', 'The host returned an invalid client profile');
     discovered = Object.freeze({ profile: value.profile!, capabilities: Object.freeze({ browserLLM: value.capabilities.browserLLM }) });
     return discovered;
@@ -89,8 +89,8 @@ export function createSessionRuntime(options: { fetch?: typeof fetch } = {}) {
       lifetime.signal.throwIfAborted();
       const init = { signal: AbortSignal.any([lifetime.signal, ...(signal ? [signal] : [])]) };
       try {
-        const current = host.profile === 'local'
-          ? sessionInfo(await json('/api/local-session', { ...init, method: 'POST', headers: { 'x-unity-session': 'local' } }), true)
+        const current = host.profile !== 'hub'
+          ? sessionInfo(await json('/api/local-session', { ...init, method: 'POST', headers: { 'x-unity-session': 'local' } }), host.profile)
           : sessionInfo(await json('/api/session', init));
         if (current.actor.id !== info.actor.id || current.actor.uri !== info.actor.uri) throw new SessionError(409, 'ACCOUNT_CHANGED', 'Sign in with the same account to recover this work');
         setState('active', null);
@@ -106,7 +106,7 @@ export function createSessionRuntime(options: { fetch?: typeof fetch } = {}) {
       const signal = AbortSignal.any([lifetime.signal, ...(init.signal ? [init.signal] : [])]);
       const response = await raw(path, { ...init, headers, signal });
       if (response.status === 401) {
-        if (host.profile === 'local' && !retried) { await response.body?.cancel(); await reconnect(signal); return send(path, { ...init, signal }, true); }
+        if (host.profile !== 'hub' && !retried) { await response.body?.cancel(); await reconnect(signal); return send(path, { ...init, signal }, true); }
         const error = await responseError(response.clone());
         await response.body?.cancel();
         setState('locked', error.message);
@@ -140,15 +140,15 @@ export function createSessionRuntime(options: { fetch?: typeof fetch } = {}) {
     profile,
     async restore(signal?: AbortSignal) {
       const host = await profile(signal);
-      const info = host.profile === 'local'
-        ? sessionInfo(await json('/api/local-session', { method: 'POST', headers: { 'x-unity-session': 'local' }, ...(signal ? { signal } : {}) }), true)
+      const info = host.profile !== 'hub'
+        ? sessionInfo(await json('/api/local-session', { method: 'POST', headers: { 'x-unity-session': 'local' }, ...(signal ? { signal } : {}) }), host.profile)
         : sessionInfo(await json('/api/session', signal ? { signal } : {}));
       return connect(host, info);
     },
     async connectLocal(signal?: AbortSignal) {
       const host = await profile(signal);
-      if (host.profile !== 'local') throw new SessionError(403, 'FORBIDDEN', 'This host requires an account sign-in');
-      return connect(host, sessionInfo(await json('/api/local-session', { method: 'POST', headers: { 'x-unity-session': 'local' }, ...(signal ? { signal } : {}) }), true));
+      if (host.profile === 'hub') throw new SessionError(403, 'FORBIDDEN', 'This host requires an account sign-in');
+      return connect(host, sessionInfo(await json('/api/local-session', { method: 'POST', headers: { 'x-unity-session': 'local' }, ...(signal ? { signal } : {}) }), host.profile));
     },
     async login(key: string, input: { expected?: SessionConnection; signal?: AbortSignal } = {}) {
       const host = await profile(input.signal);

@@ -7,8 +7,7 @@ import { libraryChanged, readSearch, useDebouncedText, writeSearch } from '@/lib
 import { cn } from '@/lib/utils/cn';
 
 const libraryPaths = new Set(['/', '/explore', '/archive']);
-// Stats, presets and lorebooks join this list as they are ported.
-const nav = [{ name: 'Library', href: '/' }, { name: 'Archive', href: '/archive' }, { name: 'Sharing', href: '/sharing' }, { name: 'Remotes', href: '/remotes' }];
+const pages = [{ name: 'Library', href: '/' }, { name: 'Archive', href: '/archive' }, { name: 'Content', href: '/content' }, { name: 'Stats', href: '/stats' }, { name: 'Sharing', href: '/sharing' }, { name: 'Remotes', href: '/remotes' }];
 
 const action = 'flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-starlight/60 transition-colors hover:bg-cosmic-teal hover:text-starlight disabled:opacity-50';
 // The global input rule is unlayered and outranks utilities; the field draws its own frame.
@@ -18,6 +17,7 @@ const bare = { border: 'none', background: 'transparent', boxShadow: 'none', out
 export function Header() {
   const { client, workspaces, selectWorkspace, createWorkspace } = useLibraryState();
   const account = useSession();
+  const nav = client.connection.profile === 'browser' ? pages.filter((page) => !['/sharing', '/remotes'].includes(page.href)) : pages;
   const { settings, updateSettings } = useSettings();
   const location = useLocation();
   const navigate = useNavigate();
@@ -105,7 +105,7 @@ export function Header() {
         <span className="hidden text-sm font-semibold text-starlight lg:inline">Character Unity</span>
       </Link>
 
-      <div ref={mobileNav} className="relative shrink-0 md:hidden">
+      <div ref={mobileNav} className="relative shrink-0 lg:hidden">
         <button type="button" aria-label="Open navigation" aria-expanded={menuOpen} aria-controls="mobile-navigation"
           onClick={() => setMenuOpen(!menuOpen)} className="grid h-8 w-7 place-items-center rounded-md text-starlight/70 hover:bg-cosmic-teal">
           <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
@@ -119,7 +119,7 @@ export function Header() {
         )}
       </div>
 
-      <nav aria-label="Primary" className="ml-2 hidden items-center gap-0.5 md:flex">
+      <nav aria-label="Primary" className="ml-2 hidden items-center gap-0.5 lg:flex">
         {nav.map((item) => {
           const active = item.href === '/' ? location.pathname === '/' || location.pathname === '/explore' : location.pathname.startsWith(item.href);
           return (
@@ -174,7 +174,7 @@ export function Header() {
           <Link to="/settings" onClick={() => setPopover(null)} className="mt-4 block border-t border-line pt-3 text-sm">All settings</Link>
         </section>}
         {popover === 'account' && <section id="account-workspace" aria-label="Account and workspace" className="absolute right-0 top-10 w-72 max-w-[calc(100vw-1.5rem)] space-y-3 rounded-xl border border-line bg-surface p-4 shadow-xl">
-          <div><p className="font-medium text-ink">{client.connection.name}</p><p className="text-xs text-muted">{client.connection.profile === 'hub' ? 'Hub account' : 'Local installation'}</p></div>
+          <div><p className="font-medium text-ink">{client.connection.name}</p><p className="text-xs text-muted">{client.connection.profile === 'hub' ? 'Hub account' : client.connection.profile === 'browser' ? 'Stored in this browser' : 'Local installation'}</p></div>
           <label className="block text-xs text-muted">Workspace<select aria-label="Workspace" value={client.workspaceId} disabled={editorOpen || busy || workspaceBusy} title={editorOpen ? 'Close the editor before switching workspace' : undefined}
             className="mt-1 w-full rounded-md p-2 text-sm" onChange={(event) => { selectWorkspace(event.target.value); navigate('/'); }}>{workspaces.map((workspace) => <option key={workspace.id} value={workspace.id}>{workspace.name}</option>)}</select></label>
           {editorOpen && <p className="text-xs text-muted">Close the editor before switching workspace. Your open draft stays with its original workspace.</p>}

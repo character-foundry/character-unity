@@ -12,7 +12,8 @@ import { createAccountStore } from '../../src/accounts.js';
 import { createStore } from '../../src/index.js';
 import { createAssetMaintenanceStore } from '../../src/asset-maintenance.js';
 import { createSyncOutboxStore } from '../../src/sync-outbox.js';
-import { migrate, inspectSchema } from '../../src/migrations.js';
+import { createHubStore } from '../../src/hub.js';
+import { migrate, inspectSchema, schemaVersion } from '../../src/migrations.js';
 import { migrations } from '../../src/schema.js';
 import type { StoreDriver } from '../../src/driver.js';
 import type { Asset } from '../../src/types.js';
@@ -128,6 +129,95 @@ for (const adapter of ['sqlite', 'd1']) describe(`asset-maintenance contract / $
     await expect(driver.batch([{ sql: 'DELETE FROM unity_assets WHERE id = ?', params: [unused.id] }])).rejects.toThrow();
   });
 
+  it('[M07] reclaims old deleted cards while preserving immutable revision and source provenance', async () => {
+    const store = createStore(driver), historical = await asset(), source = await asset(), current = await asset();
+    const card = await store.createCard({ ...input(), assets: [{ path: 'portrait', assetId: historical.id }],
+      source: { assetId: source.id, provenance: { kind: 'fixture' } } });
+    const head = await store.saveRevision({ ...input(), cardId: card.card.id, expectedHead: card.revision.id,
+      assets: [{ path: 'portrait', assetId: current.id }] });
+    await store.deleteCard(workspaceId, card.card.id);
+    expect((await maintenance().preview(cutoff)).map((value) => value.id).sort())
+      .toEqual([historical.id, source.id, current.id].sort());
+    await maintenance().retire([historical.id, source.id, current.id], cutoff);
+    expect(await store.getRevision(workspaceId, card.revision.id)).toEqual(card.revision);
+    expect(await store.getRevision(workspaceId, head.id)).toEqual(head);
+    await expect(store.getAsset(workspaceId, historical.id)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('[M08] retains source originals and all history through deleted intermediates to a live descendant fork', async () => {
+    const store = createStore(driver), portrait = await asset(), source = await asset();
+    const root = await store.createCard({ ...input(), assets: [{ path: 'portrait', assetId: portrait.id }],
+      source: { assetId: source.id, provenance: { kind: 'fixture' } } });
+    const child = await store.forkCard({ ...input(), sourceWorkspaceId: workspaceId, sourceRevisionId: root.revision.id });
+    const descendant = await store.forkCard({ ...input(), sourceWorkspaceId: workspaceId, sourceRevisionId: child.revision.id });
+    await store.deleteCard(workspaceId, root.card.id); await store.deleteCard(workspaceId, child.card.id);
+    expect(await maintenance().preview(cutoff)).toEqual([]);
+    await expect(maintenance().retire([portrait.id, source.id], cutoff)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    await store.deleteCard(workspaceId, descendant.card.id);
+    expect((await maintenance().preview(cutoff)).map((value) => value.id).sort()).toEqual([portrait.id, source.id].sort());
+  });
+
+  it('[M13] retains deleted private publications and unacknowledged or failed durable sync jobs', async () => {
+    const store = createStore(driver), portrait = await asset(), source = await asset(), originalHash = 'd'.repeat(64);
+    const published = await store.createCard({ ...input(), originalHash, assets: [{ path: 'portrait', assetId: portrait.id }],
+      source: { assetId: source.id, provenance: { kind: 'fixture' } } });
+    const [publication] = await createHubStore(driver).publish(accountId, [{ workspaceId, revisionId: published.revision.id,
+      document: published.revision.document, identity: published.revision.identity, originalHash,
+      visibility: 'private', allowOriginal: false, allowFork: false }]);
+    await store.deleteCard(workspaceId, published.card.id);
+    for (const attempted of [false, true]) {
+      const owned = await asset(), frame = await asset();
+      const card = await store.createCard({ ...input(), assets: [{ path: 'portrait', assetId: owned.id }] });
+      const command = { ...await job(frame), cardId: card.card.id, revisionId: card.revision.id }, outbox = createSyncOutboxStore(driver);
+      await outbox.enqueue(command);
+      if (attempted) await outbox.beginAttempt(command, command.requestId);
+      await store.deleteCard(workspaceId, card.card.id);
+      await expect(maintenance().retire([owned.id, frame.id], cutoff)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    }
+    expect(await maintenance().preview(cutoff)).toEqual([]);
+    expect(await createHubStore(driver).get(accountId, publication!.id)).toMatchObject({ id: publication!.id });
+    await expect(maintenance().retire([portrait.id, source.id], cutoff)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+  });
+
+  it('[M09] grants deleted-card bytes the full age floor independently of asset age', async () => {
+    const store = createStore(driver), value = await asset(), card = await store.createCard({ ...input(), assets: [{ path: 'portrait', assetId: value.id }] });
+    await driver.batch([{ sql: 'INSERT INTO unity_card_deletions VALUES (?,?,?)', params: [card.card.id, workspaceId, '2100-01-02T00:00:00.000Z'] }]);
+    expect(await maintenance().preview(cutoff)).toEqual([]);
+    await expect(maintenance().retire([value.id], cutoff)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
+    const later = createAssetMaintenanceStore(driver, { now: () => new Date('2100-01-04T00:00:00.000Z') });
+    expect(await later.preview('2100-01-02T00:00:00.000Z')).toMatchObject([{ id: value.id }]);
+  });
+
+  it('[M10] cannot resurrect retired deleted ancestry through publications, forks, outbox jobs or undelete', async () => {
+    const store = createStore(driver), value = await asset(), frame = await asset(), originalHash = 'd'.repeat(64);
+    const card = await store.createCard({ ...input(), originalHash, assets: [{ path: 'portrait', assetId: value.id }] });
+    const command = { ...await job(frame), cardId: card.card.id, revisionId: card.revision.id };
+    await store.deleteCard(workspaceId, card.card.id); await maintenance().retire([value.id], cutoff);
+    await expect(createHubStore(driver).publish(accountId, [{ workspaceId, revisionId: card.revision.id, document: card.revision.document,
+      identity: card.revision.identity, originalHash, visibility: 'public', allowOriginal: true, allowFork: true }])).rejects.toThrow();
+    await expect(driver.batch([{ sql: 'INSERT INTO unity_cards(id,workspace_id,forked_from_revision_id,created_at) VALUES (?,?,?,?)',
+      params: [crypto.randomUUID(), workspaceId, card.revision.id, clock.now().toISOString()] }])).rejects.toThrow();
+    await expect(createSyncOutboxStore(driver).enqueue(command)).rejects.toThrow();
+    await expect(driver.batch([{ sql: 'INSERT INTO unity_archive_assets(asset_id,workspace_id,archive_id,archive_card_id,archive_version_id,path) VALUES (?,?,?,?,?,?)',
+      params: [value.id, workspaceId, 'archive', 'card', 'version', 'portrait.png'] }])).rejects.toThrow();
+    await expect(driver.batch([{ sql: 'DELETE FROM unity_card_deletions WHERE card_id = ?', params: [card.card.id] }])).rejects.toThrow();
+    await expect(driver.batch([{ sql: 'UPDATE unity_card_deletions SET deleted_at = ? WHERE card_id = ?', params: [clock.now().toISOString(), card.card.id] }])).rejects.toThrow();
+  });
+
+  it('[M11] serializes a new pinned publication against reclamation of its deleted card', async () => {
+    for (const retireFirst of [true, false]) {
+      const store = createStore(driver), value = await asset(), originalHash = 'e'.repeat(64);
+      const card = await store.createCard({ ...input(), originalHash, assets: [{ path: 'portrait', assetId: value.id }] });
+      await store.deleteCard(workspaceId, card.card.id);
+      const publish = () => createHubStore(driver).publish(accountId, [{ workspaceId, revisionId: card.revision.id,
+        document: card.revision.document, identity: card.revision.identity, originalHash, visibility: 'members', allowOriginal: true, allowFork: false }]);
+      const retire = () => maintenance().retire([value.id], cutoff);
+      const outcomes = await Promise.allSettled((retireFirst ? [retire, publish] : [publish, retire]).map((operation) => operation()));
+      expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1);
+      expect((await maintenance().retired()).some((row) => row.id === value.id)).toBe(retireFirst);
+    }
+  });
+
   it('[M06] upgrades populated v8 conservatively and rolls back failed migration DDL and history together', async () => {
     await close(); await rm(directory, { recursive: true, force: true }); directory = await mkdtemp(join(tmpdir(), 'unity-maintenance-v8-')); await open();
     await driver.batch([{ sql: 'CREATE TABLE unity_migrations(version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)' }]);
@@ -140,10 +230,37 @@ for (const adapter of ['sqlite', 'd1']) describe(`asset-maintenance contract / $
     const faulty: StoreDriver = { query: (query) => driver.query(query), batch: (statements) => driver.batch(statements.length > 1 ? [...statements, { sql: 'INSERT INTO nonexistent_table VALUES (1)' }] : statements) };
     await expect(migrate(faulty)).rejects.toThrow(); expect(await inspectSchema(driver)).toBe(8);
     expect(await driver.query({ sql: "SELECT name FROM sqlite_master WHERE name IN ('unity_asset_lifetimes', 'unity_asset_retirements')" })).toEqual([]);
-    const started = new Date().toISOString(); await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(13);
+    const started = new Date().toISOString(); await migrate(driver); await migrate(driver); expect(await inspectSchema(driver)).toBe(schemaVersion);
     expect(await driver.query({ sql: 'SELECT * FROM unity_migrations WHERE version <= 8 ORDER BY version' })).toEqual(history);
     expect(await createStore(driver).getAsset(workspaceId, staged.id)).toEqual(staged);
     expect((await maintenance().preview(cutoff))[0]!.createdAt >= started).toBe(true);
     expect(await createAssetMaintenanceStore(driver).preview(new Date(Date.now() - 172800000).toISOString())).toEqual([]);
+  });
+
+  it('[M12] upgrades populated v13 without rewriting history and rolls retention DDL back on failure', async () => {
+    await close(); await rm(directory, { recursive: true, force: true }); directory = await mkdtemp(join(tmpdir(), 'unity-maintenance-v13-')); await open();
+    await driver.batch([{ sql: 'CREATE TABLE unity_migrations(version INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, checksum TEXT NOT NULL, applied_at TEXT NOT NULL)' }]);
+    for (const migration of migrations.filter((item) => item.version <= 13)) await driver.batch([
+      ...migration.statements.map((sql) => ({ sql })), { sql: 'INSERT INTO unity_migrations VALUES (?, ?, ?, ?)', params: [migration.version, migration.name,
+        createHash('sha256').update(JSON.stringify(migration.statements)).digest('hex'), new Date().toISOString()] },
+    ]);
+    await provision();
+    const store = createStore(driver), retained = await asset(), released = await asset();
+    const parent = await store.createCard({ ...input(), assets: [{ path: 'portrait', assetId: retained.id }] });
+    const child = await store.forkCard({ ...input(), sourceWorkspaceId: workspaceId, sourceRevisionId: parent.revision.id });
+    const deleted = await store.createCard({ ...input(), assets: [{ path: 'portrait', assetId: released.id }] });
+    await store.deleteCard(workspaceId, parent.card.id); await store.deleteCard(workspaceId, deleted.card.id);
+    const history = await driver.query({ sql: 'SELECT * FROM unity_migrations ORDER BY version' });
+    const faulty: StoreDriver = { query: (query) => driver.query(query), batch: (statements) => driver.batch(statements.length > 1 ? [...statements, { sql: 'INSERT INTO nonexistent_table VALUES (1)' }] : statements) };
+    await expect(migrate(faulty)).rejects.toThrow(); expect(await inspectSchema(driver)).toBe(13);
+    await expect(driver.batch([{ sql: 'INSERT INTO unity_asset_retirements VALUES (?,?,?)', params: [released.id, cutoff, clock.now().toISOString()] }])).rejects.toThrow('UNITY_ASSET_IN_USE');
+    await migrate(driver);
+    expect(await driver.query({ sql: 'SELECT * FROM unity_migrations WHERE version <= 13 ORDER BY version' })).toEqual(history);
+    expect(await store.getRevision(workspaceId, parent.revision.id)).toEqual(parent.revision);
+    expect(await store.getRevision(workspaceId, child.revision.id)).toEqual(child.revision);
+    expect(await store.getRevision(workspaceId, deleted.revision.id)).toEqual(deleted.revision);
+    expect(await maintenance().preview(cutoff)).toMatchObject([{ id: released.id }]);
+    await maintenance().retire([released.id], cutoff);
+    await expect(maintenance().retire([retained.id], cutoff)).rejects.toMatchObject({ code: 'ACCESS_CHANGED' });
   });
 });

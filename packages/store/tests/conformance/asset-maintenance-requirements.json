@@ -4,5 +4,12 @@
   "M03": "Retired assets cannot be completed, read or newly referenced; failed references roll back",
   "M04": "SQL serializes retirement against attachment; stale previews never authorize deletion",
   "M05": "Exact selections retire atomically; immutable retirement survives lost responses and restart",
-  "M06": "Version 8 upgrades retain history and conservatively date old assets; failed migration rolls back"
+  "M06": "Version 8 upgrades retain history and conservatively date old assets; failed migration rolls back",
+  "M07": "Old unreachable tombstoned cards release their asset bytes without deleting immutable revision manifests or source provenance",
+  "M08": "Live fork descendants retain full ancestry bytes and original sources even through deleted intermediates",
+  "M09": "Deleted-card cleanup independently observes the full deletion age floor",
+  "M10": "Retired ancestry cannot be revived through later publications, forks, sync jobs or tombstone removal",
+  "M11": "SQL serializes later publication roots against deleted-card reclamation so exactly one can succeed",
+  "M12": "Populated v13 upgrades preserve prior migration history and immutable revisions, with retention DDL and history rolling back together on failure",
+  "M13": "Pinned private publications and durable sync jobs retain deleted ancestry bytes and source originals"
 }

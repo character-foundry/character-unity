@@ -19,6 +19,10 @@ describe('native editor Save API', () => {
   beforeEach(() => { api = new UnityApiClient({ workspaceId: 'asset-tests' }); editorAssets = api.assets; });
   afterEach(() => { api.dispose(); vi.unstubAllGlobals(); });
 
+  it('refuses unsupported tokenizer models instead of silently estimating their counts', async () => {
+    expect(await api.tokenize({ model: 'unknown-model', payload: { description: 'Hello world!' } })).toEqual({ error: 'Only o200k_base token counting is available in the native editor' });
+  });
+
   it('uses the injected account transport for editor JSON and binary resources without a global fetch fallback', async () => {
     const fetcher = vi.fn<typeof fetch>().mockImplementation(async (input) => String(input).includes('/asset?')
       ? new Response('protected image', { headers: { 'content-type': 'image/png' } }) : Response.json(opened('existing')));

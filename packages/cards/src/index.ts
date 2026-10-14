@@ -13,6 +13,7 @@ import { exportRevision } from './export.js';
 import { saveAssetRevision } from './asset-edit.js';
 import { createAssetDraft } from './draft.js';
 import { createReferenceService } from './references.js';
+import { setChatImportReceipt, type ChatImportAuthorization } from './private-chat-receipt.js';
 import type { NativeArchiveReader } from './native-reader.js';
 import { CardError, importByteLimit } from './types.js';
 import type { Actor, ImportAsset, ExportFormat, HistoryOptions, HistoryPage, AssetBinding, AssetUpload } from './types.js';
@@ -146,7 +147,7 @@ export function createCardService(store: UnityStore, assets: AssetService, optio
       const options = await revisionIdentityOptions(store, current.revision);
       const previous = readCardLineage(current.revision.document);
       if (previous && !await verifyCardLineage(current.revision.document, options)) throw new CardError('INVALID_LINEAGE', 'Stored lineage failed verification');
-      const forked = await createCardRevision(current.revision.document, { ...options, originalHash: current.card.originalHash,
+      const forked = await createCardRevision(setChatImportReceipt(JSON.parse(canonicalJson(current.revision.document)) as CardDocument), { ...options, originalHash: current.card.originalHash,
         parents: previous ? [previous] : [], operation: 'fork', author: actor.uri, createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
       // Same workspace: the fork references the parent's stored assets; no bytes are copied or changed.
       const created = await measured(await store.forkCard({ workspaceId, sourceWorkspaceId: workspaceId, sourceRevisionId: current.revision.id, authorId: actor.id,
@@ -250,15 +251,15 @@ export function createCardService(store: UnityStore, assets: AssetService, optio
     createDraft: (actor: Actor, workspaceId: string, document: CardDocument, bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal) =>
       createAssetDraft(store, assets, actor, workspaceId, document, bindings, uploads, signal).then(measured),
     async forkAssets(actor: Actor, workspaceId: string, cardId: string, expectedHead: string, document: CardDocument,
-      bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal) {
+      bindings: readonly AssetBinding[], uploads: readonly AssetUpload[], signal?: AbortSignal, chatImport?: ChatImportAuthorization) {
       await authorize(actor, workspaceId);
       const reference = await references.get(workspaceId, cardId);
       if (reference) {
-        const result = await references.fork(actor, reference, expectedHead, document, bindings, uploads, signal);
+        const result = await references.fork(actor, reference, expectedHead, document, bindings, uploads, signal, chatImport);
         if (result.cardId !== reference.id) await measureRevision(store, workspaceId, result.revisionId).catch(() => undefined);
         return result;
       }
-      const revision = await saveAssetRevision(store, assets, actor, workspaceId, cardId, expectedHead, document, bindings, uploads, signal, 'fork');
+      const revision = await saveAssetRevision(store, assets, actor, workspaceId, cardId, expectedHead, document, bindings, uploads, signal, 'fork', undefined, chatImport);
       await measureRevision(store, workspaceId, revision.id).catch(() => undefined);
       return { cardId: revision.cardId, revisionId: revision.id, revision };
     },
@@ -276,7 +277,7 @@ export function createCardService(store: UnityStore, assets: AssetService, optio
       const target = readCardLineage(historical.document);
       if ((previous && !await verifyCardLineage(current.revision.document, currentOptions))
         || (target && !await verifyCardLineage(historical.document, options))) throw new CardError('INVALID_LINEAGE', 'Stored lineage failed verification');
-      const saved = await createCardRevision(withLineage(historical.document, current.revision.document), { ...options,
+      const saved = await createCardRevision(setChatImportReceipt(withLineage(historical.document, current.revision.document), current.revision.document), { ...options,
         originalHash: current.card.originalHash, parents: previous ? [previous] : [], operation: 'edit', author: actor.uri,
         createdAt: new Date().toISOString(), nonce: crypto.randomUUID() });
       const revision = await store.saveRevision({ workspaceId, cardId, expectedHead, authorId: actor.id,
@@ -366,6 +367,7 @@ export function createCardService(store: UnityStore, assets: AssetService, optio
       if (new TextEncoder().encode(JSON.stringify(document)).length > documentByteLimit) throw new CardError('TOO_LARGE', 'Draft exceeds the save limit');
       const current = await open(actor, workspaceId, cardId);
       if (current.card.headRevisionId !== expectedHead) throw new StoreError('HEAD_CONFLICT', 'The card has changed; reload before saving');
+      setChatImportReceipt(document, 'reference' in current ? undefined : current.revision.document);
       if ('reference' in current) {
         const reference = (await references.get(workspaceId, cardId))!;
         return (await references.fork(actor, reference, expectedHead, document,

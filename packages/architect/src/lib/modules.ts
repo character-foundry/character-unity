@@ -6,10 +6,12 @@ import { registerCoreTabs } from '../features/editor/tabs';
 import { registerCoreSettingsPanels } from '../features/settings/index';
 import { MODULE_METADATA as focused } from '../modules/focused/metadata';
 import { MODULE_METADATA as wizard } from '../modules/wwwyzzerdd/metadata';
+import { MODULE_METADATA as localTools } from '../modules/local-tools/metadata';
 
 const modules = [
   { metadata: focused, load: () => import('../modules/focused/index').then((module) => module.registerFocusedModule) },
   { metadata: wizard, load: () => import('../modules/wwwyzzerdd/index').then((module) => module.registerWwwyzzerddModule) },
+  { metadata: localTools, load: () => import('../modules/local-tools/index').then((module) => module.registerLocalToolsModule) },
 ];
 const loaded = new Set<string>();
 const loading = new Map<string, Promise<void>>();

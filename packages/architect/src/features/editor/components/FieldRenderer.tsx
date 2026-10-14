@@ -10,12 +10,14 @@ import type { FocusField } from '../../../lib/types';
 import { AssistIcon, TemplateIcon } from '../../../components/ui/FieldIcons';
 import { TagInput } from './TagInput';
 import { ExpandEditorButton } from './ExpandEditorButton';
+import { supportsFieldValue } from './field-value';
 
 // ============================================================================
 // PROPS INTERFACE
 // ============================================================================
 
 export interface FieldRendererProps {
+  editable?: boolean;
   /** Field definition from config */
   definition: FieldDefinition;
   /** Current field value */
@@ -36,6 +38,14 @@ export interface FieldRendererProps {
   error?: string;
   /** For array types: token counts per item */
   itemTokenCounts?: Record<string, number>;
+}
+
+export function PreservedField({ label, value }: { label: string; value: unknown }) {
+  return <section className="input-group standard-editor-field" aria-label={`${label} preserved value`}>
+    <p className="label">{label}</p>
+    <p className="text-sm text-dark-muted mb-2">{label} has a value this form cannot edit. It will be preserved when you save other fields.</p>
+    <pre className="whitespace-pre-wrap break-words max-w-full overflow-auto rounded border border-dark-border p-3 text-xs">{JSON.stringify(value, null, 2) ?? 'undefined'}</pre>
+  </section>;
 }
 
 // ============================================================================
@@ -212,8 +222,13 @@ function NumberField({
   return (
     <input
       type="number"
+      aria-label={definition.label}
       value={value}
-      onChange={(e) => onChange(parseInt(e.target.value) || (definition.defaultValue as number) || 0)}
+      onChange={(e) => {
+        if (e.target.value === '') return;
+        const number = Number(e.target.value);
+        if (Number.isFinite(number)) onChange(number);
+      }}
       min={definition.min}
       max={definition.max}
       className="w-24 bg-dark-card border border-dark-border rounded px-2 py-1 text-sm"
@@ -408,6 +423,7 @@ function MapField({ definition, value, onChange }: MapFieldProps) {
             <input
               type="text"
               value={key}
+              aria-label={`Language code (${key})`}
               onChange={(e) => handleKeyChange(key, e.target.value)}
               className="w-24"
               placeholder={definition.placeholder || 'en'}
@@ -423,6 +439,7 @@ function MapField({ definition, value, onChange }: MapFieldProps) {
             </button>
           </div>
           <textarea
+            aria-label={`${definition.label} (${key})`}
             value={val}
             onChange={(e) => handleValueChange(key, e.target.value)}
             rows={definition.rows || 3}
@@ -457,6 +474,7 @@ function ExtensionField({
       <div className="flex items-center gap-2">
         <input
           type="text"
+          aria-label={definition.label}
           value={value || ''}
           onChange={(e) => onChange(e.target.value.slice(0, definition.maxLength || 500))}
           placeholder={definition.placeholder}
@@ -503,7 +521,7 @@ function ReadonlyField({ value }: ReadonlyFieldProps) {
       <div className="flex justify-between text-sm">
         <span className="text-dark-muted">Creation Date:</span>
         <span className="text-dark-text">
-          {value?.creation_date
+          {typeof value?.creation_date === 'number' && Number.isFinite(value.creation_date)
             ? new Date(value.creation_date * 1000).toLocaleString()
             : 'Not set'}
         </span>
@@ -511,7 +529,7 @@ function ReadonlyField({ value }: ReadonlyFieldProps) {
       <div className="flex justify-between text-sm">
         <span className="text-dark-muted">Modification Date:</span>
         <span className="text-dark-text">
-          {value?.modification_date
+          {typeof value?.modification_date === 'number' && Number.isFinite(value.modification_date)
             ? new Date(value.modification_date * 1000).toLocaleString()
             : 'Not set'}
         </span>
@@ -536,6 +554,7 @@ function ReadonlyField({ value }: ReadonlyFieldProps) {
 // ============================================================================
 
 export function FieldRenderer({
+  editable = true,
   definition,
   value,
   onChange,
@@ -547,6 +566,9 @@ export function FieldRenderer({
   error,
   itemTokenCounts,
 }: FieldRendererProps) {
+  if (definition.type !== 'readonly' && (!editable || !supportsFieldValue(definition, value))) {
+    return <PreservedField label={definition.label} value={value} />;
+  }
   // Render the appropriate field type
   const renderField = () => {
     switch (definition.type) {

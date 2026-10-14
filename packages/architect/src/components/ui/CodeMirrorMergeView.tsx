@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { MergeView } from '@codemirror/merge';
+import { MergeView, unifiedMergeView } from '@codemirror/merge';
 import { EditorView, lineNumbers, highlightActiveLine, highlightActiveLineGutter } from '@codemirror/view';
 import { EditorState, Extension } from '@codemirror/state';
 import { json } from '@codemirror/lang-json';
@@ -160,7 +160,6 @@ export function CodeMirrorMergeView({
     const currentLines = currentText.split('\n');
     let additions = 0;
     let deletions = 0;
-    let unchanged = 0;
 
     // Simple line-by-line comparison for stats
     const maxLen = Math.max(originalLines.length, currentLines.length);
@@ -173,7 +172,7 @@ export function CodeMirrorMergeView({
     for (const line of originalLines) {
       if (!currentSet.has(line)) deletions++;
     }
-    unchanged = maxLen - Math.max(additions, deletions);
+    const unchanged = maxLen - Math.max(additions, deletions);
 
     setStats({ additions, deletions, unchanged: Math.max(0, unchanged) });
 
@@ -189,8 +188,8 @@ export function CodeMirrorMergeView({
   return (
     <div className="flex flex-col border border-dark-border rounded-lg overflow-hidden bg-dark-card">
       {/* Stats Header */}
-      <div className="flex items-center justify-between bg-dark-bg px-4 py-2 border-b border-dark-border">
-        <div className="flex gap-4 text-xs">
+      <div role="group" aria-label="Comparison statistics" className="flex flex-wrap items-center justify-between gap-3 bg-dark-bg px-4 py-2 border-b border-dark-border">
+        <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
           <span className="text-green-400">+{stats.additions} additions</span>
           <span className="text-red-400">-{stats.deletions} deletions</span>
           {stats.unchanged > 0 && (
@@ -276,25 +275,31 @@ export function CodeMirrorMergeView({
 }
 
 /**
- * Simple unified diff view using CodeMirror MergeView
- * Shows changes inline rather than side-by-side
+ * Read-only, one-column comparison with original deletions above current text.
  */
 export function CodeMirrorUnifiedDiff({
   originalText,
   currentText,
   language = 'json',
   height = '600px',
-}: Pick<CodeMirrorMergeViewProps, 'originalText' | 'currentText' | 'language' | 'height'>) {
-  // For unified view, we'll use the same MergeView but style it differently
-  // Or compute a unified diff string and display it
-  return (
-    <CodeMirrorMergeView
-      originalText={originalText}
-      currentText={currentText}
-      language={language}
-      height={height}
-      collapseUnchanged={{ margin: 3, minSize: 4 }}
-      readOnly={true}
-    />
-  );
+  originalLabel = 'Original',
+  currentLabel = 'Current',
+}: Pick<CodeMirrorMergeViewProps, 'originalText' | 'currentText' | 'language' | 'height' | 'originalLabel' | 'currentLabel'>) {
+  const container = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!container.current) return;
+    const view = new EditorView({ parent: container.current, state: EditorState.create({ doc: currentText, extensions: [
+      ...createBaseExtensions({ language, readOnly: true }),
+      unifiedMergeView({ original: originalText, mergeControls: false, gutter: true, highlightChanges: true,
+        collapseUnchanged: { margin: 3, minSize: 4 } }),
+      EditorView.editable.of(false),
+      EditorView.contentAttributes.of({ 'aria-label': 'Read-only unified revision comparison' }),
+      EditorView.theme({ '&': { height: '100%' }, '.cm-scroller': { overflow: 'auto' } }),
+    ] }) });
+    return () => view.destroy();
+  }, [originalText, currentText, language]);
+  return <section aria-label="Unified revision comparison" className="min-w-0 overflow-hidden rounded-lg border border-dark-border bg-dark-card">
+    <p className="px-4 py-2 text-xs text-dark-muted">{originalLabel} compared with {currentLabel}. Deleted text precedes current text; this comparison cannot edit your draft.</p>
+    <div ref={container} style={{ height, overflow: 'auto' }} />
+  </section>;
 }

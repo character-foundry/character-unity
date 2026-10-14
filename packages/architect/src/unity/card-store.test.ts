@@ -141,6 +141,17 @@ describe('native editor Save lifecycle', () => {
     expect(posts()).toEqual([]);
   });
 
+  it.each(['v2', 'v3'] as const)('edits inside the %s wrapper even when optional standard fields have opaque values', (spec) => {
+    const wrapped = { spec: spec === 'v2' ? 'chara_card_v2' : 'chara_card_v3', spec_version: spec === 'v2' ? '2.0' : '3.0',
+      opaque_root: { keep: [false, 0] }, data: { name: 'Opaque optional fields', description: 'Original', creator: null,
+        alternate_greetings: { foreign: [false, 0] }, source: false, extensions: { depth_prompt: 'opaque', vendor: { keep: 0 } } } };
+    cards.getState().setCurrentCard({ meta: { id: 'opaque', name: 'Opaque optional fields', spec, tags: [], createdAt: '', updatedAt: '' },
+      data: wrapped as unknown as Card['data'] });
+    cards.getState().updateCardFields({ description: 'Edited safely' });
+    expect(cards.getState().currentCard?.data).toEqual({ ...wrapped, data: { ...wrapped.data, description: 'Edited safely' } });
+    expect(cards.getState().isDirty).toBe(true); expect(posts()).toEqual([]);
+  });
+
   it('keeps typing and portrait changes local until explicit Save, with no server autosave timer', async () => {
     vi.useFakeTimers();
     const original = await load();

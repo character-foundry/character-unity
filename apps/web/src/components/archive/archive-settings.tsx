@@ -4,6 +4,7 @@ import { formatRelative } from '@/lib/utils/format';
 import { libraryChanged } from '@/lib/library-search';
 import { useArchiveApi } from '@/lib/archive';
 import type { ArchiveRun, ArchiveSource, SettingValue } from '@/lib/archive';
+import { useLibraryClient } from '@/lib/library-client';
 
 const field = 'w-full rounded-md border border-nebula/30 bg-deep-space/60 px-2.5 py-1.5 text-sm text-starlight placeholder:text-starlight/30 focus:border-nebula focus:outline-none';
 const intervals = [[60, 'Every hour'], [240, 'Every 4 hours'], [720, 'Every 12 hours'], [1440, 'Once a day'], [10080, 'Once a week']] as const;
@@ -133,6 +134,11 @@ function SourceCard({ source, onChanged }: { source: ArchiveSource; onChanged: (
 
 /** Settings → Archive: which sources the Archive scrapes, how often, and with what options and credentials. */
 export function ArchiveSettings() {
+  const { connection } = useLibraryClient();
+  if (connection.profile !== 'local') return <p className="text-sm text-starlight/60">Archive sources and credentials are managed by the installation operator. This profile can browse a configured read-only Archive but cannot start scrapes or change its settings.</p>;
+  return <OperatorArchiveSettings />;
+}
+function OperatorArchiveSettings() {
   const archiveApi = useArchiveApi();
   const [sources, setSources] = useState<ArchiveSource[] | null>(null);
   const [error, setError] = useState<string | null>(null);

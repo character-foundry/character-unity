@@ -2,6 +2,7 @@ import { BlobError, defaultMaxBytes } from '@character-unity/blob-store';
 import type { BlobIntegrity, BlobStore } from '@character-unity/blob-store';
 import { cancelBody, consumeVerified, validateIntegrity, validateKey } from '@character-unity/blob-store/verify';
 import { request, transaction } from './transaction.js';
+import { retirementKey } from './maintenance.js';
 
 interface BlobRow extends BlobIntegrity { key: string; bytes: Blob }
 export function createBrowserBlobs(db: IDBDatabase, maxBytes = defaultMaxBytes): BlobStore {
@@ -15,7 +16,8 @@ export function createBrowserBlobs(db: IDBDatabase, maxBytes = defaultMaxBytes):
         const chunks: Uint8Array<ArrayBuffer>[] = [];
         const measured = await consumeVerified(body, expected, async (chunk) => { chunks.push(new Uint8Array(chunk)); }, options.signal);
         const candidate: BlobRow = { key, ...measured, bytes: new Blob(chunks) };
-        const existing = await transaction(db, ['blobs'], 'readwrite', function* (tx) {
+        const existing = await transaction(db, ['blobs', 'meta'], 'readwrite', function* (tx) {
+          if (yield* request(tx.objectStore('meta').get(retirementKey(key)))) throw new BlobError('ABORTED', 'Object was retired by explicit browser cleanup');
           const old = yield* request<BlobRow | undefined>(tx.objectStore('blobs').get(key));
           if (options.signal?.aborted) throw new BlobError('ABORTED', 'Upload aborted');
           if (old) {
@@ -34,7 +36,8 @@ export function createBrowserBlobs(db: IDBDatabase, maxBytes = defaultMaxBytes):
     },
     async get(key) {
       validateKey(key);
-      const stored = await transaction(db, ['blobs'], 'readonly', function* (tx) {
+      const stored = await transaction(db, ['blobs', 'meta'], 'readonly', function* (tx) {
+        if (yield* request(tx.objectStore('meta').get(retirementKey(key)))) return undefined;
         return yield* request<BlobRow | undefined>(tx.objectStore('blobs').get(key));
       });
       return stored ? { body: stored.bytes.stream(), byteLength: stored.bytes.size } : null;

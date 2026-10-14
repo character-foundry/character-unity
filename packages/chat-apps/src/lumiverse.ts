@@ -1,4 +1,4 @@
-import { ChatAppError, bearer, call, cardFingerprint, isObject } from './http.js';
+import { ChatAppError, bearer, call, cardFingerprint, isObject, readJsonSnapshot } from './http.js';
 import type { Fetch } from './http.js';
 import type { ChatApp, ChatConnection, RemoteCopy } from './index.js';
 
@@ -75,6 +75,16 @@ export function createLumiverse(connection: ChatConnection, fetcher: Fetch): Cha
     },
     async read(remoteId) {
       return json(`/characters/${encodeURIComponent(remoteId)}`);
+    },
+    async readForImport(remoteId) {
+      const { bytes, value } = await readJsonSnapshot(await request(`/characters/${encodeURIComponent(remoteId)}`));
+      // Character + rowToCharacter in the upstream source expose these app-local
+      // row fields, not authored CC data. Unknown future fields remain visible
+      // to the loss checks rather than being silently discarded.
+      // https://github.com/prolix-oc/Lumiverse/blob/main/src/types/character.ts
+      const fields = { ...value };
+      for (const key of ['id', 'user_id', 'avatar_path', 'image_id', 'avatar_crop_image_id', 'folder', 'library_scope', 'created_at', 'updated_at']) delete fields[key];
+      return { bytes, fields };
     },
     async upload(file, target) {
       const type = file.type === 'png' ? 'image/png' : 'application/json';

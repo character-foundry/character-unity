@@ -10,6 +10,15 @@ for this verification to commit
 [`76990644da2b8d79bd57a2a7f3c6e46a5b6aee92`](https://github.com/character-foundry/character-foundry/commit/76990644da2b8d79bd57a2a7f3c6e46a5b6aee92).
 Review: [Foundry draft PR #52](https://github.com/character-foundry/character-foundry/pull/52).
 
+Publishing status checked 2026-10-13: the remote `feat/unity-identity` branch is
+at `0e464d69f5722073845954f06c46affb68539eb4`. The identity/lineage/sync work
+described below is already on that branch, though not a released SDK version.
+Only the later pinned `7699064` is unpublished: it raises identity limits from
+256 to 8,192 asset bindings, 4 to 32 Mi UTF-16 canonical code units and 100,000
+to 2 million JSON nodes, plus a 1,500-asset regression. It changes no schema or
+hash format. Bootstrap fetches the exact SHA, so a branch push is sufficient;
+an npm release is not required. Publishing remains explicitly held.
+
 It adds `@character-foundry/character-foundry/identity`: canonical content identity,
 asset digest bindings, explicit save/fork lineage and publication sanitization.
 Existing hash APIs retain their behavior. The detailed contract and vectors live
@@ -44,7 +53,7 @@ It starts and disposes only its own emulator. No remote Workers resources are us
 
 `pnpm check` verifies the pinned checkout/link and runs this verifier against it.
 Unity's card service now consumes the SDK loader, URI primitives, content identity
-and revision lineage directly. Both editor hosts also use SDK-backed saved-revision
+and revision lineage directly. Native API and browser profiles use SDK-backed saved-revision
 exports with re-import verification. There is no app-local card hashing implementation.
 
 The CharX preservation mode addresses the descriptor loss exposed by

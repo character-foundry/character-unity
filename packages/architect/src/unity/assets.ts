@@ -164,8 +164,10 @@ export class EditorAssetService {
     this.entries = this.entries.filter((item) => item !== entry && (entry.descriptor !== null || (!defaultPortrait(item) && !mainIcon(item))));
     this.pruneUrls(); this.emit();
   }
-  async setPortrait(card: Card, source: File | string | null) {
+  async setPortrait(card: Card, source: File | string | null, signal?: AbortSignal) {
+    signal?.throwIfAborted();
     await this.ensure(card);
+    signal?.throwIfAborted();
     const previous = this.entries.find((entry) => entry.descriptor === null);
     if (source === null) { if (previous) this.remove(card, previous.id); return; }
     if (typeof source !== 'string' && !fileType(source).startsWith('image/')) throw new Error('The portrait must be an image');

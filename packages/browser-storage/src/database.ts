@@ -1,11 +1,13 @@
 import { StoreError } from '@character-unity/store';
 import { request, transaction } from './transaction.js';
+import { addContentStores } from './content.js';
 
-const version = 3;
+const version = 4;
 const storesV1 = ['meta', 'workspaces', 'cards', 'revisions', 'assets', 'sources', 'blobs'];
 // Version 2: library annotations (deleted cards, favorites, followed creators, revision token counts).
 const storesV2 = [...storesV1, 'deletions', 'favorites', 'follows', 'metrics'];
-const stores = [...storesV2, 'archiveReferences', 'archiveAssets', 'archiveForks', 'importClaims', 'sharedAssets', 'searchJobs'];
+const storesV3 = [...storesV2, 'archiveReferences', 'archiveAssets', 'archiveForks', 'importClaims', 'sharedAssets', 'searchJobs'];
+const stores = [...storesV3, 'contentSources', 'contentDocuments', 'contentRevisions', 'contentPublications', 'contentClaims'];
 const marker = { key: 'schema', format: 'character-unity-indexeddb', version };
 
 export async function openDatabase(name: string): Promise<IDBDatabase> {
@@ -19,14 +21,16 @@ export async function openDatabase(name: string): Promise<IDBDatabase> {
     opening.onupgradeneeded = (event) => {
       const db = opening.result, names = [...db.objectStoreNames].sort().join();
       if (!cancelled && ((event.oldVersion === 1 && names === [...storesV1].sort().join())
-        || (event.oldVersion === 2 && names === [...storesV2].sort().join()))) {
+        || (event.oldVersion === 2 && names === [...storesV2].sort().join())
+        || (event.oldVersion === 3 && names === [...storesV3].sort().join()))) {
         const previous = opening.transaction!.objectStore('meta').get('schema');
         previous.onsuccess = () => {
           if (previous.result?.format !== marker.format || previous.result?.version !== event.oldVersion) {
             foreign = true; opening.transaction!.abort(); return;
           }
           if (event.oldVersion === 1) addAnnotations(db);
-          addArchiveMetadata(db, opening.transaction!);
+          if (event.oldVersion < 3) addArchiveMetadata(db, opening.transaction!);
+          addContentStores(db);
           opening.transaction!.objectStore('meta').put(marker);
         };
         return;
@@ -45,6 +49,7 @@ export async function openDatabase(name: string): Promise<IDBDatabase> {
       db.createObjectStore('blobs', { keyPath: 'key' });
       addAnnotations(db);
       addArchiveMetadata(db, opening.transaction!);
+      addContentStores(db);
     };
     opening.onsuccess = () => {
       if (cancelled) opening.result.close();

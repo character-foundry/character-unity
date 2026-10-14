@@ -1,4 +1,4 @@
-import { readCardLineage, restoreSillyTavernTransport } from '@character-foundry/character-foundry/identity';
+import { canonicalJson, hashBytes, readCardLineage, restoreSillyTavernTransport } from '@character-foundry/character-foundry/identity';
 import { createChatApp, ChatAppError, chatAppNames } from '@character-unity/chat-apps';
 import type { ChatApp, ChatConnection, RemoteCopy } from '@character-unity/chat-apps';
 import type { AssetService } from '@character-unity/assets';
@@ -11,6 +11,11 @@ import { CardError } from './types.js';
 import type { Actor } from './types.js';
 import { createReferenceService } from './references.js';
 import { NativeArchiveUnavailable, type NativeArchiveReader } from './native-reader.js';
+import { hash as validateHash, text as validateText } from '@character-unity/store/validation';
+import { createCardService } from './index.js';
+import { prepareChatEdit, type ChatEditPin, type ChatEditReview } from './chat-edits.js';
+import { authorizeChatImport } from './private-chat-receipt.js';
+export type { ChatEditPin, ChatEditReview } from './chat-edits.js';
 
 export { ChatAppError } from '@character-unity/chat-apps';
 export type { ChatPlacement, ChatTarget, PlacementStatus } from '@character-unity/store/chat';
@@ -36,6 +41,7 @@ function safeName(value: unknown) {
 export function createChatService(store: UnityStore, chat: ChatStore, assets: AssetService, connect: (connection: ChatConnection) => ChatApp = createChatApp,
   options: { archive?: NativeArchiveReader } = {}) {
   const references = createReferenceService(store, assets, options.archive);
+  const cards = createCardService(store, assets, options);
   async function authorize(actor: Actor, workspaceId: string) {
     const workspace = await store.getWorkspace(workspaceId);
     if (workspace.ownerId !== actor.id) throw new CardError('FORBIDDEN', 'Workspace belongs to another account');
@@ -89,7 +95,75 @@ export function createChatService(store: UnityStore, chat: ChatStore, assets: As
       ...(hit.reference ? { reference: hit.reference } : {}) };
   }
 
+  async function edit(actor: Actor, workspaceId: string, targetId: string, remoteId: string) {
+    validateText(remoteId, 'remote copy ID', 500);
+    await authorize(actor, workspaceId);
+    const target = await chat.target(workspaceId, targetId);
+    const placement = (await chat.placements(workspaceId)).find((item) => item.targetId === targetId && item.remoteId === remoteId);
+    if (!placement?.revisionId || placement.status === 'missing') throw new StoreError('NOT_FOUND', 'The tracked remote copy is no longer available; scan the app again');
+    const loaded = await resolveCard(workspaceId, placement.cardId), current = { revision: loaded.revision };
+    const base = current.revision.id === placement.revisionId ? current.revision : await cards.revision(actor, workspaceId, placement.cardId, placement.revisionId);
+    const snapshot = await app(target).readForImport(remoteId);
+    const merged = prepareChatEdit(base.document, current.revision.document, snapshot, target.kind, await revisionIdentityOptions(loaded.exportStore, base));
+    const pin: ChatEditPin = { cardId: placement.cardId, remoteId, baseRevisionId: base.id, expectedHead: current.revision.id,
+      remoteHash: await hashBytes(snapshot.bytes), targetKind: target.kind, targetUrl: target.baseUrl, targetConfiguration: target.configurationVersion };
+    await authorize(actor, workspaceId);
+    const targetNow = await chat.target(workspaceId, targetId);
+    if (canonicalJson(targetNow) !== canonicalJson(target)) throw new StoreError('ACCESS_CHANGED', 'The chat connection changed; review the copy again');
+    const placementNow = (await chat.placements(workspaceId, [placement.cardId])).find((item) => item.targetId === targetId && item.remoteId === remoteId);
+    if (!placementNow || placementNow.revisionId !== placement.revisionId || placementNow.status === 'missing') throw new StoreError('ACCESS_CHANGED', 'The tracked copy changed; review it again');
+    if ((await cards.open(actor, workspaceId, placement.cardId)).revision.id !== pin.expectedHead) throw new StoreError('HEAD_CONFLICT', 'The library card changed; review the copy again');
+    return { ...merged, pin, revision: current.revision };
+  }
+
   return {
+    async reviewEdit(actor: Actor, workspaceId: string, targetId: string, remoteId: string): Promise<ChatEditReview> {
+      const result = await edit({ ...actor }, workspaceId, targetId, remoteId);
+      return { ...result.pin, changes: result.changes, preserved: result.preserved };
+    },
+    async acceptEdit(actor: Actor, workspaceId: string, targetId: string, input: ChatEditPin) {
+      actor = { ...actor }; input = { cardId: input.cardId, remoteId: input.remoteId, baseRevisionId: input.baseRevisionId,
+        expectedHead: input.expectedHead, remoteHash: input.remoteHash, targetUrl: input.targetUrl, targetKind: input.targetKind, targetConfiguration: input.targetConfiguration };
+      for (const key of ['cardId', 'remoteId', 'baseRevisionId', 'expectedHead', 'targetUrl', 'targetKind'] as const) validateText(input[key], key, 500);
+      validateHash(input.remoteHash);
+      if (!Number.isSafeInteger(input.targetConfiguration) || input.targetConfiguration < 1) throw new CardError('INVALID_INPUT', 'Expected the reviewed connection version');
+      await authorize(actor, workspaceId);
+      const receiptHash = await hashBytes(new TextEncoder().encode(canonicalJson({ workspaceId, targetId, ...input })));
+      async function previous() {
+        const found = await chat.importedEdit(workspaceId, actor.id, receiptHash, input.expectedHead);
+        if (!found) return null;
+        try { await cards.open(actor, workspaceId, found.cardId); }
+        catch (error) {
+          if (error instanceof StoreError && error.code === 'NOT_FOUND') {
+            // An inaccessible source asset must keep its own error; only a
+            // removed result card explains a permanent snapshot receipt this way.
+            try { await store.getCard(workspaceId, found.cardId); }
+            catch (missing) {
+              if (missing instanceof StoreError && missing.code === 'NOT_FOUND') throw new StoreError('ACCESS_CHANGED',
+                'A previous import of this snapshot was removed; it will not be silently recreated.', { cause: error });
+              throw missing;
+            }
+          }
+          throw error;
+        }
+        return { ...found, duplicate: true };
+      }
+      const existing = await previous(); if (existing) return existing;
+      const target = await chat.target(workspaceId, targetId);
+      if (target.baseUrl !== input.targetUrl || target.kind !== input.targetKind || target.configurationVersion !== input.targetConfiguration) throw new StoreError('ACCESS_CHANGED', 'The chat connection changed; review the copy again');
+      const result = await edit(actor, workspaceId, targetId, input.remoteId);
+      if (canonicalJson(result.pin) !== canonicalJson(input)) throw new StoreError('ACCESS_CHANGED', 'The remote copy or library changed after review; review it again');
+      if (!result.changes.length) throw new CardError('INVALID_INPUT', 'There are no new text edits to import');
+      const authorization = authorizeChatImport({ ...input, targetId, receiptHash });
+      try {
+        const fork = await cards.forkAssets(actor, workspaceId, input.cardId, input.expectedHead, result.document,
+          result.revision.assets.filter((asset) => asset.path !== 'module.risum').map((asset) => ({ path: asset.path, source: { kind: 'existing', path: asset.path } })), [], undefined, authorization);
+        return { cardId: fork.cardId, revisionId: fork.revisionId, duplicate: false };
+      } catch (error) {
+        const committed = await previous(); if (committed) return committed;
+        throw error;
+      }
+    },
     async targets(actor: Actor, workspaceId: string) {
       await authorize(actor, workspaceId);
       return chat.targets(workspaceId);

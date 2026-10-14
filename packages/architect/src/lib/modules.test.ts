@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls = vi.hoisted(() => ({
   metadata: vi.fn(), coreTabs: vi.fn(), coreSettings: vi.fn(),
-  focused: vi.fn(), wizard: vi.fn(), subscribe: vi.fn(), invalidate: vi.fn(),
+  focused: vi.fn(), wizard: vi.fn(), localTools: vi.fn(), subscribe: vi.fn(), invalidate: vi.fn(),
 }));
 vi.mock('../store/settings-store', () => ({ useSettingsStore: {
   getState: () => ({ features: { focusedEnabled: true, wwwyzzerddEnabled: true } }),
@@ -13,6 +13,7 @@ vi.mock('../features/editor/tabs', () => ({ registerCoreTabs: calls.coreTabs }))
 vi.mock('../features/settings/index', () => ({ registerCoreSettingsPanels: calls.coreSettings }));
 vi.mock('../modules/focused/index', () => ({ registerFocusedModule: calls.focused }));
 vi.mock('../modules/wwwyzzerdd/index', () => ({ registerWwwyzzerddModule: calls.wizard }));
+vi.mock('../modules/local-tools/index', () => ({ registerLocalToolsModule: calls.localTools }));
 
 describe('shared immutable editor module bootstrap', () => {
   beforeEach(() => { vi.resetModules(); vi.clearAllMocks(); });
@@ -22,11 +23,12 @@ describe('shared immutable editor module bootstrap', () => {
     await Promise.all([initializeModules(), initializeModules(), reloadModules()]);
     await initializeModules();
     await reloadModules();
-    expect(calls.metadata).toHaveBeenCalledTimes(2);
+    expect(calls.metadata).toHaveBeenCalledTimes(3);
     expect(calls.coreTabs).toHaveBeenCalledTimes(1);
     expect(calls.coreSettings).toHaveBeenCalledTimes(1);
     expect(calls.focused).toHaveBeenCalledTimes(1);
     expect(calls.wizard).toHaveBeenCalledTimes(1);
+    expect(calls.localTools).toHaveBeenCalledTimes(1);
     expect(calls.subscribe).toHaveBeenCalledTimes(1);
   });
 

@@ -10,7 +10,7 @@ import type { V4FetchHandler } from 'miniflare';
 import { beforeAll, beforeEach, afterEach, describe, expect, it } from 'vitest';
 import type { Revision } from '@character-unity/store';
 import { createD1Driver } from '@character-unity/store/d1';
-import { migrate } from '@character-unity/store/migrations';
+import { migrate, schemaVersion } from '@character-unity/store/migrations';
 import { createAccountStore } from '@character-unity/store/accounts';
 import { createBrowserSearchFixture, fixtureInventory } from '../../archive/tests/browser-search-fixture.js';
 import { openCopiedArchive } from '../../archive/src/copied.js';
@@ -21,6 +21,9 @@ import type { ArchiveImportResult } from '@character-unity/cards/archive';
 import type { SearchPage } from '@character-unity/archive-client';
 
 const origin = 'https://worker.unity.invalid';
+const configuration = JSON.parse(await readFile(fileURLToPath(new URL('../wrangler.jsonc', import.meta.url)), 'utf8')) as {
+  vars: { UNITY_REMOTE_CONNECTIONS_JSON: string };
+};
 const execute = promisify(execFile);
 type CardResult = { card: { id: string }; revision: Revision };
 let script: string;
@@ -38,7 +41,8 @@ describe('account Worker in workerd with D1 and R2', () => {
   async function start(publicOrigin = origin, loginLimit = 60, statePath = root, databaseId = 'worker-test', archiveOrigin?: string, outbound?: V4FetchHandler) {
     mf = new Miniflare(convertV4MiniflareOptions({ port: 0, modules: true, script,
       compatibilityDate: '2026-10-11', compatibilityFlags: ['nodejs_compat'],
-      bindings: { UNITY_PUBLIC_ORIGIN: publicOrigin, ...(archiveOrigin === undefined ? {} : { UNITY_ARCHIVE_ORIGIN: archiveOrigin }) }, d1Databases: { UNITY_DB: databaseId },
+      bindings: { UNITY_REMOTE_CONNECTIONS_JSON: configuration.vars.UNITY_REMOTE_CONNECTIONS_JSON, UNITY_PUBLIC_ORIGIN: publicOrigin,
+        ...(archiveOrigin === undefined ? {} : { UNITY_ARCHIVE_ORIGIN: archiveOrigin }) }, d1Databases: { UNITY_DB: databaseId },
       r2Buckets: { UNITY_BLOBS: 'worker-test' }, resourcePersistencePath: statePath,
       ratelimits: { UNITY_LOGIN_LIMITER: { namespace_id: '1001', simple: { limit: loginLimit, period: 60 } } },
       ...(outbound ? { outboundService: outbound } : {}),
@@ -64,6 +68,24 @@ describe('account Worker in workerd with D1 and R2', () => {
     }
     return { driver, accounts, alice, bob, a: await login(alice.key), b: await login(bob.key) };
   }
+
+  it('exposes the native hub profile and actor-scoped read-only statistics without browser LLM capability', async () => {
+    const { a, b } = await setup();
+    expect(await (await request('client')).json()).toEqual({ profile: 'hub', capabilities: { browserLLM: false } });
+    const workspace = await (await request('workspaces', a, 'POST', { name: 'Private stats' })).json() as { id: string };
+    const path = `workspaces/${workspace.id}/statistics`;
+    expect((await request(path, '')).status).toBe(401); expect((await request(path, b)).status).toBe(403);
+    const response = await request(path, a);
+    expect(response.status).toBe(200); expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(await response.json()).toMatchObject({ membership: { total: 0, owned: 0, archiveReferences: 0 } });
+    const contents = `content/workspaces/${workspace.id}/documents`;
+    expect((await request(contents, b)).status).toBe(403);
+    expect(await (await request(contents, a)).json()).toEqual({ items: [], total: 0, nextAfter: null });
+    for (const route of ['/api', '/api/unknown']) {
+      const miss = await mf.dispatchFetch(`${origin}${route}`, { headers: { accept: 'text/html', cookie: a } });
+      expect(miss.status).toBe(404); expect(miss.headers.get('content-type')).toContain('application/json');
+    }
+  });
 
   async function archiveFixture() {
     const directory = join(root, 'archive-copy'); await createBrowserSearchFixture(directory);
@@ -179,7 +201,7 @@ describe('account Worker in workerd with D1 and R2', () => {
     expect((await db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'unity_%'").all()).results).toEqual([]);
     const { driver, a } = await setup();
     expect((await request('sync/v1/capabilities', a)).status).toBe(404);
-    expect(await (await request('ready')).json()).toEqual({ status: 'ready', storage: { schemaVersion: 13 } });
+    expect(await (await request('ready')).json()).toEqual({ status: 'ready', storage: { schemaVersion } });
     await driver.batch([{ sql: "UPDATE unity_migrations SET checksum = 'changed' WHERE version = 5" }]);
     expect((await request('workspaces', a, 'POST', { name: 'Must not write' })).status).toBe(503);
     expect(await driver.query({ sql: 'SELECT id FROM unity_workspaces' })).toEqual([]);

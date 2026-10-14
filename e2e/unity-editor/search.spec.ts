@@ -1,5 +1,7 @@
-import { expect, screenshot, test } from './fixtures.js';
+import { expect, freshWorkspace, screenshot, test } from './fixtures.js';
 import type { Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await freshWorkspace(page); });
 
 interface SeedPage { cards: Record<string, unknown>[] }
 

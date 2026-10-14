@@ -1,0 +1,6 @@
+{
+  "T01": "Empty workspaces report zero membership/storage with no invented metadata, while unknown workspaces are rejected.",
+  "T02": "One read-only snapshot aggregates active owned heads and exact-version references, excludes foreign/deleted cards, deduplicates shared storage/tags, and distinguishes known content coverage, forks and observed chat copies.",
+  "T03": "Reference-only membership does not create owned cards or asset records, known zero measurements remain distinct from unknown values, and top breakdowns are deterministic and bounded to twelve.",
+  "T04": "Storage aggregates exclude permanent retirement records and do not claim to measure physical disk space."
+}

@@ -5,8 +5,9 @@
 `apps/web` mounts `packages/architect`, not the earlier `packages/editor`
 scaffold described below. Useful Architect components now use native Unity
 import/revision/asset contracts without an inherited old-server API client.
-Wrapped JSON, PNG and CharX imports send original bytes to Foundry on the backend;
-no browser reconstruction or duplicate IndexedDB card/asset store is used.
+Wrapped JSON, PNG and CharX imports send original bytes to Foundry through the
+shared service. API profiles use their backend; the explicit browser profile
+composes that service in-process over the existing IndexedDB database.
 
 Portraits and declared attachments are staged with the editor draft. Explicit
 Save commits text and asset bindings together. New/Fork creates one initial
@@ -19,9 +20,14 @@ a new revision containing the historical text **and** asset references.
 Local installations retain browser-local LLM providers, templates, presets, wizard
 prompts, themes and editor preferences. Hub profiles disable browser credential
 loading and direct provider calls; templates and non-provider preferences remain.
-Nonexistent Architect-server RAG/ComfyUI/backup/name-tool
-paths and old dashboard/import/parser shells are retired, not replaced with
-fake endpoints. Native optional tools are tracked in `cu-1o2.5.13`.
+Nonexistent Architect-server tool paths and old dashboard/import/parser shells
+are retired. Native Local tools provides reviewed Archive retrieval inserts,
+provider-backed optimization/name suggestions and explicit loopback ComfyUI
+workflow submission with staged portrait review. Requests belong to the current
+editor; cancellation never interrupts another ComfyUI job. Node backup/verify/
+isolated restore is an operator CLI, not a browser credential-bearing endpoint.
+Unsupported existing field shapes remain read-only across core forms, Focused,
+Preview, wizard and tools; opening or applying AI never coerces opaque data.
 
 Each editor has an explicit `EditorSession`: immutable workspace/API client,
 per-instance vanilla card/UI/token/LLM stores, staged assets, revision heads,
@@ -74,16 +80,21 @@ unsaved changes. See [native account and sharing workflows](hub-accounts.md) and
 [configured remote controls](remote-hubs.md).
 
 Native viewer/Next-shim removal (`cu-1o2.26`) and editor isolation (`cu-1o2.5.12`)
-are complete. Wizard workflow QA (`cu-1o2.5.5`) remains low priority.
+are complete. Deterministic browser QA covers wizard prompt sets, review/apply,
+cancellation, failures and opaque-field refusal; actual provider quality is not claimed.
+Lorebook entries preserve duplicate/missing IDs and opaque enums. Library import
+uses bounded searchable pages, reviewed replacement and stale-draft checks.
+History supports read-only side-by-side and genuine unified diff without changing
+the Save head. Token failures are visible and retryable, never approximate fallback.
 
 `pnpm dev` starts API + unified web. `pnpm test:e2e:unity` builds the real unified
 web UI and a separate two-host browser fixture beneath the test build's existing
 `/assets/` route, then runs isolated production-Node browser workflows. The fixture
 is not part of the ordinary production build and adds no application/API route.
 The active app uses `packages/tokenizer` for its browser worker, not a dependency
-on the scaffold editor. The legacy host tests below remain useful regressions but
-do not prove parity of the active editor. Their browser-only IndexedDB profile,
-stored cards and safe upgrade path remain available pending explicit retirement.
+on the scaffold editor. Legacy hosts and form/UI packages have been retired;
+the historical sections below are not current entry points. Native browser-only
+storage keeps its existing database identity and data-preserving upgrade path.
 Final validation of the current native UI/account pass is recorded separately in
 [implementation status](implementation.md). Live Archive/provider takeover and
 Foundry publishing remain held.

@@ -3,9 +3,10 @@
 `pnpm assets` is an explicit operator tool for Unity's SQL-owned final objects.
 It supports native SQLite/filesystem storage and local Worker D1/R2. There is no
 HTTP deletion route, scheduled collector, remote Worker cleanup or browser
-IndexedDB collector. Foundry and Archive storage are outside its scope.
+IndexedDB collector. Foundry and Archive storage are outside its scope. Separate
+offline Node commands also cover reviewed crash-left temporary and orphan files.
 
-Run normal host migration before maintenance. The commands require schema 9 and
+Run normal host migration before maintenance. The commands require the current schema and
 validate migration history; they do not install a Unity schema or migrate it.
 Always select the matching Unity database and blob directory explicitly. Never
 point them at an Archive path or another application's storage.
@@ -67,10 +68,20 @@ dependency and is not shipped in the production image.
 
 ## Reference and race guarantees
 
-All historical revision attachments, immutable original-source records and sync
-outbox frames prevent retirement, including acknowledged jobs. Removing an asset
-from the current revision does not free its historical bytes. Cleanup does not
-erase cards, revision history, provenance or sync receipts.
+All historical revision attachments and original sources of a live card prevent
+retirement. Removing an asset from its current revision does not free historical
+bytes. Old tombstoned cards can release bytes only when no retained card depends
+on them: every live fork descendant, pinned publication (including private or
+non-downloadable publications) and durable sync job retains its complete fork
+ancestry. Deleted intermediate forks do not break that protection. Outbox frames
+remain protected even after acknowledgment. Archive metadata assets are always
+excluded. Cleanup does not erase cards, revision manifests, provenance or receipts.
+
+Both an asset and its deleted card must be older than the selected cutoff. A card
+deleted today cannot release older bytes until the full 24-hour age floor passes.
+Once reclaimed, a deleted card cannot be resurrected by removing its tombstone,
+publishing a revision or adding a fork/outbox reference to its retired ancestry.
+These fences run in the same SQL transaction as retirement/reference admission.
 
 SQL serializes retirement against new references. If attachment commits first,
 retirement fails. If retirement commits first, later attachment and upload
@@ -92,16 +103,118 @@ assets receive immutable SQL creation timestamps. Use consistent host clocks and
 retain matching database/blob backups. Retired IDs and storage keys cannot be
 reused through the store.
 
-## Remaining work and evidence
+## Offline crash-left and orphan files
 
-This tool covers final objects with Unity asset rows. Crash-left temporary
-uploads, provider cleanup failures outside this ledger, objects with no SQL row,
-browser storage reclamation and remote R2 lifecycle policies remain open. No
-directory or bucket scan infers that unrecognized files are safe to delete.
+These Node-only commands are deliberately separate from SQL retirement. First
+select the matching Unity database/blob directory and a cutoff at least 24 hours
+old. `orphan-preview` returns exact physical-file review tokens:
 
-Six maintenance requirements run against native SQLite and local D1; root
+```sh
+pnpm assets orphan-preview --database apps/api/runtime/unity.db --blob-dir apps/api/runtime/blobs --before 2026-10-01T00:00:00.000Z
+```
+
+Save a page's returned JSON to a review file and inspect it. Stop the owning host
+and **all storage writers**, including direct upload/adaptor processes, before
+removal. `--storage-stopped` confirms that operational requirement; it does not
+stop processes or acquire an application-wide lock:
+
+```sh
+pnpm assets orphan-remove --database apps/api/runtime/unity.db --blob-dir apps/api/runtime/blobs --before 2026-10-01T00:00:00.000Z --review reviewed-orphans.json --storage-stopped
+```
+
+Only generated UUID-v4 filenames directly inside `.pending/` and `assets/` are
+considered. There is no recursive traversal. Every SQL-owned key, whether staged,
+ready, retired or an Archive locator, is excluded; use the retirement ledger for
+those. `originals/`, unknown layouts, symlinks and hard links are never selected.
+Preview uses bounded memory and `--after KEY --limit 1..100`. Follow `nextAfter`
+even when a page has no eligible objects: its cursor advances over examined names,
+not just selected files.
+
+Removal rechecks exact device/inode, size and nanosecond birth/change/modify times,
+the minimum age and current SQL ownership. A changed file or replaced storage
+directory fails without deleting it. Each result is `removed` or `failed`; an
+already absent file is retryable success. Any failure gives exit status 1 and
+requires review before retry. Review files must be regular, non-symlink JSON files
+of at most 256 KiB. Never run these commands against Archive paths or a mismatched
+backup's blob directory. Concurrent hostile filesystem mutation is outside the
+trusted operator-owned directory contract; quiescence is required for orphan
+removal, not inferred from an old timestamp.
+
+Node filesystem orphan cleanup does not apply to remote R2 or IndexedDB. R2
+temporary objects still need an independently reviewed provider lifecycle policy.
+
+## Explicit browser cleanup
+
+In the browser storage profile, open **Settings → Browser storage** and choose
+**Preview browser cleanup**. Preview is read-only. Select the reviewed objects,
+open the confirmation, and explicitly remove them; Cancel or Escape removes
+nothing. There is no automatic or startup sweeper and no public server cleanup
+endpoint.
+
+Only local asset objects unreferenced by any live card, its full revision/source
+history or recursive fork ancestry can be selected. Archive locators are always
+kept. The minimum age is 24 hours since creation or the last relevant card
+deletion. Legacy orphan objects without an age need a separate **Start 24-hour
+clock** observation, another 24 hours, and a new preview. That observation deletes
+no bytes and never resets an existing clock.
+
+Removal rechecks the exact reviewed metadata and complete reference graph in one
+IndexedDB transaction. It retains card, revision, source and asset catalog
+metadata, deletes the selected local bytes, and permanently fences the retired
+storage keys against late uploads or new references. A changed selection aborts
+the entire batch. Repeating a confirmed removal is safe. Statistics exclude
+retired objects, but reported removed byte counts do not promise an immediate
+reduction in the browser's physical disk allocation.
+
+Missing or inconsistent ready objects produce an explicit integrity error, not
+an empty preview or a claimed zero-byte success. Export or back up anything you
+may need before confirming removal: deleted browser bytes are not recoverable
+from retained metadata alone. These controls do not inspect or remove arbitrary
+IndexedDB records outside Unity's known asset catalog.
+
+## Unity Node backup and isolated restore
+
+Use explicit matching Unity paths and a new output directory:
+
+```sh
+pnpm backup create --database /path/to/unity.db --blob-dir /path/to/unity-blobs --output /path/to/new-backup
+pnpm backup verify --input /path/to/new-backup
+pnpm backup restore --input /path/to/new-backup --output /path/to/new-isolated-profile
+```
+
+Create uses SQLite's online backup API, then copies and checks every ready,
+non-retired Unity-owned file against the snapshot inventory. Archive assets remain
+exact-version locators in that database: no Archive originals or LanceDB are copied.
+Staged uploads, untracked objects, external environment configuration and browser
+preferences are not included. Quiesce uploads and cleanup during backup. Missing,
+changed or concurrently swept files fail; no completion manifest is committed.
+
+These are operator commands, not public HTTP endpoints. The database includes
+private documents, account/session and chat credentials. New directories use mode
+0700 and files use 0600; protect the backup as carefully as the running database.
+Verification checks hashes, lengths, SQLite integrity and the complete database
+asset inventory. It rejects path traversal, duplicate keys and symlinked files.
+Hashes detect corruption; an unsigned backup is not an authenticity guarantee.
+The newly created snapshot uses a self-contained DELETE journal, even if the live
+source uses WAL. Verification refuses backup SQLite sidecars; restore never drops
+undeclared WAL/journal state or changes the live database's journal mode.
+The bounded format supports at most 100,000 owned assets and a 16 MiB manifest;
+oversized inventories fail before any asset bytes are copied.
+
+Restore verifies first and requires a nonexistent destination. It writes a new
+`unity.db` and `blobs/`; it never overwrites, activates or migrates existing data.
+Configure the Archive connection separately if inherited assets are needed. A
+failed operation can leave an incomplete, inspectable directory; do not activate
+it. Rehearse restore only in a disposable destination before relying on a backup.
+
+## Evidence
+
+Twelve maintenance requirements run against native SQLite and local D1; root
 `pnpm test` generates `runtime/asset-maintenance-conformance.md`. Filesystem/local
 R2 tests cover real deletion, preserved referenced bytes, partial failure, lost
 delete acknowledgments, delayed publication and repeated sweeps. CLI tests run
-separate Node processes against persisted SQLite and local D1/R2 fixtures. All
+separate Node processes against persisted SQLite and local D1/R2 fixtures, including
+read-only orphan preview and refused unsafe removals. Filesystem tests exercise
+review-token changes, SQL ownership races, age floors, pagination, lost deletion
+acknowledgments and replaced namespaces. All
 fixtures are disposable synthetic data; no live Archive data is accessed.

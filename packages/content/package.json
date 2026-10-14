@@ -1,0 +1,12 @@
+{
+  "name": "@character-unity/content",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "type-check": "tsc -p tsconfig.json" },
+  "dependencies": {
+    "@character-unity/store": "workspace:*",
+    "@character-foundry/character-foundry": "link:../../../.unity-foundry-sdk/packages/character-foundry"
+  }
+}

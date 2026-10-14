@@ -2,5 +2,7 @@
   "C01": "Chat targets are workspace-scoped, unique per kind and URL, reject credentialed URLs and never return stored credentials from listings.",
   "C02": "Placements report current/behind against the card head, edited/missing from scans; failed scans keep known copies; removing a target removes its placements.",
   "C03": "Exported copies resolve to library revisions by lineage revision hash first, then content hash, within the workspace only.",
-  "C04": "Archive reference placements retain exact external versions and bounded identity receipts without owned cards or revisions; scans, forgetting, unlinking and target removal remain workspace scoped."
+  "C04": "Archive reference placements retain exact external versions and bounded identity receipts without owned cards or revisions; scans, forgetting, unlinking and target removal remain workspace scoped.",
+  "C05": "Trusted inbound receipts are unique per workspace and commit atomically with an actual authored source fork; competing duplicate forks roll back and later saves retain private provenance without uniqueness collisions.",
+  "C06": "Upgrading populated schema13 preserves duplicate arbitrary local receipt-like JSON unchanged and never interprets authored documents as trusted import receipts."
 }

@@ -37,11 +37,15 @@ test('offscreen native portraits acquire no bytes until scrolled near the viewpo
     const name = `Lazy portrait QA ${String(index).padStart(2, '0')}`;
     return { name: `${name}.png`, mimeType: 'image/png', buffer: await viewerFixture(name, 'png') };
   })));
-  await expect(page.getByRole('status')).toContainText('Imported 12 cards.');
+  await expect(page.getByRole('status').filter({ hasText: 'Imported 12 cards.' })).toBeVisible();
   page.off('response', capture);
   const records = await Promise.all(imported);
   expect(records).toHaveLength(12);
   const last = records.find((record) => record.revision.document.data && (record.revision.document.data as { name?: string }).name === 'Lazy portrait QA 11')!;
+  // The final import is legitimately visible in the old newest-first grid.
+  // Dispose that document before observing the fresh name-sorted viewport;
+  // its trailing portrait acquisition is not an offscreen read in this view.
+  await page.goto('about:blank');
   const requests: { id: string; actor: string | undefined }[] = [];
   page.on('request', (request) => {
     const url = new URL(request.url()), match = /\/cards\/([^/]+)\/asset$/.exec(url.pathname);

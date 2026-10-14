@@ -10,6 +10,7 @@
     "./styles.css": "./src/unity/architect.css"
   },
   "dependencies": {
+    "@character-unity/tokenizer": "workspace:*",
     "@card-architect/backup-core": "workspace:*",
     "@card-architect/defaults": "workspace:*",
     "@card-architect/import-core": "workspace:*",

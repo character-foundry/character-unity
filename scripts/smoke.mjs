@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createInterface } from 'node:readline';
 import { createHash } from 'node:crypto';
+import { schemaVersion } from './schema-version.mjs';
 
 // Exercise built executables on OS-assigned ports; only stop processes we started.
 for (const [app, service, archiveMode] of [['api', 'unity-api', 'off'], ['archive', 'unity-archive', 'off'], ['archive', 'unity-archive', 'fixture'], ['archive', 'unity-archive', 'copy']]) {
@@ -45,9 +46,9 @@ for (const [app, service, archiveMode] of [['api', 'unity-api', 'off'], ['archiv
     if (app === 'api') {
       const ready = await fetch(`http://127.0.0.1:${address.port}/api/ready`, { signal: AbortSignal.timeout(5_000) });
       assert.equal(ready.status, 200);
-      assert.deepEqual(await ready.json(), { status: 'ready', storage: { schemaVersion: 13 } });
+      assert.deepEqual(await ready.json(), { status: 'ready', storage: { schemaVersion } });
       const apiOrigin = `http://127.0.0.1:${address.port}`;
-      for (const path of ['/', '/new', '/card/example/edit', '/card/example/fork', '/archive']) {
+      for (const path of ['/', '/new', '/card/example/edit', '/card/example/fork', '/archive', '/content', '/stats']) {
         const page = await fetch(`${apiOrigin}${path}`, { signal: AbortSignal.timeout(5_000) });
         assert.equal(page.status, 200); assert.match(page.headers.get('content-type') ?? '', /text\/html/);
       }

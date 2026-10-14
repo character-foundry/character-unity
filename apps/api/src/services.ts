@@ -20,7 +20,7 @@ export async function openLocalServices(options: { databasePath: string; blobDir
     const blobs = await createNodeBlobStore(options.blobDirectory, { maxBytes: importByteLimit });
     const archiveClient = options.archiveOrigin ? createArchiveClient(options.archiveOrigin) : undefined;
     const libraryIndex = createLibraryIndexDispatcher(database.store, options.nativeArchive);
-    function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'> & { chat?: typeof database.chat }, archiveAdmin: boolean) {
+    function compose(storage: Pick<typeof database, 'store' | 'hub' | 'outbox'> & { chat?: typeof database.chat; statistics?: typeof database.statistics; content?: typeof database.content }, archiveAdmin: boolean) {
       return composeServices(storage, blobs, archiveClient, options.remoteConnections, undefined, importByteLimit, options.nativeArchive, libraryIndex, archiveAdmin);
     }
     const local = compose(database, true);

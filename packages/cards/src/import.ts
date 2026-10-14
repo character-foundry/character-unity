@@ -6,17 +6,34 @@ import { documentByteLimit } from '@character-unity/store/validation';
 import { CardError, declaredAssetLimit, importByteLimit, risuModulePath } from './types.js';
 import type { ImportAsset } from './types.js';
 
+function importBudget(limits: { maxBytes?: number }) {
+  const maxBytes = limits.maxBytes ?? importByteLimit;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > importByteLimit) throw new CardError('INVALID_INPUT', 'Invalid import byte limit');
+  return maxBytes;
+}
+function parseImport(bytes: Uint8Array, maxBytes: number, extractAssets: boolean) {
+  try { return parseCard(bytes, { maxFileSize: maxBytes, maxAssetSize: maxBytes, maxTotalSize: maxBytes, extractAssets }); }
+  catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'SIZE_LIMIT_EXCEEDED') {
+      throw new CardError('TOO_LARGE', `Expanded card contents exceed this host's ${maxBytes} byte limit`);
+    }
+    throw error;
+  }
+}
+import { setChatImportReceipt } from './private-chat-receipt.js';
+
 /** Container parsing, URI interpretation and identity all come from the external SDK. */
-export async function prepareImport(input: Uint8Array, supplied: readonly ImportAsset[] = []) {
-  if (input.byteLength > importByteLimit) throw new CardError('TOO_LARGE', `Card import exceeds ${importByteLimit / 1024 / 1024} MiB`);
+export async function prepareImport(input: Uint8Array, supplied: readonly ImportAsset[] = [], limits: { maxBytes?: number } = {}) {
+  const maxBytes = importBudget(limits);
+  if (input.byteLength > maxBytes) throw new CardError('TOO_LARGE', `Card import exceeds this host's ${maxBytes} byte limit`);
   const bytes = new Uint8Array(input);
-  if (supplied.length > 64 || supplied.reduce((size, asset) => size + asset.bytes.byteLength, 0) > importByteLimit) {
+  if (supplied.length > 64 || supplied.reduce((size, asset) => size + asset.bytes.byteLength, 0) > maxBytes) {
     throw new CardError('TOO_LARGE', 'Supplied assets exceed import limits');
   }
   const external = supplied.map((asset) => ({ ...asset, binding: { ...asset.binding }, bytes: new Uint8Array(asset.bytes) }));
   const keys = external.map((asset) => asset.binding.kind === 'portrait' ? 'portrait' : `uri:${asset.binding.uri}`);
   if (new Set(keys).size !== keys.length) throw new CardError('INVALID_INPUT', 'Duplicate source asset bindings');
-  const parsed = parseCard(bytes, { maxFileSize: importByteLimit, maxAssetSize: importByteLimit, maxTotalSize: importByteLimit, extractAssets: true });
+  const parsed = parseImport(bytes, maxBytes, true);
   // Foundry reads RisuAI's module.risum as an opaque blob; it is kept below and written back on CharX export.
   if (!['json', 'png', 'charx'].includes(parsed.containerFormat)) {
     throw new CardError('UNSUPPORTED_FORMAT', 'This container needs a loss-preserving import adapter before editing');
@@ -66,6 +83,9 @@ export async function prepareImport(input: Uint8Array, supplied: readonly Import
   const options = { assets: bindings, ...(portraitHash ? { portraitHash } : {}) };
   const transported = await restoreSillyTavernTransport(document, options);
   if (transported) document = transported.card;
+  // Unity-local import receipts are generated only by the explicit inbound
+  // review. A file's self-asserted receipt must not reserve a dedupe identity.
+  setChatImportReceipt(document);
   const identity = await computeCardContentIdentity(document, options);
   const lineage = readCardLineage(document);
   if (lineage && !await verifyCardLineage(document, options)) throw new CardError('INVALID_LINEAGE', 'Imported lineage does not match its content or assets');
@@ -77,23 +97,24 @@ export async function prepareImport(input: Uint8Array, supplied: readonly Import
 export interface ArchiveImportObject { role: 'card' | 'portrait' | 'raw' | 'asset'; name: string; sha256: string; mediaType: string; byteLength: number }
 
 /** Resolve one exact Archive version using the same import, portrait and identity policy as file imports. */
-export async function prepareArchiveImport(objects: readonly ArchiveImportObject[], read: (object: ArchiveImportObject) => Promise<Uint8Array>) {
+export async function prepareArchiveImport(objects: readonly ArchiveImportObject[], read: (object: ArchiveImportObject) => Promise<Uint8Array>, limits: { maxBytes?: number } = {}) {
+  const maxBytes = importBudget(limits);
   if (objects.filter((object) => object.role === 'card').length !== 1) throw new CardError('UNSUPPORTED_FORMAT', 'This Archive version needs exactly one card file');
   const container = objects.find((object) => object.role === 'card');
   if (!container) throw new CardError('UNSUPPORTED_FORMAT', 'This Archive version has no card file');
   const bytes = await read(container);
-  const parsed = parseCard(bytes, { maxFileSize: importByteLimit, maxAssetSize: importByteLimit, maxTotalSize: importByteLimit, extractAssets: false });
+  const parsed = parseImport(bytes, maxBytes, false);
   const document = parsed.originalShape as { data?: { assets?: unknown } } | null;
   const declared = document?.data?.assets;
   const uris = new Set(Array.isArray(declared) ? declared.flatMap((asset: unknown) => asset && typeof asset === 'object' && 'uri' in asset && typeof asset.uri === 'string' ? [asset.uri] : []) : []);
   const extra = objects.filter((object) => (object.role === 'portrait' && parsed.containerFormat === 'json') || (object.role === 'asset' && uris.has(object.name)));
   if (extra.length > 64 || [container, ...extra].some((object) => !Number.isSafeInteger(object.byteLength) || object.byteLength < 0)
-    || [container, ...extra].reduce((total, object) => total + object.byteLength, 0) > importByteLimit) throw new CardError('TOO_LARGE', 'Archive version exceeds import limits');
+    || [container, ...extra].reduce((total, object) => total + object.byteLength, 0) > maxBytes) throw new CardError('TOO_LARGE', 'Archive version exceeds this host\'s read byte limit');
   const supplied: ImportAsset[] = [];
   for (const object of extra) {
     // A separate PNG thumbnail is not the stripped primary image embedded in a character PNG.
     if (object.role === 'portrait' && parsed.containerFormat === 'json') supplied.push({ binding: { kind: 'portrait' }, bytes: await read(object), mediaType: object.mediaType });
     else if (object.role === 'asset' && uris.has(object.name)) supplied.push({ binding: { kind: 'uri', uri: object.name }, bytes: await read(object), mediaType: object.mediaType });
   }
-  return prepareImport(bytes, supplied);
+  return prepareImport(bytes, supplied, { maxBytes });
 }

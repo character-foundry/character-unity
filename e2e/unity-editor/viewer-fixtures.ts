@@ -63,7 +63,7 @@ export async function importViewerCard(page: Page, name: string, format: 'json' 
   const received = await response;
   expect(received.status(), await received.text()).toBe(201);
   const imported: Imported = await received.json();
-  await expect(page.getByRole('status')).toContainText('Imported 1 card');
+  await expect(page.getByRole('status').filter({ hasText: 'Imported 1 card' })).toBeVisible();
   await expect(page.getByRole('button', { name: `Quick view ${name}`, exact: true })).toBeVisible();
   return { ...imported, bytes, name, path: `/api/workspaces/${imported.card.workspaceId}/cards/${imported.card.id}` };
 }

@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
-import { expect, fixture, gif, notes, parse, screenshot, test } from './fixtures.js';
+import { expect, fixture, freshWorkspace, gif, notes, parse, screenshot, test } from './fixtures.js';
 import type { Page } from '@playwright/test';
+
+test.beforeEach(async ({ page }) => { await freshWorkspace(page); });
 
 // QA inventory: favorite→link and unfavorite→retained membership; exact historical
 // reads/downloads; ordinary file/content dedupe; untouched edit creates nothing;
@@ -74,7 +76,7 @@ test('ordinary imports find exact historical Archive bytes and content; changed 
   const bytes = await fixture('Archive JSON', 'json');
   const imported = await upload(page, bytes, 'historical-original.json');
   expect(imported.reference).toMatchObject({ cardId: '1001' });
-  await expect(page.getByRole('status')).toContainText('Already have 1');
+  await expect(page.getByRole('status').filter({ hasText: 'Already have 1' })).toBeVisible();
   await page.getByRole('link', { name: 'Open existing: historical-original.json', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Archive JSON', exact: true, level: 1 })).toBeVisible();
   expect(await download(page, 'Download original')).toEqual(bytes);
@@ -256,6 +258,10 @@ test('ordinary import reports the filename and incomplete identity index reason 
 test('a saved Archive fork joins the same semantic search and opens as an owned card, then deletion removes only its projection', async ({ page }, info) => {
   await page.goto('/archive');
   const tile = page.locator('article').filter({ has: page.getByRole('button', { name: 'Quick view Archive PNG', exact: true }) });
+  // Membership is asynchronous: an immediate count on an unrendered tile can
+  // skip Add and then wait forever for a link that was never created.
+  await expect(tile.getByRole('button', { name: '+ Library', exact: true })
+    .or(tile.getByRole('link', { name: 'In library ✓', exact: true }))).toBeVisible();
   if (await tile.getByRole('button', { name: '+ Library', exact: true }).count()) await tile.getByRole('button', { name: '+ Library', exact: true }).click();
   await tile.getByRole('link', { name: 'In library ✓', exact: true }).click();
   const sourceId = page.url().split('/').at(-1)!;

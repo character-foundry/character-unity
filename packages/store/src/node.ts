@@ -6,6 +6,8 @@ import { migrate } from './migrations.js';
 import { createSyncStore } from './sync.js';
 import { createHubStore } from './hub.js';
 import { createChatStore } from './chat.js';
+import { createStatisticsStore } from './statistics.js';
+import { createContentStore } from './content.js';
 import { createAccountStore, createSessionDriver } from './accounts.js';
 import type { SessionProof } from './accounts.js';
 
@@ -30,10 +32,10 @@ export async function openNodeStore(filename: string) {
     const driver = createNodeDriver(database);
     await migrate(driver);
     database.pragma('journal_mode = WAL');
-    return { store: createStore(driver), hub: createHubStore(driver), outbox: createSyncOutboxStore(driver), accounts: createAccountStore(driver), sync: createSyncStore(driver), chat: createChatStore(driver),
+    return { store: createStore(driver), hub: createHubStore(driver), outbox: createSyncOutboxStore(driver), accounts: createAccountStore(driver), sync: createSyncStore(driver), chat: createChatStore(driver), statistics: createStatisticsStore(driver), content: createContentStore(driver),
       forSession(proof: SessionProof) {
         const scoped = createSessionDriver(driver, proof);
-        return { store: createStore(scoped), hub: createHubStore(scoped), outbox: createSyncOutboxStore(scoped) };
+        return { store: createStore(scoped), hub: createHubStore(scoped), outbox: createSyncOutboxStore(scoped), statistics: createStatisticsStore(scoped), content: createContentStore(scoped) };
       }, close: () => database.close() };
   } catch (error) {
     database.close();

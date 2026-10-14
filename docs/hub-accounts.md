@@ -9,7 +9,7 @@ account-creation route.
 
 Both profiles serve the active `apps/web` application: library, Archive, viewer,
 native Architect editor, Sharing and Connected hubs. The earlier `apps/hub` host
-is retained for regression checks, not required for the native account UI.
+is retired; the native account UI is the only account application.
 
 ## Run the hub locally
 

@@ -10,6 +10,7 @@
     "tests/native-hub-browser-fixture.ts"
   ],
   "exclude": [
-    "src/worker.ts"
+    "src/worker.ts",
+    "src/worker-browser.ts"
   ]
 }

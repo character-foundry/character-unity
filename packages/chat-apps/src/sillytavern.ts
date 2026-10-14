@@ -1,4 +1,4 @@
-import { ChatAppError, basicAuth, call, isObject } from './http.js';
+import { ChatAppError, basicAuth, call, isObject, readJsonSnapshot } from './http.js';
 import type { Fetch } from './http.js';
 import type { ChatApp, ChatConnection, RemoteCopy } from './index.js';
 
@@ -70,6 +70,11 @@ export function createSillyTavern(connection: ChatConnection, fetcher: Fetch): C
     async read(remoteId) {
       const response = await postJson('/api/characters/export', { avatar_url: remoteId, format: 'json' });
       return JSON.parse(await response.text()) as unknown;
+    },
+    async readForImport(remoteId) {
+      const { bytes, value } = await readJsonSnapshot(await postJson('/api/characters/export', { avatar_url: remoteId, format: 'json' }));
+      if (!isObject(value.data)) throw new ChatAppError('UNEXPECTED', 'SillyTavern returned an invalid card export');
+      return { bytes, fields: value.data, envelope: value };
     },
     async upload(file, target) {
       const form = new FormData();

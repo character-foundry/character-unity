@@ -7,6 +7,7 @@ import { openNativeArchive } from './store.js';
 import type { NativeArchive } from './store.js';
 import { createScheduler } from './scheduler.js';
 import { createNativeArchiveApp, nativeAdminPrefix, nativeReadPrefix } from './app.js';
+import { serve } from '@hono/node-server';
 
 const token = 'test-admin-token-0123456789abcdef';
 const encoder = new TextEncoder();
@@ -31,6 +32,14 @@ function demoSource(names: string[]) {
     },
   };
   return { plugin, hold() { gate.held = true; gate.wait = new Promise((resolve) => { release = resolve; }); }, release: () => { gate.held = false; release(); } };
+}
+
+async function http(app: ReturnType<typeof createNativeArchiveApp>) {
+  return new Promise<{ base: string; close(): Promise<void> }>(done => {
+    const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: 0 }, address => done({ base: `http://127.0.0.1:${address.port}`,
+      close: () => new Promise<void>(closed => { server.close(() => closed()); if ('closeAllConnections' in server) server.closeAllConnections(); }),
+    }));
+  });
 }
 
 describe('native Archive service', () => {
@@ -65,6 +74,84 @@ describe('native Archive service', () => {
     expect((await admin('/sources/demo', { method: 'PUT', body: JSON.stringify({ secrets: { other: 'x' } }) })).status).toBe(400);
     expect((await admin('/sources/nope', { method: 'PUT', body: '{}' })).status).toBe(404);
   });
+
+  it('opt-in exact-origin native reads work over HTTP for JSON, bytes and HEAD without granting credentials', async () => {
+    const { scheduler } = setup();
+    const origin = 'http://127.0.0.1:19435';
+    const app = createNativeArchiveApp(archive, scheduler, [], { adminToken: token, readOrigins: [origin] });
+    await archive.put({ provider: 'demo', recordId: 'cors', url: 'https://demo.test/cors', objects: [
+      { role: 'card', bytes: cardBytes('CORS Aster'), mediaType: 'application/json' },
+    ] });
+    const card = await archive.card('demo:cors');
+    const hash = card.versionList[0]!.objects[0]!.sha256;
+    const listening = await http(app);
+    try {
+      for (const [method, path] of [['GET', '/status'], ['GET', '/cards'], ['GET', '/cards/demo:cors'], ['GET', '/cards/demo:cors/files'],
+        ['GET', `/identity?fileHash=${hash}`], ['GET', '/tags'], ['GET', `/objects/${hash}`], ['HEAD', `/objects/${hash}`]] as const) {
+        const response = await fetch(`${listening.base}${nativeReadPrefix}${path}`, { method, headers: { origin } });
+        expect(response.status).toBe(200);
+        expect(response.headers.get('access-control-allow-origin')).toBe(origin);
+        expect(response.headers.get('vary')?.split(/,\s*/)).toContain('Origin');
+        expect(response.headers.get('access-control-allow-credentials')).toBeNull();
+        expect(response.headers.get('access-control-allow-methods')).toBeNull();
+        expect(response.headers.get('access-control-allow-headers')).toBeNull();
+        if (method === 'HEAD') expect(await response.text()).toBe('');
+        else await response.arrayBuffer();
+      }
+    } finally {
+      await listening.close();
+    }
+  });
+
+  it('denies CORS by default and denies nonexact origins, credentials, scoped reads, admin routes and every preflight', async () => {
+    const { scheduler } = setup();
+    const origin = 'http://127.0.0.1:19435';
+    const unconfigured = await http(createNativeArchiveApp(archive, scheduler, [], { adminToken: token }));
+    try {
+      const response = await fetch(`${unconfigured.base}${nativeReadPrefix}/status`, { headers: { origin } });
+      expect(response.headers.get('access-control-allow-origin')).toBeNull();
+      await response.arrayBuffer();
+    } finally { await unconfigured.close(); }
+    const listening = await http(createNativeArchiveApp(archive, scheduler, [], { adminToken: token, readOrigins: [origin] }));
+    const deny = async (path: string, init: RequestInit = {}) => {
+      const response = await fetch(`${listening.base}${path}`, { ...init, headers: { origin, ...init.headers as Record<string, string> } });
+      for (const header of ['access-control-allow-origin', 'access-control-allow-credentials', 'access-control-allow-methods', 'access-control-allow-headers']) {
+        expect(response.headers.get(header), `${init.method ?? 'GET'} ${path} must not grant ${header}`).toBeNull();
+      }
+      await response.arrayBuffer();
+      return response.status;
+    };
+    try {
+      for (const rejected of ['null', `${origin}/`, 'http://127.0.0.1:19436', 'https://127.0.0.1:19435', 'http://127.0.0.1.evil.test:19435']) {
+        expect(await deny(`${nativeReadPrefix}/status`, { headers: { origin: rejected } })).toBe(200);
+      }
+      for (const headers of [{ cookie: 'archive-admin=present' }, { authorization: `Bearer ${token}` },
+        { authorization: `Bearer ${token}`, 'x-unity-library-workspace': 'private-workspace' }]) {
+        expect(await deny(`${nativeReadPrefix}/cards`, { headers })).toBe(200);
+      }
+      expect(await deny(`${nativeAdminPrefix}/sources`, { headers: { authorization: `Bearer ${token}` } })).toBe(200);
+      expect(await deny(`${nativeAdminPrefix}/sources`)).toBe(401);
+      expect(await deny('/api/health')).toBe(200);
+      expect(await deny(`${nativeReadPrefix}/not-a-route`)).toBe(404);
+      for (const method of ['POST', 'PUT', 'DELETE']) expect(await deny(`${nativeReadPrefix}/cards`, { method })).toBe(404);
+      for (const method of ['GET', 'HEAD', 'POST', 'PUT', 'DELETE']) {
+        expect(await deny(`${nativeReadPrefix}/cards`, { method: 'OPTIONS', headers: {
+          'access-control-request-method': method, 'access-control-request-headers': 'authorization,x-unity-library-workspace',
+        } })).toBe(404);
+      }
+      expect(await deny(`${nativeAdminPrefix}/library-index`, { method: 'OPTIONS', headers: { 'access-control-request-method': 'POST', 'access-control-request-headers': 'authorization,content-type' } })).toBe(401);
+      const invalid = await fetch(`${listening.base}${nativeReadPrefix}/objects/invalid`, { headers: { origin } });
+      expect(invalid.status).toBe(400);
+      expect(invalid.headers.get('access-control-allow-origin')).toBe(origin);
+      await invalid.arrayBuffer();
+    } finally { await listening.close(); }
+  });
+
+  it.each(['*', 'null', 'file:///tmp/browser', 'https://browser.test/', 'https://browser.test/path', 'https://user:secret@browser.test', 'http://browser.test:80', 'https://browser.test?query'])(
+    'rejects unsafe or noncanonical configured read origin %s', readOrigin => {
+      const { scheduler } = setup();
+      expect(() => createNativeArchiveApp(archive, scheduler, [], { readOrigins: [readOrigin] })).toThrow();
+    });
 
   it('runs a source on demand, refuses a second run, and serves what it stored', async () => {
     const { app, admin, scheduler, demo } = setup();

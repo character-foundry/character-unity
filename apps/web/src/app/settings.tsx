@@ -7,6 +7,8 @@ import { useCardTags } from '@/lib/library-search';
 import { TagPicker } from '@/components/search/tag-picker';
 import { ChatAppsSettings } from '@/components/chat/chat-apps-settings';
 import { ArchiveSettings } from '@/components/archive/archive-settings';
+import { BrowserStorageSettings } from '@/features/storage/settings';
+import { useLibraryClient } from '@/lib/library-client';
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
   return (
@@ -32,6 +34,7 @@ function Segmented<T extends string>({ value, options, onChange, label }: { valu
 
 export default function SettingsPage() {
   const { settings, updateSettings } = useSettings();
+  const browserStorage = useLibraryClient().connection.profile === 'browser';
   const tags = useCardTags();
   const { hash } = useLocation();
   useEffect(() => { if (hash) document.getElementById(hash.slice(1))?.scrollIntoView(); }, [hash]);
@@ -64,6 +67,9 @@ export default function SettingsPage() {
         <Section id="chat-apps" title="Chat apps">
           <ChatAppsSettings />
         </Section>
+        {browserStorage && <Section id="browser-storage" title="Browser storage">
+          <BrowserStorageSettings />
+        </Section>}
       </div>
     </AppShell>
   );

@@ -7,6 +7,7 @@ import { inspectDatabase } from './database.js';
 import { request, transaction } from './transaction.js';
 import { createBrowserArchiveOperations, deleteImportClaims, findImportMatchInTransaction, importClaims, importStores } from './archive.js';
 import { createBrowserSearchOutbox, enqueueSearchJob } from './search-outbox.js';
+import { assetAgeKey, retirementKey } from './maintenance.js';
 
 function* get<T>(tx: IDBTransaction, store: string, id: string): Generator<IDBRequest, T | undefined, unknown> {
   return yield* request<T | undefined>(tx.objectStore(store).get(id));
@@ -26,7 +27,7 @@ function* scoped<T extends { workspaceId: string }>(tx: IDBTransaction, table: s
 }
 function* ready(tx: IDBTransaction, workspaceId: string, assetId: string) {
   const asset = yield* get<Asset>(tx, 'assets', assetId);
-  if (!asset || asset.workspaceId !== workspaceId || asset.state !== 'ready') {
+  if (!asset || asset.workspaceId !== workspaceId || asset.state !== 'ready' || (yield* get(tx, 'meta', retirementKey(asset.storageKey)))) {
     throw new StoreError('ASSET_NOT_READY', 'An asset is missing, staged, or belongs to another workspace');
   }
 }
@@ -53,7 +54,7 @@ function* insertSource(tx: IDBTransaction, card: Card, source?: CardSourceInput)
   yield* ready(tx, card.workspaceId, source.assetId);
   yield* request(tx.objectStore('sources').add({ ...source, cardId: card.id, workspaceId: card.workspaceId }));
 }
-const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources', 'deletions', 'importClaims', 'searchJobs'];
+const writeStores = ['workspaces', 'cards', 'revisions', 'assets', 'sources', 'deletions', 'importClaims', 'searchJobs', 'meta'];
 
 /** Same trusted domain contract as SQL; each write is one native IDB transaction. */
 export function createBrowserStore(db: IDBDatabase): UnityStore {
@@ -98,7 +99,11 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
     },
     getCard: (workspaceId, id) => transaction(db, ['cards', 'deletions'], 'readonly', (tx) => scoped<Card>(tx, 'cards', workspaceId, id)),
     getRevision: (workspaceId, id) => transaction(db, ['revisions'], 'readonly', (tx) => scoped<Revision>(tx, 'revisions', workspaceId, id)),
-    getAsset: (workspaceId, id) => transaction(db, ['assets'], 'readonly', (tx) => scoped<Asset>(tx, 'assets', workspaceId, id)),
+    getAsset: (workspaceId, id) => transaction(db, ['assets', 'meta'], 'readonly', function* (tx) {
+      const value = yield* scoped<Asset>(tx, 'assets', workspaceId, id);
+      if (yield* get(tx, 'meta', retirementKey(value.storageKey))) throw new StoreError('NOT_FOUND', 'Asset was retired by explicit browser cleanup');
+      return value;
+    }),
     getSource: (workspaceId, cardId) => transaction(db, ['cards', 'sources', 'deletions'], 'readonly', function* (tx) {
       yield* scoped<Card>(tx, 'cards', workspaceId, cardId);
       return (yield* get<CardSource>(tx, 'sources', cardId)) ?? null;
@@ -133,6 +138,7 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
       });
     },
     async createArchiveFork(input) {
+      if (input.chatImport) throw new StoreError('INVALID_INPUT', 'Chat import receipts require the SQL host');
       const data = snapshot(input), source = sourceSnapshot(input.source), pin = validate.archivePin(input.pin), workspaceId = validate.text(input.workspaceId, 'workspaceId');
       const referenceId = input.referenceId === undefined ? null : validate.text(input.referenceId, 'referenceId');
       const card: Card = { id: crypto.randomUUID(), workspaceId, headRevisionId: crypto.randomUUID(),
@@ -168,6 +174,7 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
       });
     },
     async forkCard(input, syncContext) {
+      if (input.chatImport) throw new StoreError('INVALID_INPUT', 'Chat import receipts require the SQL host');
       if (syncContext) throw new StoreError('INVALID_INPUT', 'Signed sync writes require a SQL host');
       if (input.publication) throw new StoreError('INVALID_INPUT', 'Hub publication guards require the shared SQL store');
       const data = snapshot(input), source = sourceSnapshot(input.source);
@@ -382,8 +389,9 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
       const id = crypto.randomUUID();
       const asset: Asset = { id, workspaceId: validate.text(input.workspaceId, 'workspaceId'), hash: validate.hash(input.hash),
         byteLength: validate.count(input.byteLength, 'byteLength'), mediaType: validate.text(input.mediaType, 'mediaType'), storageKey: `assets/${id}`, state: 'staged' };
-      return transaction(db, ['workspaces', 'assets'], 'readwrite', function* (tx) {
+      return transaction(db, ['workspaces', 'assets', 'meta'], 'readwrite', function* (tx) {
         yield* workspace(tx, asset.workspaceId);
+        yield* request(tx.objectStore('meta').add({ key: assetAgeKey(asset.id), createdAt: new Date().toISOString() }));
         yield* request(tx.objectStore('assets').add(asset)); return asset;
       });
     },
@@ -391,10 +399,15 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
       const id = crypto.randomUUID(), asset: Asset = { id, workspaceId: validate.text(input.workspaceId, 'workspaceId'), hash: validate.hash(input.hash),
         byteLength: validate.count(input.byteLength, 'byteLength'), mediaType: validate.text(input.mediaType, 'mediaType'), storageKey: `assets/${id}`, state: 'staged' };
       const key = [asset.workspaceId, asset.hash, asset.byteLength, asset.mediaType];
-      return transaction(db, ['workspaces', 'assets', 'sharedAssets'], 'readwrite', function* (tx) {
+      return transaction(db, ['workspaces', 'assets', 'sharedAssets', 'meta'], 'readwrite', function* (tx) {
         yield* workspace(tx, asset.workspaceId);
         const previous = yield* request<{ assetId: string } | undefined>(tx.objectStore('sharedAssets').get(key));
-        if (previous) return yield* scoped<Asset>(tx, 'assets', asset.workspaceId, previous.assetId);
+        if (previous) {
+          const existing = yield* scoped<Asset>(tx, 'assets', asset.workspaceId, previous.assetId);
+          if (!(yield* get(tx, 'meta', retirementKey(existing.storageKey)))) return existing;
+          yield* request(tx.objectStore('sharedAssets').delete(key));
+        }
+        yield* request(tx.objectStore('meta').add({ key: assetAgeKey(asset.id), createdAt: new Date().toISOString() }));
         yield* request(tx.objectStore('assets').add(asset));
         yield* request(tx.objectStore('sharedAssets').add({ workspaceId: asset.workspaceId, hash: asset.hash, byteLength: asset.byteLength,
           mediaType: asset.mediaType, assetId: asset.id })); return asset;
@@ -403,8 +416,9 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
     async completeAsset(input) {
       const { workspaceId, assetId } = input;
       const hash = validate.hash(input.measuredHash), byteLength = validate.count(input.measuredByteLength, 'measuredByteLength');
-      return transaction(db, ['assets'], 'readwrite', function* (tx) {
+      return transaction(db, ['assets', 'meta'], 'readwrite', function* (tx) {
         const asset = yield* scoped<Asset>(tx, 'assets', workspaceId, assetId);
+        if (yield* get(tx, 'meta', retirementKey(asset.storageKey))) throw new StoreError('ASSET_NOT_READY', 'Asset was retired by explicit browser cleanup');
         if (asset.hash !== hash || asset.byteLength !== byteLength) throw new StoreError('INTEGRITY', 'Uploaded bytes do not match the staged asset');
         asset.state = 'ready'; yield* request(tx.objectStore('assets').put(asset)); return asset;
       });

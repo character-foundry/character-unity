@@ -16,6 +16,17 @@ import type { LibraryIndex } from '../library-index.js';
 export const nativeReadPrefix = '/api/archive/v2';
 export const nativeAdminPrefix = '/api/archive/admin/v1';
 
+/** Public browser reads are opt-in exact origins, never patterns or credentials. */
+export function validateReadOrigins(values: readonly string[]): string[] {
+  return [...new Set(values.map(value => {
+    const url = new URL(value);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.origin !== value) {
+      throw new Error('Archive read origins must be exact HTTP(S) origins without credentials');
+    }
+    return value;
+  }))];
+}
+
 class RequestError extends Error {
   constructor(public readonly status: 400 | 401 | 404 | 409 | 503, public readonly code: string, message: string) { super(message); }
 }
@@ -81,7 +92,8 @@ function sameToken(given: string, expected: string) {
  * The native Archive's HTTP surface. Reads are open to the local app; the admin routes (source settings,
  * credentials, runs, blocking) need the admin token and exist so the app's Settings page can drive scraping.
  */
-export function createNativeArchiveApp(archive: ArchiveBackend, scheduler: Scheduler, plugins: readonly ScraperPlugin[], options: { adminToken?: string; libraryIndex?: LibraryIndex } = {}) {
+export function createNativeArchiveApp(archive: ArchiveBackend, scheduler: Scheduler, plugins: readonly ScraperPlugin[], options: { adminToken?: string; libraryIndex?: LibraryIndex; readOrigins?: readonly string[] } = {}) {
+  const origins = new Set(validateReadOrigins(options.readOrigins ?? []));
   const app = new Hono();
   app.get('/api/health', (c) => c.json({ service: 'unity-archive', status: 'ok', stage: 'native' }));
   app.onError((error, c) => {
@@ -92,6 +104,22 @@ export function createNativeArchiveApp(archive: ArchiveBackend, scheduler: Sched
     if (error instanceof RunConflictError) return c.json({ error: { code: 'RUNNING', message: error.message, runId: error.runId } }, 409);
     console.log(JSON.stringify({ event: 'archive-request-failed', message: error instanceof Error ? error.message : String(error) }));
     return c.json({ error: { code: 'UNAVAILABLE', message: 'The Archive could not answer' } }, 503);
+  });
+
+  app.use(`${nativeReadPrefix}/*`, async (c, next) => {
+    await next();
+    const vary = c.res.headers.get('vary')?.split(',').map(value => value.trim()).filter(Boolean) ?? [];
+    if (!vary.some(value => value.toLowerCase() === 'origin')) vary.push('Origin');
+    c.header('vary', vary.join(', '));
+    const origin = c.req.header('origin');
+    // Public readers use simple GETs with credentials:'omit'. In particular,
+    // never expose trusted-proxy workspace searches or token-bearing requests.
+    const publicPath = /^\/api\/archive\/v2\/(?:status|identity|tags|cards(?:\/[^/]+(?:\/files)?)?|objects\/[^/]+)$/.test(c.req.path);
+    if (origin && origins.has(origin) && publicPath && ['GET', 'HEAD'].includes(c.req.method) &&
+        ['authorization', 'cookie', 'x-unity-library-workspace'].every(header => c.req.header(header) === undefined)) {
+      c.header('access-control-allow-origin', origin);
+    }
+    // No credentials, write methods, admin routes or preflight grants.
   });
 
   // ---- Read ----
