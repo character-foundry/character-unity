@@ -1,0 +1,9 @@
+{
+  "MT01": "Unused catalogs read as version zero without writes; metadata edits preserve original cards, roots and search jobs.",
+  "MT02": "Replacement snapshots and normalizes input, preserves first member spelling, persists and isolates workspaces.",
+  "MT03": "Atomic expected-version CAS admits one competing writer and refuses stale replacement.",
+  "MT04": "Strict bounded catalog validation rejects invalid or duplicate groups without partial replacement.",
+  "MT05": "Session revocation is checked in the same SQL commit and prevents catalog mutation.",
+  "MT06": "Populated schema16 upgrades preserve original documents, roots and existing search work.",
+  "MT07": "Explicit IDs resolve to bounded name-or-member groups with catalog-version pins; unknown IDs fail closed."
+}

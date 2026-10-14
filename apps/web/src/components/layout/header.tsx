@@ -7,7 +7,7 @@ import { libraryChanged, readSearch, useDebouncedText, writeSearch } from '@/lib
 import { cn } from '@/lib/utils/cn';
 
 const libraryPaths = new Set(['/', '/explore', '/archive']);
-const pages = [{ name: 'Library', href: '/' }, { name: 'Archive', href: '/archive' }, { name: 'Content', href: '/content' }, { name: 'Stats', href: '/stats' }, { name: 'Sharing', href: '/sharing' }, { name: 'Remotes', href: '/remotes' }];
+const pages = [{ name: 'Library', href: '/' }, { name: 'Archive', href: '/archive' }, { name: 'Content', href: '/content' }, { name: 'Meta-tags', href: '/meta-tags' }, { name: 'Stats', href: '/stats' }, { name: 'Sharing', href: '/sharing' }, { name: 'Remotes', href: '/remotes' }];
 
 const action = 'flex h-8 items-center gap-1.5 rounded-md px-2 text-[13px] text-starlight/60 transition-colors hover:bg-cosmic-teal hover:text-starlight disabled:opacity-50';
 // The global input rule is unlayered and outranks utilities; the field draws its own frame.
@@ -125,7 +125,7 @@ export function Header() {
           return (
             // Colors sit on the inner span: the global link color is unlayered and outranks utilities on the link.
             <Link key={item.href} to={item.href} aria-current={active ? 'page' : undefined}
-              className={cn('group rounded-md px-2.5 py-1 text-[13px] font-medium', active && 'bg-cosmic-teal')}>
+              className={cn('group shrink-0 whitespace-nowrap rounded-md px-2.5 py-1 text-[13px] font-medium', active && 'bg-cosmic-teal')}>
               <span className={cn('transition-colors', active ? 'text-starlight' : 'text-starlight/50 group-hover:text-starlight')}>{item.name}</span>
             </Link>
           );

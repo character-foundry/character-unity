@@ -84,6 +84,7 @@ export async function freshWorkspace(page: Page) {
   if (await account.getAttribute('aria-expanded') !== 'true') await account.click();
   await expect(page.getByLabel('Workspace', { exact: true })).toHaveValue(workspace.id);
   await page.keyboard.press('Escape');
+  return workspace;
 }
 
 export async function save(page: Page) {

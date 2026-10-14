@@ -14,6 +14,7 @@ import SharingPage from '@/features/sharing/page';
 import RemotesPage from '@/features/remotes/page';
 import StatisticsPage from '@/features/statistics/page';
 import ContentPage from '@/features/content/page';
+import MetaTagsPage from '@/features/meta-tags/page';
 import { SessionProvider } from '@/lib/session-provider';
 import { LibraryClientProvider, useLibraryClient } from '@/lib/library-client';
 import { createWebSessionRuntime } from '@/lib/runtime';
@@ -55,6 +56,7 @@ function NativeRoutes() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/stats" element={<StatisticsPage />} />
           <Route path="/content" element={<ContentPage />} />
+          <Route path="/meta-tags" element={<MetaTagsPage />} />
           <Route path="/sharing" element={<SharingPage />} />
           <Route path="/remotes" element={<RemotesPage />} />
           <Route path="/chat-apps" element={<Navigate to="/settings#chat-apps" replace />} />

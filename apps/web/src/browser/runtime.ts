@@ -1,4 +1,5 @@
 import { createApi } from '@character-unity/api';
+import { createMetaTagService } from '@character-unity/api/meta-tags';
 import { createAssetService } from '@character-unity/assets';
 import { openBrowserStorage } from '@character-unity/browser-storage';
 import { createCardService } from '@character-unity/cards';
@@ -32,6 +33,7 @@ export function createBrowserRuntime(options: { archive?: Pick<NativeArchiveOpti
       }),
         archiveReader ? { archive: archiveReader } : {});
       const app = createApi({ store: current.store, cards,
+        metaTags: createMetaTagService(current.store),
         statistics: createStatisticsService(current.store, current.statistics),
         content: createContentService(current.store, current.content, { sharing: false }),
         ...(archive ? { nativeArchive: createNativeArchiveService(cards, archive) } : {}),

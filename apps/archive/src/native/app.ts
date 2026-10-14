@@ -12,6 +12,7 @@ import type { ArchiveFlag, ArchiveQuery } from './query.js';
 import { validateIdentityQuery } from '@character-unity/archive-client/native';
 import { bodyLimit } from 'hono/body-limit';
 import type { LibraryIndex } from '../library-index.js';
+import { normalizeTagGroupFilters } from '@character-unity/store/library-query';
 
 export const nativeReadPrefix = '/api/archive/v2';
 export const nativeAdminPrefix = '/api/archive/admin/v1';
@@ -44,7 +45,7 @@ export type ArchiveBackend = Pick<NativeArchive, 'card' | 'identity' | 'object' 
 /** Parses the card query the read API accepts (the same names the web app uses). */
 export function readQuery(url: string): ArchiveQuery {
   const params = new URL(url).searchParams;
-  const allowed = ['q', 'mode', 'filter', 'snapshot', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'creators', 'sort', 'offset', 'limit'];
+  const allowed = ['q', 'mode', 'filter', 'snapshot', 'tags', 'match', 'exclude', 'tagGroups', 'excludeTagGroups', 'has', 'provider', 'minTokens', 'creators', 'sort', 'offset', 'limit'];
   if (url.length > 20_000 || [...params.keys()].some((key) => !allowed.includes(key) || params.getAll(key).length !== 1)) invalid('Invalid Archive query');
   const has = list(params.get('has'));
   if (has.some((flag) => !isArchiveFlag(flag))) invalid('Unknown Archive flag');
@@ -68,7 +69,12 @@ export function readQuery(url: string): ArchiveQuery {
   const snapshot = params.get('snapshot');
   if (snapshot !== null && !/^[a-f0-9]{64}$/.test(snapshot)) invalid('Invalid Archive snapshot');
   if (provider && !/^[a-z0-9-]{1,32}$/.test(provider)) invalid('Invalid provider');
-  const query: ArchiveQuery = { q, tags: list(params.get('tags')), tagMode: params.get('match') === 'any' ? 'any' : 'all',
+  let groups: ReturnType<typeof normalizeTagGroupFilters>;
+  try { groups = normalizeTagGroupFilters({
+    ...(params.has('tagGroups') ? { tagGroups: JSON.parse(params.get('tagGroups')!) } : {}),
+    ...(params.has('excludeTagGroups') ? { excludeTagGroups: JSON.parse(params.get('excludeTagGroups')!) } : {}),
+  }); } catch (error) { invalid(error instanceof Error ? error.message : 'Invalid tag groups'); }
+  const query: ArchiveQuery = { q, tags: list(params.get('tags')), tagMode: params.get('match') === 'any' ? 'any' : 'all', ...groups,
     exclude: list(params.get('exclude')), has: has as ArchiveFlag[], creators: list(params.get('creators')).slice(0, 500) };
   if (params.has('sort')) query.sort = sort;
   if (provider) query.provider = provider;

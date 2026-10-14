@@ -5,6 +5,8 @@ import { libraryChanged, PAGE_SIZE, useLibraryVersion, writeSearch } from './lib
 import type { LibrarySearch } from './library-search';
 import { archiveSearchParams } from './archive-search';
 import type { ArchiveStatus } from './archive-search';
+import { readMetaTags } from './meta-tags';
+import { resolveMetaTagFilters } from '@character-unity/store/meta-tags';
 
 /** A card in the native Archive (scraped from a source), as the API lists it. */
 export interface ArchiveCard {
@@ -111,6 +113,7 @@ function remember(archiveViews: Map<string, ArchiveView>, key: string, view: Arc
 
 /** Abort stale reads and keep paging bound to the submitted URL query, never to an edited form. */
 export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
+  const library = useLibraryClient();
   const archiveApi = useArchiveApi(), archiveViews = caches.get(archiveApi)!.views;
   const key = `${archiveApi.scopeKey}|${writeSearch(search)}|${JSON.stringify(hidden)}`;
   const version = useLibraryVersion();
@@ -134,7 +137,10 @@ export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly s
     void (async () => {
       const currentStatus = await archiveApi.status(controller.signal); controller.signal.throwIfAborted();
       setStatus({ owner: archiveApi, status: currentStatus });
-      const params = archiveSearchParams(search, hidden, currentStatus); fetchParams.current = params;
+      const groups = search.metaTags.length || search.excludeMetaTags.length
+        ? resolveMetaTagFilters(await readMetaTags(library, controller.signal), { metaTags: search.metaTags, excludeMetaTags: search.excludeMetaTags }) : {};
+      controller.signal.throwIfAborted();
+      const params = archiveSearchParams(search, hidden, currentStatus, groups); fetchParams.current = params;
       // Native offset pages are not immutable snapshots. Refresh a remembered range before paging it.
       const target = Math.min(480, Math.max(PAGE_SIZE, remembered ? archivePageOffset(remembered) : 0));
       let combined: ArchivePage | null = null;
@@ -162,7 +168,7 @@ export function useArchiveFeed(search: LibrarySearch, hidden: { tags: readonly s
     });
     return () => { controller.abort(); pending.current?.abort(); pending.current = null; };
     // The key captures every submitted field and hidden-tag policy.
-  }, [archiveApi, archiveViews, key, version, attempt]);
+  }, [archiveApi, archiveViews, key, version, attempt, library]);
 
   const hasMore = !!view && archivePageOffset(view) < view.total;
   const loadMore = useCallback(async () => {

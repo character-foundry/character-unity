@@ -1,5 +1,6 @@
 import type { ArchiveQuery, ArchiveSort } from '../native/query.js';
 import { NativeArchiveError } from '../native/store.js';
+import { fold, normalizeTagGroupFilters } from '@character-unity/store/library-query';
 
 export const existingSort: Record<ArchiveSort, string> = {
   updated: 'c.lastModified DESC', added: 'c.firstDownloadedAt DESC', newest: 'c.createdAt DESC', oldest: 'c.createdAt ASC',
@@ -17,12 +18,18 @@ export function existingFilter(query: ArchiveQuery, bookkeeping: boolean, ids?: 
   }
   if (query.provider) { where.push("coalesce(c.source,'chub') = ?"); params.push(query.provider); }
   if (query.minTokens) { where.push('c.tokenCount >= ?'); params.push(query.minTokens); }
-  const tags = [...new Set((query.tags ?? []).map((value) => value.trim().toLowerCase()))];
-  if (query.tagMode === 'any' && tags.length) {
-    where.push(`EXISTS (SELECT 1 FROM card_tags t WHERE t.cardId = c.id AND t.normalizedTag IN (${tags.map(() => '?').join(',')}))`); params.push(...tags);
-  } else for (const tag of tags) { where.push('EXISTS (SELECT 1 FROM card_tags t WHERE t.cardId = c.id AND t.normalizedTag = ?)'); params.push(tag); }
-  const exclude = [...new Set((query.exclude ?? []).map((value) => value.trim().toLowerCase()))];
-  if (exclude.length) { where.push(`NOT EXISTS (SELECT 1 FROM card_tags t WHERE t.cardId = c.id AND t.normalizedTag IN (${exclude.map(() => '?').join(',')}))`); params.push(...exclude); }
+  const tags = [...new Set((query.tags ?? []).map((value) => fold(value.trim())).filter(Boolean))];
+  const groups = normalizeTagGroupFilters(query), included: string[] = [];
+  for (const group of [...tags.map((tag) => [tag]), ...groups.tagGroups]) {
+    included.push('EXISTS (SELECT 1 FROM card_tags t WHERE t.cardId = c.id AND lower(t.tag) IN (SELECT value FROM json_each(?)))');
+    params.push(JSON.stringify(group));
+  }
+  if (included.length) where.push(`(${included.join(query.tagMode === 'any' ? ' OR ' : ' AND ')})`);
+  const exclude = [...new Set((query.exclude ?? []).map((value) => fold(value.trim())).filter(Boolean))];
+  for (const group of [exclude, ...groups.excludeTagGroups]) if (group.length) {
+    where.push('NOT EXISTS (SELECT 1 FROM card_tags t WHERE t.cardId = c.id AND lower(t.tag) IN (SELECT value FROM json_each(?)))');
+    params.push(JSON.stringify(group));
+  }
   const columns = { greetings: 'hasAlternateGreetings', lorebook: 'hasLorebook', gallery: 'hasGallery', embeddedImages: 'hasEmbeddedImages',
     expressions: 'hasExpressions', systemPrompt: 'hasSystemPrompt', exampleDialogues: 'hasExampleDialogues' };
   for (const flag of new Set(query.has ?? [])) {

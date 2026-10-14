@@ -4,9 +4,10 @@ import type { Actor } from '@character-unity/cards';
 import type { NativeArchiveService } from '@character-unity/cards/native-archive';
 import type { Authenticate } from './cards.js';
 import { json } from './body.js';
+import { normalizeTagGroupFilters } from '@character-unity/store/library-query';
 
 type Env = { Variables: { actor: Actor } };
-const queryKeys = ['q', 'mode', 'filter', 'snapshot', 'tags', 'match', 'exclude', 'has', 'provider', 'minTokens', 'sort', 'offset', 'limit'];
+const queryKeys = ['q', 'mode', 'filter', 'snapshot', 'tags', 'match', 'exclude', 'tagGroups', 'excludeTagGroups', 'has', 'provider', 'minTokens', 'sort', 'offset', 'limit'];
 
 /**
  * The native Archive, read through this host: browsing, files for the library, and Settings' scraper
@@ -29,6 +30,12 @@ export function nativeArchiveRoutes(options: { nativeArchive?: NativeArchiveServ
   routes.get(`${base}/cards`, async (c) => {
     const params = new URL(c.req.url).searchParams;
     if (c.req.url.length > 20_000 || [...params.keys()].some((key) => !queryKeys.includes(key) || params.getAll(key).length !== 1)) throw new CardError('INVALID_INPUT', 'Invalid Archive query');
+    let groups: ReturnType<typeof normalizeTagGroupFilters>;
+    try { groups = normalizeTagGroupFilters({
+      ...(params.has('tagGroups') ? { tagGroups: JSON.parse(params.get('tagGroups')!) } : {}),
+      ...(params.has('excludeTagGroups') ? { excludeTagGroups: JSON.parse(params.get('excludeTagGroups')!) } : {}),
+    }); } catch (error) { throw new CardError('INVALID_INPUT', error instanceof Error ? error.message : 'Invalid tag groups'); }
+    for (const key of ['tagGroups', 'excludeTagGroups'] as const) if (params.has(key)) params.set(key, JSON.stringify(groups[key]));
     return c.json(await archive().list(c.get('actor'), c.req.param('workspaceId'), params, c.req.raw.signal));
   });
   routes.get(`${base}/cards/:id`, async (c) => {

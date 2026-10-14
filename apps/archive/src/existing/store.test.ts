@@ -15,6 +15,8 @@ import { createNativeArchiveApp, nativeReadPrefix } from '../native/app.js';
 import { createScheduler } from '../native/scheduler.js';
 import { openLibraryIndex } from '../library-index.js';
 import type { LibraryIndex } from '../library-index.js';
+import { serializeNativeArchiveQuery } from '@character-unity/archive-client/native';
+import type { NativeArchiveQuery } from '@character-unity/archive-client/native';
 
 const encoder = new TextEncoder();
 const image = new Uint8Array(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==', 'base64'));
@@ -697,6 +699,105 @@ describe('Archive using the existing database and files', () => {
     expect((await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland&limit=1&offset=1&snapshot=${own.snapshot}`, { headers })).status).toBe(409);
     expect(await (await app.request(`${nativeReadPrefix}/cards?mode=semantic&q=woodland`, { headers })).json()).toMatchObject({ total: 2 });
     await libraryIndex.close();
+  });
+
+  it('serves exact grouped tags through real existing Archive HTTP searches without rewriting legacy files or projections', async () => {
+    const tags = [
+      ['Fantasy', 'Elf', 'Ä', 'sea, sky'], ['Fantasy', 'Mermaid', 'ä', 'sea', 'sky', `t${(999).toString(36)}`],
+      ['Fantasy', 'Dragon', 'ä'], ['SciFi', 'Robot'], ['Fantasy', 'Elf', "creator's pick"],
+    ];
+    const names = ['Woodland Elf', 'Woodland Mermaid', 'Woodland Dragon', 'Woodland Robot', 'Woodland Artist'];
+    for (const [index, name] of names.entries()) seed(index + 1, { name, source: 'ct', topics: tags[index]!.join(', '), description: 'A woodland map keeper.' });
+    await original(1, 'json', json(names[0]));
+    sql((db) => {
+      db.prepare('DELETE FROM card_tags').run();
+      const addTag = db.prepare('INSERT INTO card_tags(cardId,tag,normalizedTag) VALUES (?,?,?)');
+      const addCard = db.prepare("INSERT INTO cards(id,name,source,topics) VALUES (?,'Outside the indexed fixture','chub','Ä')");
+      const addProjection = db.prepare("INSERT INTO cards(id,name,description,source,topics,lastModified) VALUES (?,'Woodland candidate','A woodland map keeper.','wyvern','river, cloud','2026-10-01T00:00:00Z')");
+      db.transaction(() => {
+        for (const [index, members] of tags.entries()) for (const tag of members) addTag.run(index + 1, tag, tag.toLowerCase());
+        // These nearest vectors are false positives for two separate tags.
+        // Only the distant row has both exact members in Archive metadata.
+        for (let id = 20_000; id <= 20_400; id++) { addProjection.run(id); addTag.run(id, 'river, cloud', 'river, cloud'); }
+        addProjection.run(30_000); addTag.run(30_000, 'river', 'river'); addTag.run(30_000, 'cloud', 'cloud');
+        // A wider exact metadata subset must refuse rather than truncate IDs
+        // or trust the ambiguous Unicode-folded projection's top-k matches.
+        for (let id = 100_000; id <= 110_000; id++) { addCard.run(id); addTag.run(id, 'Ä', 'ä'); }
+      })();
+      db.exec("CREATE TABLE card_embedding_meta(model_name TEXT,dims INTEGER); INSERT INTO card_embedding_meta VALUES ('group-http-fixture',2)");
+    });
+    const rows = sql((db) => db.prepare("SELECT * FROM cards WHERE source IN ('ct','wyvern') ORDER BY id").all()) as Record<string, unknown>[];
+    const documents = rows.map((row) => buildSearchDocument(row, Date.UTC(2026, 9, 13)));
+    const lanceDirectory = join(directory, 'search.lance'), connection = await connect(lanceDirectory);
+    const lexical = await connection.createTable('cards', makeArrowTable(documents, { schema: searchDocumentSchema }));
+    await lexical.createIndex('searchText', { config: Index.fts({ withPosition: true }) }); lexical.close();
+    const schema = new Schema([new Field('card_id', new Utf8(), false), new Field('section', new Utf8(), false), new Field('matchText', new Utf8(), false),
+      ...searchDocumentSchema.fields, new Field('vector', new FixedSizeList(2, new Field('item', new Float32(), false)), false)]);
+    const positions = [[1, 0], [0, 1], [0.8, 0.6], [0.6, 0.8], [0.4, 0.9]];
+    const vectors = await connection.createTable('card_vectors', makeArrowTable(documents.map((doc, index) => ({ ...doc,
+      card_id: doc.id, section: 'description', matchText: doc.description, vector: positions[index] ?? (doc.id === '30000' ? [0, 1] : [1, 0]) })), { schema }));
+    vectors.close(); connection.close();
+    let embeddings = 0;
+    const openSearch = () => openExistingSearch({ lanceDirectory, databasePath, embedder: {
+      space: { model: 'group-http-fixture', dimensions: 2, sourceDimensions: 2, queryInstruction: '' },
+      async embed() { embeddings++; return [1, 0]; },
+    } });
+    const store = await open(true, await openSearch());
+    let app = createNativeArchiveApp(store, createScheduler(store, []), []);
+    const request = (query: NativeArchiveQuery) => app.request(`${nativeReadPrefix}/cards?${serializeNativeArchiveQuery(query)}`);
+    async function page(query: NativeArchiveQuery) {
+      const response = await request({ provider: 'ct', ...query });
+      const body = await response.json() as { cards: { id: string }[]; total: number; snapshot: string };
+      expect(response.status, JSON.stringify({ query, body })).toBe(200);
+      return body;
+    }
+    const tablesBefore = tableInventory(), filesBefore = await fileInventory(filesDirectory), objectsBefore = await fileInventory(objectsDirectory), indexBefore = await fileInventory(lanceDirectory);
+    for (const mode of ['browse', 'semantic'] as const) {
+      const base = { mode, ...(mode === 'semantic' ? { q: 'woodland' } : {}) };
+      for (const [filter, ids] of [
+        [{ tags: [' FANTASY '], tagGroups: [[' ELF ', 'mermaid']] }, ['1', '2', '5']],
+        [{ tags: ['scifi'], tagGroups: [['mermaid']], tagMode: 'any' }, ['2', '4']],
+        [{ tags: ['fantasy'], excludeTagGroups: [['elf', 'mermaid']] }, ['3']],
+        [{ tagGroups: [['Ä']] }, ['1']], [{ tagGroups: [['ä']] }, ['2', '3']],
+        [{ tagGroups: [['sea, sky']] }, ['1']], [{ tagGroups: [['sea'], ['sky']] }, ['2']],
+        [{ tags: ['fantasy'], excludeTagGroups: [['sea']] }, ['1', '3', '5']],
+        [{ tags: ['fantasy'], excludeTagGroups: [['Ä']] }, ['2', '3', '5']],
+      ] satisfies [NativeArchiveQuery, string[]][]) {
+        const result = await page({ ...base, ...filter });
+        expect(result.total).toBe(ids.length);
+        expect(result.cards.map((card) => card.id).sort()).toEqual(ids);
+      }
+    }
+    const literalQuery = await page({ mode: 'lexical', q: 'woodland AND NOT robot', tags: ['scifi'], tagGroups: [['mermaid']], tagMode: 'any', filter: 'source = ct AND tokenCount >= 10' });
+    expect(literalQuery).toMatchObject({ total: 1, cards: [{ id: '2' }] });
+    const beforeTopK = await page({ provider: 'wyvern', mode: 'semantic', q: 'woodland', tagGroups: [['river'], ['cloud']], limit: 1 });
+    expect(beforeTopK).toMatchObject({ total: 1, cards: [{ id: '30000' }] });
+    const tagGroups = Array.from({ length: 10 }, (_, group) => Array.from({ length: 100 }, (_, index) => `t${(group * 100 + index).toString(36)}`));
+    expect(JSON.stringify(tagGroups).length).toBeGreaterThan(4096);
+    const large = await page({ mode: 'lexical', q: 'woodland', filter: 'source = ct', tagGroups, tagMode: 'any' });
+    expect(large).toMatchObject({ total: 1, cards: [{ id: '2' }] });
+    const firstQuery: NativeArchiveQuery = { provider: 'ct', mode: 'semantic', q: 'woodland', tagGroups: [['elf', 'mermaid']], limit: 1 };
+    const first = await page(firstQuery);
+    expect(first).toMatchObject({ total: 3, cards: [{ id: '1' }] });
+    expect((await request({ ...firstQuery, offset: 1, snapshot: first.snapshot })).status).toBe(200);
+    const changed = await request({ ...firstQuery, tagGroups: [['dragon']], offset: 1, snapshot: first.snapshot });
+    expect(changed.status).toBe(409);
+    expect(await changed.json()).toMatchObject({ error: { code: 'SNAPSHOT_CHANGED' } });
+    const previousEmbeddings = embeddings;
+    for (const mode of ['browse', 'semantic'] as const) {
+      const refused = await request({ provider: 'chub', mode, tagGroups: [['Ä']], ...(mode === 'semantic' ? { q: 'woodland' } : {}) });
+      expect(refused.status).toBe(503);
+      expect(await refused.json()).toMatchObject({ error: { code: 'UNAVAILABLE' } });
+    }
+    expect(embeddings).toBe(previousEmbeddings);
+    store.close(); archive = undefined;
+    const reopened = await open(true, await openSearch());
+    app = createNativeArchiveApp(reopened, createScheduler(reopened, []), []);
+    expect(await page({ mode: 'semantic', q: 'woodland', tagGroups: [['sea, sky']] })).toMatchObject({ total: 1, cards: [{ id: '1' }] });
+    expect(tableInventory()).toEqual(tablesBefore);
+    expect(await fileInventory(filesDirectory)).toEqual(filesBefore);
+    expect(await fileInventory(objectsDirectory)).toEqual(objectsBefore);
+    expect(await fileInventory(lanceDirectory)).toEqual(indexBefore);
   });
 
   it('rejects writes in read-only mode and detects a legacy file changed after its object was registered', async () => {

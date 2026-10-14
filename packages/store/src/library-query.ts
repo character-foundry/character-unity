@@ -134,7 +134,7 @@ const str = (path: string) => `lower(CASE WHEN json_type(${doc}, '${path}') = 't
 const textPaths = ['$.data.name', '$.data.creator', '$.data.description', '$.data.creator_notes', '$.data.personality', '$.data.scenario', '$.data.first_mes'];
 const tagValues = `(SELECT group_concat(lower(t.value), char(10)) FROM json_each(${doc}, '$.data.tags') t WHERE t.type = 'text')`;
 const searchText = `(${[...textPaths.map(str), `coalesce(${tagValues}, '')`].join(` || char(10) || `)})`;
-const hasTag = (placeholders: string) => `EXISTS (SELECT 1 FROM json_each(${doc}, '$.data.tags') t WHERE t.type = 'text' AND lower(t.value) IN (${placeholders}))`;
+const hasTag = (placeholders: string) => `EXISTS (SELECT 1 FROM json_each(${doc}, '$.data.tags') t WHERE json_type(${doc}, '$.data.tags') = 'array' AND t.type = 'text' AND lower(t.value) IN (${placeholders}))`;
 const arrayLength = (path: string) => `coalesce(CASE WHEN json_type(${doc}, '${path}') = 'array' THEN json_array_length(${doc}, '${path}') END, 0)`;
 const blank = ` ' ' || char(9) || char(10) || char(13)`;
 const imageText = `(${['$.data.description', '$.data.first_mes', '$.data.creator_notes', '$.data.scenario', '$.data.personality', '$.data.mes_example'].map(str).join(' || char(10) || ')}
@@ -181,6 +181,10 @@ export interface LibraryFilter {
   tags?: readonly string[] | undefined;
   tagMode?: 'all' | 'any' | undefined;
   excludeTags?: readonly string[] | undefined;
+  /** Resolved named groups: members are OR; groups combine with literal tags using tagMode. */
+  tagGroups?: readonly (readonly string[])[] | undefined;
+  /** Any matching member of an excluded group rejects the card. */
+  excludeTagGroups?: readonly (readonly string[])[] | undefined;
   has?: readonly LibraryFlag[] | undefined;
   fork?: 'only' | 'none' | undefined;
   favorite?: 'fav' | 'not_fav' | undefined;
@@ -193,18 +197,44 @@ function cleanTags(tags: readonly string[] | undefined): string[] {
   return [...new Set((tags ?? []).map((tag) => fold(tag.trim())).filter(Boolean))];
 }
 
+/** Portable validation for resolved filters, never a catalog read or a tag rewrite.
+ * Bounds apply before deduplication; canonical ordering also pins paged searches. */
+export function normalizeTagGroupFilters(input: { tagGroups?: unknown; excludeTagGroups?: unknown }): { tagGroups: string[][]; excludeTagGroups: string[][] } {
+  let groups = 0, members = 0;
+  function normalized(value: unknown): string[][] {
+    if (value === undefined) return [];
+    if (!Array.isArray(value) || (groups += value.length) > 20) throw new StoreError('INVALID_INPUT', 'Select at most 20 tag groups across include and exclude');
+    const result = Array.from(value, (group: unknown) => {
+      if (!Array.isArray(group) || !group.length || group.length > 101 || (members += group.length) > 1000) {
+        throw new StoreError('INVALID_INPUT', 'Tag groups need 1–101 members each and at most 1000 members in total');
+      }
+      return [...new Set(Array.from(group, (member: unknown) => {
+        if (typeof member !== 'string' || !member.trim() || member.length > 128) throw new StoreError('INVALID_INPUT', 'Tag group members need 1–128 characters');
+        return fold(member.trim());
+      }))].sort();
+    });
+    return [...new Map(result.map((group) => [JSON.stringify(group), group])).values()].sort((a, b) => {
+      const left = JSON.stringify(a), right = JSON.stringify(b); return left < right ? -1 : left > right ? 1 : 0;
+    });
+  }
+  const tagGroups = normalized(input.tagGroups), excludeTagGroups = normalized(input.excludeTagGroups);
+  return { tagGroups, excludeTagGroups };
+}
+
 /** WHERE fragments over `c` (unity_cards) joined to `r` (its head revision). */
 export function libraryFilterSql(filter: LibraryFilter, options: { externalForks?: boolean; sourceExpression?: string } = {}): { where: string[]; params: (string | number)[] } {
   const where: string[] = [], params: (string | number)[] = [];
   const query = parseLibraryQuery(filter.q ?? '');
   if (query) where.push(nodeSql(query, params));
-  const include = cleanTags(filter.tags);
-  if (include.length) {
-    if (filter.tagMode === 'any') { where.push(hasTag(include.map(() => '?').join(', '))); params.push(...include); }
-    else for (const tag of include) { where.push(hasTag('?')); params.push(tag); }
+  const include = cleanTags(filter.tags), groups = normalizeTagGroupFilters(filter);
+  const included = [...include.map((tag) => [tag]), ...groups.tagGroups];
+  if (included.length) {
+    const any = filter.tagMode === 'any';
+    where.push(`${any ? 'EXISTS' : 'NOT EXISTS'} (SELECT 1 FROM json_each(?) g WHERE ${any ? '' : 'NOT '}${hasTag('SELECT value FROM json_each(g.value)')})`);
+    params.push(JSON.stringify(included));
   }
-  const exclude = cleanTags(filter.excludeTags);
-  if (exclude.length) { where.push(`NOT ${hasTag(exclude.map(() => '?').join(', '))}`); params.push(...exclude); }
+  const exclude = cleanTags([...(filter.excludeTags ?? []), ...groups.excludeTagGroups.flat()]);
+  if (exclude.length) { where.push(`NOT ${hasTag('SELECT value FROM json_each(?)')}`); params.push(JSON.stringify(exclude)); }
   const flagSql: Record<LibraryFlag, string> = {
     greetings: `${arrayLength('$.data.alternate_greetings')} > 0`,
     lorebook: `${arrayLength('$.data.character_book.entries')} > 0`,
@@ -245,13 +275,11 @@ export const librarySortSql: Record<LibrarySort, string> = {
 };
 /** Shared ordering projections for globally paging local cards and Archive links in SQL. */
 export const libraryOrderProjectionSql = { name: str('$.data.name'), greetings, lorebook: arrayLength('$.data.character_book.entries') };
-const referenceDocumentSql = `json_object('data',json_object('name',json_extract(c.summary_json,'$.name'),
-  'creator',json_extract(c.summary_json,'$.creator'),'description',json_extract(c.summary_json,'$.description'),
-  'tags',json(json_extract(c.summary_json,'$.tags'))))`;
 /** Same query language over the intentionally bounded Archive library projection. */
 export function archiveReferenceFilterSql(filter: LibraryFilter): { where: string[]; params: (string | number)[] } {
-  const base = libraryFilterSql({ q: filter.q, tags: filter.tags, tagMode: filter.tagMode, excludeTags: filter.excludeTags });
-  const where = base.where.map((sql) => sql.replaceAll(doc, referenceDocumentSql)), params = [...base.params];
+  const base = libraryFilterSql({ q: filter.q, tags: filter.tags, tagMode: filter.tagMode, excludeTags: filter.excludeTags,
+    tagGroups: filter.tagGroups, excludeTagGroups: filter.excludeTagGroups });
+  const where = base.where.map((sql) => sql.replaceAll(doc, 'c.summary_json').replaceAll("'$.data.", "'$.")), params = [...base.params];
   for (const flag of new Set(filter.has ?? [])) {
     if (flag === 'chat') where.push(archiveReferenceInChatSql);
     else if (flag === 'greetings') where.push(`coalesce(json_extract(c.summary_json,'$.alternateGreetingCount'),json_extract(c.summary_json,'$.greetingCount'),0) > 0`);
@@ -336,6 +364,7 @@ const nonEmpty = (value: unknown) => !!value && typeof value === 'object' && !Ar
 export function libraryMatcher(filter: LibraryFilter, followed: ReadonlySet<string> = new Set()): (row: LibraryRow) => boolean {
   const query = parseLibraryQuery(filter.q ?? '');
   const include = cleanTags(filter.tags), exclude = cleanTags(filter.excludeTags), flags = new Set(filter.has ?? []);
+  const groups = normalizeTagGroupFilters(filter);
   return (row) => {
     const fields = data(row.document);
     const tags = tagsOf(fields);
@@ -343,8 +372,10 @@ export function libraryMatcher(filter: LibraryFilter, followed: ReadonlySet<stri
       const all = [...['name', 'creator', 'description', 'creator_notes', 'personality', 'scenario', 'first_mes'].map((key) => text(fields[key])), tags.join('\n')].join('\n');
       if (!evaluate(query, fields, all)) return false;
     }
-    if (include.length && !(filter.tagMode === 'any' ? include.some((tag) => tags.includes(tag)) : include.every((tag) => tags.includes(tag)))) return false;
+    const included = [...include.map((tag) => tags.includes(tag)), ...groups.tagGroups.map((group) => group.some((tag) => tags.includes(tag)))];
+    if (included.length && !(filter.tagMode === 'any' ? included.some(Boolean) : included.every(Boolean))) return false;
     if (exclude.some((tag) => tags.includes(tag))) return false;
+    if (groups.excludeTagGroups.some((group) => group.some((tag) => tags.includes(tag)))) return false;
     const book = fields.character_book as { entries?: unknown } | null | undefined;
     if (flags.has('lorebook') && !(row.summary ? (row.summary.lorebookEntryCount ?? 0) > 0 : length(book?.entries) > 0)) return false;
     if (flags.has('greetings') && !(row.summary ? (row.summary.alternateGreetingCount ?? row.summary.greetingCount ?? 0) > 0 : length(fields.alternate_greetings) > 0)) return false;

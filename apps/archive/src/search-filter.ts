@@ -2,6 +2,7 @@ import { DataType } from 'apache-arrow';
 import type { Schema } from 'apache-arrow';
 import { ArchiveError } from '@character-unity/archive-client/contract';
 import type { SearchFilterField } from '@character-unity/archive-client';
+import { fold } from '@character-unity/store/library-query';
 
 // Legacy Archive b99dcd1: backend/services/search/lance-filter.js. Only fields
 // present with supported physical types in the pinned copy are exposed.
@@ -24,8 +25,11 @@ export function searchFilterFields(schema: Schema): SearchFilterField[] {
 }
 
 type Token = { kind: 'word' | 'literal' | 'symbol'; value: string };
-/** Bounded legacy filter grammar; never passes caller SQL through to Lance. */
-export function compileSearchFilter(raw: string, fields: readonly SearchFilterField[]): string {
+export interface SearchFilterOptions { listCase?: 'unicode' | 'ascii' }
+export interface SearchFilterPlan { sql: string; listFields: readonly string[] }
+/** The parsed list fields let callers validate their projection policy without
+ * guessing from raw filter text. Scalar fields retain legacy LOWER semantics. */
+export function compileSearchFilterPlan(raw: string, fields: readonly SearchFilterField[], options: SearchFilterOptions = {}): SearchFilterPlan {
   if (typeof raw !== 'string' || raw.length > 4096 || [...raw].some((char) => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) invalid('Filter must be at most 4096 characters without controls');
   const tokens: Token[] = [];
   let index = 0;
@@ -50,8 +54,9 @@ export function compileSearchFilter(raw: string, fields: readonly SearchFilterFi
     }
     if (tokens.length > 256) invalid('Filter exceeds 256 tokens');
   }
-  if (!tokens.length) return '';
+  if (!tokens.length) return { sql: '', listFields: [] };
   const available = new Map(fields.filter((field) => names.has(field.name)).map((field) => [field.name, field.type]));
+  const listFields = new Set<string>();
   let cursor = 0, depth = 0;
   function accept(value: string) {
     const token = tokens[cursor];
@@ -62,7 +67,10 @@ export function compileSearchFilter(raw: string, fields: readonly SearchFilterFi
   function literal(type: SearchFilterField['type']): string {
     const token = tokens[cursor++];
     if (!token || token.kind === 'symbol' || (token.kind === 'word' && /^(AND|OR|NOT|IN|EXISTS|TO)$/i.test(token.value))) invalid('Expected a filter value');
-    if (type === 'string' || type === 'strings') return `'${token.value.toLowerCase().replaceAll("'", "''")}'`;
+    if (type === 'string' || type === 'strings') {
+      const value = type === 'strings' && options.listCase === 'ascii' ? fold(token.value) : token.value.toLowerCase();
+      return `'${value.replaceAll("'", "''")}'`;
+    }
     if (type === 'boolean') {
       if (token.kind !== 'word' || !/^(true|false)$/i.test(token.value)) invalid('Boolean filters require true or false');
       return token.value.toLowerCase();
@@ -79,6 +87,7 @@ export function compileSearchFilter(raw: string, fields: readonly SearchFilterFi
     const column = name, field = type === 'string' ? `LOWER(${column})` : column;
     const negated = accept('NOT');
     if (accept('EXISTS')) return negated ? `${column} IS NULL` : `${column} IS NOT NULL`;
+    if (type === 'strings') listFields.add(name);
     if (accept('IN')) {
       require('['); const values = [literal(type)];
       while (accept(',')) { if (values.length >= 64) invalid('Filter lists exceed 64 values'); values.push(literal(type)); }
@@ -110,5 +119,12 @@ export function compileSearchFilter(raw: string, fields: readonly SearchFilterFi
   function or(): string { let sql = and(); while (accept('OR')) sql = `(${sql}) OR (${and()})`; return sql; }
   const result = or();
   if (cursor !== tokens.length) invalid('Unexpected trailing filter input');
-  return result;
+  return { sql: result, listFields: [...listFields].sort() };
+}
+
+/** Bounded legacy filter grammar; never passes caller SQL through to Lance.
+ * Legacy Archive indexes Unicode-fold list values; owned exact arrays opt in
+ * to ASCII folding explicitly, without changing scalar string comparisons. */
+export function compileSearchFilter(raw: string, fields: readonly SearchFilterField[], options: SearchFilterOptions = {}): string {
+  return compileSearchFilterPlan(raw, fields, options).sql;
 }

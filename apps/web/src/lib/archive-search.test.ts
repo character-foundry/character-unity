@@ -16,6 +16,25 @@ const card = (id: string): ArchiveCard => ({ id, provider: 'chub', recordId: id,
   stats: {}, portrait: null, remoteCreatedAt: null, remoteUpdatedAt: null, firstSeenAt: '', changedAt: '', versionId: '1', versions: 1, libraryCardId: null });
 
 describe('native Archive submitted search contract', () => {
+  it('keeps group selections in URLs and sends their OR snapshot without altering semantic text', () => {
+    const search = { ...emptySearch, q: 'a forest guardian', archiveMode: 'semantic', metaTags: ['fantasy-guild'], excludeMetaTags: ['dark'] };
+    expect(readSearch(writeSearch(search))).toEqual(search);
+    const params = archiveSearchParams(search, hidden, status,
+      { tagGroups: [['Fantasy Guild', 'fantasy', 'adventure']], excludeTagGroups: [['dark', 'gore']] });
+    expect(params.get('q')).toBe('a forest guardian');
+    expect(params.get('mode')).toBe('semantic');
+    expect(params.get('filter')).toBeNull();
+    expect(params.get('tags')).toBeNull();
+    expect(JSON.parse(params.get('tagGroups')!)).toEqual([['Fantasy Guild', 'fantasy', 'adventure']]);
+    expect(JSON.parse(params.get('excludeTagGroups')!)).toEqual([['dark', 'gore']]);
+    expect(params.get('exclude')).toBe('blocked,nsfw');
+  });
+
+  it('does not quietly run a literal search when a selected group definition was not resolved', () => {
+    expect(() => archiveSearchParams({ ...emptySearch, metaTags: ['missing'] }, hidden, status)).toThrow('must be loaded');
+    expect(() => archiveSearchParams({ ...emptySearch, excludeMetaTags: ['missing'] }, hidden, status)).toThrow('must be loaded');
+  });
+
   it('retains mode, typed filter and unavailable ordering through header/URL round trips', () => {
     const search = { ...emptySearch, q: 'forest', archiveMode: 'hybrid', archiveFilter: 'tokenCount >= 1200', sort: 'withdrawn-sort' };
     const url = writeSearch(search);

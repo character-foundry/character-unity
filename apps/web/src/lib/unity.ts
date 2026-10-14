@@ -15,6 +15,7 @@ export interface OpenedCard {
 }
 export interface LibraryQuery {
   q?: string; tags?: readonly string[]; tagMode?: 'all' | 'any'; exclude?: readonly string[];
+  tagGroups?: readonly (readonly string[])[]; excludeTagGroups?: readonly (readonly string[])[];
   has?: readonly string[]; fork?: 'only' | 'none'; favorite?: 'fav' | 'not_fav'; source?: string; minTokens?: number;
   sort?: string; offset?: number; limit?: number;
 }
@@ -61,6 +62,8 @@ export function createLibraryClient(connection: SessionConnection, workspaceId: 
       if (query.tags?.length) params.set('tags', query.tags.join(','));
       if (query.tagMode && query.tagMode !== 'all') params.set('tagMode', query.tagMode);
       if (query.exclude?.length) params.set('exclude', query.exclude.join(','));
+      if (query.tagGroups?.length) params.set('tagGroups', JSON.stringify(query.tagGroups));
+      if (query.excludeTagGroups?.length) params.set('excludeTagGroups', JSON.stringify(query.excludeTagGroups));
       if (query.has?.length) params.set('has', query.has.join(','));
       if (query.fork) params.set('fork', query.fork);
       if (query.favorite) params.set('favorite', query.favorite);
@@ -69,6 +72,7 @@ export function createLibraryClient(connection: SessionConnection, workspaceId: 
       if (query.sort && query.sort !== 'edited') params.set('sort', query.sort);
       if (query.offset) params.set('offset', String(query.offset));
       if (query.limit) params.set('limit', String(query.limit));
+      if (params.toString().length > 8000) throw new Error('This search expands to too many tag names for one request. Select fewer meta-tags or shorten their member lists.');
       return call(`${base}/card-summaries?${params}`, { signal });
     },
     async setFavorite(cardId: string, favorite: boolean) { await call(`${cardPath(cardId)}/favorite`, { method: favorite ? 'PUT' : 'DELETE' }); },

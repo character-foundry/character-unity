@@ -49,6 +49,10 @@ with exact originals and immutable revisions. Statistics reports the selected
 workspace and explicit Archive coverage. See [implementation status and open
 gates](docs/implementation.md). No live data, accounts or secrets are included.
 
+[Meta-tags](docs/meta-tags.md) provides a graphical editor for workspace-owned tag
+groups and spelling variants. Select groups in Library or Archive filters;
+explicit Save changes only grouping metadata, never card tags or original files.
+
 ## Run locally
 
 Use Node **24** (tested with 24.19.0) and **pnpm 11.20.0**.

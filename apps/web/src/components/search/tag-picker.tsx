@@ -13,10 +13,10 @@ const tones = {
  * chip. Tags picked on the other side (`blocked`) are not offered. Unknown tags can be added as typed.
  * `compact` is the filter bar's one-line field (label read by screen readers only).
  */
-export function TagPicker({ label, tone, value, onChange, options, blocked = [], placeholder = 'Add tag…', className, compact = false, icon }: {
+export function TagPicker({ label, tone, value, onChange, options, blocked = [], placeholder = 'Add tag…', className, compact = false, icon, compareTags = sameTag }: {
   label: string; tone: keyof typeof tones; value: readonly string[]; onChange: (tags: string[]) => void;
   options: readonly { tag: string; count: number }[]; blocked?: readonly string[]; placeholder?: string; className?: string;
-  compact?: boolean; icon?: React.ReactNode;
+  compact?: boolean; icon?: React.ReactNode; compareTags?: (a: string, b: string) => boolean;
 }) {
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
@@ -26,18 +26,18 @@ export function TagPicker({ label, tone, value, onChange, options, blocked = [],
   const suggestions = useMemo(() => {
     const needle = text.trim().toLowerCase();
     const taken = [...value, ...blocked];
-    const matches = options.filter((option) => !taken.some((tag) => sameTag(tag, option.tag)) && option.tag.toLowerCase().includes(needle));
+    const matches = options.filter((option) => !taken.some((tag) => compareTags(tag, option.tag)) && option.tag.toLowerCase().includes(needle));
     // Prefix matches first, then by how common the tag is (options arrive most-used first).
     if (needle) matches.sort((a, b) => Number(!a.tag.toLowerCase().startsWith(needle)) - Number(!b.tag.toLowerCase().startsWith(needle)));
     return matches.slice(0, 40);
-  }, [text, value, blocked, options]);
-  const exact = suggestions.some((option) => sameTag(option.tag, text.trim()));
-  const custom = text.trim() && !exact && ![...value, ...blocked].some((tag) => sameTag(tag, text.trim())) ? text.trim() : null;
+  }, [text, value, blocked, options, compareTags]);
+  const exact = suggestions.some((option) => compareTags(option.tag, text.trim()));
+  const custom = text.trim() && !exact && ![...value, ...blocked].some((tag) => compareTags(tag, text.trim())) ? text.trim() : null;
   // Known tags first so Enter picks the best match; adding the typed text as-is comes last.
   const entries = [...suggestions, ...(custom ? [{ tag: custom, count: -1 }] : [])];
 
   const add = (tag: string) => {
-    if (!value.some((existing) => sameTag(existing, tag))) onChange([...value, tag]);
+    if (!value.some((existing) => compareTags(existing, tag))) onChange([...value, tag]);
     setText(''); setActive(0); input.current?.focus();
   };
   const remove = (tag: string) => onChange(value.filter((existing) => existing !== tag));
@@ -50,9 +50,9 @@ export function TagPicker({ label, tone, value, onChange, options, blocked = [],
         onClick={() => input.current?.focus()}>
         {icon}
         {value.map((tag) => (
-          <span key={tag} className={cn('inline-flex shrink-0 items-center gap-1 border', compact ? 'rounded px-1.5 py-px text-[11px] font-medium' : 'rounded-full px-2 py-0.5 text-xs', tones[tone])}>
-            {tone === 'exclude' && compact && '−'}{tag}
-            <button type="button" aria-label={`Remove ${tag}`} onClick={(event) => { event.stopPropagation(); remove(tag); }} className="opacity-70 hover:opacity-100">✕</button>
+          <span key={tag} className={cn('inline-flex items-center gap-1 border', compact ? 'shrink-0 rounded px-1.5 py-px text-[11px] font-medium' : 'min-w-0 max-w-full rounded-full px-2 py-0.5 text-xs', tones[tone])}>
+            {compact ? <>{tone === 'exclude' && '−'}{tag}</> : <span className="min-w-0 whitespace-normal [overflow-wrap:anywhere]">{tag}</span>}
+            <button type="button" aria-label={`Remove ${tag}`} onClick={(event) => { event.stopPropagation(); remove(tag); }} className="shrink-0 opacity-70 hover:opacity-100">✕</button>
           </span>
         ))}
         <input ref={input} value={text} placeholder={value.length ? '' : placeholder} aria-label={label}

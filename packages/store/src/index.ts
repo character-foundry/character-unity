@@ -9,6 +9,7 @@ import { archiveForkStatement, createArchiveOperations, importClaimStatements } 
 import { createLibraryOperations } from './library.js';
 import { createSearchOutbox } from './search-outbox.js';
 import { chatImportStatements } from './chat-receipts.js';
+import { createMetaTagOperations } from './meta-tags.js';
 
 const notDeleted = 'NOT EXISTS (SELECT 1 FROM unity_card_deletions d WHERE d.card_id = c.id)';
 import type { ArchivePin, Asset, Card, CardSource, CardSourceInput, CardSummaryPage, CardSummaryQuery, ChatImportReceiptInput, ContentIdentity, ImportCardResult, PublicationForkGuard, Revision, RevisionAsset, RevisionInput, Workspace } from './types.js';
@@ -264,6 +265,7 @@ export function createStore(driver: StoreDriver) {
     ...archive, createArchiveFork, createImportedCard,
     ...createLibraryOperations(driver, { revision: getRevision, reference: archive.getArchiveReference }),
     ...createSearchOutbox(driver, batch),
+    ...createMetaTagOperations(driver),
     async listCards(workspaceId: string, options: { limit?: number; afterId?: string } = {}) {
       return driver.query<Card>({ sql: `SELECT ${cardColumns} FROM unity_cards WHERE workspace_id = ? AND id > ?
         AND NOT EXISTS (SELECT 1 FROM unity_card_deletions d WHERE d.card_id = unity_cards.id) ORDER BY id LIMIT ?`,

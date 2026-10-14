@@ -5,6 +5,7 @@ import { CardError, importByteLimit } from '@character-unity/cards/contract';
 import type { Actor, CardService } from '@character-unity/cards';
 import type { CardDocument, LibraryFlag, LibrarySort, LibrarySource } from '@character-unity/store';
 import { isLibraryFlag, isLibrarySort, librarySources } from '@character-unity/store';
+import { normalizeTagGroupFilters } from '@character-unity/store/library-query';
 import type { ArchiveImportService } from '@character-unity/cards/archive';
 import { input, parseSearchQuery, isSearchSort, parseSnapshot } from '@character-unity/archive-client/contract';
 import { assetRevisionBody } from './asset-body.js';
@@ -48,7 +49,7 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
   routes.get('/:workspaceId/card-summaries', async (c) => {
     const { cards, actor } = await required(c);
     const params = new URL(c.req.url).searchParams;
-    const keys = ['q', 'tag', 'tags', 'tagMode', 'exclude', 'has', 'fork', 'favorite', 'source', 'minTokens', 'sort', 'offset', 'limit'];
+    const keys = ['q', 'tag', 'tags', 'tagGroups', 'excludeTagGroups', 'tagMode', 'exclude', 'has', 'fork', 'favorite', 'source', 'minTokens', 'sort', 'offset', 'limit'];
     const list = (key: string) => (params.get(key) ?? '').split(',').map((value) => value.trim()).filter(Boolean);
     const tags = list('tags'), exclude = list('exclude'), has = list('has');
     if ([...params.keys()].some((key) => !keys.includes(key) || params.getAll(key).length !== 1)
@@ -62,7 +63,16 @@ export function cardRoutes(options: { cards?: CardService; archive?: ArchiveImpo
       || (params.has('favorite') && !['fav', 'not_fav'].includes(params.get('favorite')!))
       || (params.has('source') && !(librarySources as readonly string[]).includes(params.get('source')!))
       || (params.has('minTokens') && !/^(0|[1-9][0-9]{0,6})$/.test(params.get('minTokens')!))) throw new CardError('INVALID_INPUT', 'Invalid library query');
+    const parseGroups = (key: string): unknown => {
+      const value = params.get(key);
+      if (value === null) return undefined;
+      if (value.length > 256 * 1024) throw new CardError('TOO_LARGE', 'Meta-tag filters are too large');
+      try { return JSON.parse(value) as unknown; }
+      catch { throw new CardError('INVALID_INPUT', 'Expected JSON meta-tag groups'); }
+    };
+    const groups = normalizeTagGroupFilters({ tagGroups: parseGroups('tagGroups'), excludeTagGroups: parseGroups('excludeTagGroups') });
     return c.json(await cards.summaries(actor, c.req.param('workspaceId'), {
+      ...groups,
       ...(params.get('q') ? { q: params.get('q')! } : {}), ...(params.get('tag') ? { tag: params.get('tag')! } : {}),
       ...(tags.length ? { tags } : {}), ...(exclude.length ? { excludeTags: exclude } : {}),
       ...(has.length ? { has: has as LibraryFlag[] } : {}),

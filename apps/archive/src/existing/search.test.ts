@@ -21,17 +21,20 @@ function source(id: string, name: string, description: string, provider = 'chub'
   const row: Record<string, unknown> = Object.fromEntries(searchSourceColumns.map((column) => [column, numbers.has(column) ? 0 : null]));
   return { ...row, id, name, description, source: provider, topics: 'demo', createdAt: '2026-10-12T00:00:00.000Z', lastModified: '2026-10-12T00:00:00.000Z' };
 }
-async function seed(options: { active?: boolean; indexed?: boolean; vector?: boolean } = {}) {
+async function seed(options: { active?: boolean; indexed?: boolean; vector?: boolean; nullableTags?: boolean } = {}) {
   const directory = join(root, 'search.lance'), connection = await connect(directory);
   const name = options.active ? 'cards_build_previous' : 'cards';
   const rows = [source('1', 'Silver Forest', 'silver forest north gate'), source('2', 'Ocean', 'silver ocean south gate'), source('3', 'Silver', 'silver distant forest', 'ct')];
-  const documents = rows.map((row) => buildSearchDocument(row, Date.UTC(2026, 9, 13)));
-  const table = await connection.createTable(name, makeArrowTable(documents, { schema: searchDocumentSchema }));
+  const documents: Record<string, unknown>[] = rows.map((row, index) => ({ ...buildSearchDocument(row, Date.UTC(2026, 9, 13)), ...(options.nullableTags
+    ? { topics: 'not a membership list', tags: index === 0 ? null : index === 1 ? [] : ['demo'] } : {}) }));
+  const lexicalSchema = options.nullableTags ? new Schema(searchDocumentSchema.fields.map((field) => field.name === 'topics'
+    ? new Field('topics', new Utf8(), false) : field.name === 'tags' ? new Field('tags', field.type, true) : field)) : searchDocumentSchema;
+  const table = await connection.createTable(name, makeArrowTable(documents, { schema: lexicalSchema }));
   if (options.indexed !== false) await table.createIndex('searchText', { config: Index.fts({ withPosition: true, lowercase: true, asciiFolding: true }) });
   table.close();
   if (options.vector !== false) {
     const schema = new Schema([new Field('card_id', new Utf8(), false), new Field('section', new Utf8(), false), new Field('matchText', new Utf8(), false),
-      ...searchDocumentSchema.fields, new Field('vector', new FixedSizeList(2, new Field('item', new Float32(), false)), false)]);
+      ...lexicalSchema.fields, new Field('vector', new FixedSizeList(2, new Field('item', new Float32(), false)), false)]);
     const vectors = await connection.createTable('card_vectors', makeArrowTable(documents.map((document, index) => ({ ...document, card_id: document.id,
       section: 'card', matchText: String(document.description), vector: index === 0 ? [1, 0] : index === 1 ? [0, 1] : [0.8, 0.6] })), { schema }));
     vectors.close();
@@ -90,6 +93,110 @@ it('reuses old vector rows for semantic/hybrid queries and marks top-k coverage 
   expect((await reader.search('forest OR ocean', { mode: 'hybrid' })).complete).toBe(false);
   expect((await reader.search('"forest" and not ocean', { mode: 'semantic' })).complete).toBe(false);
   expect((await reader.search('silver', { mode: 'hybrid', eligibleIds: [] })).ids).toEqual([]);
+  expect(await inventory(directory)).toEqual(before);
+});
+
+it('retains legacy Unicode list-filter folding across browse, lexical and vector searches', async () => {
+  const { directory } = await seed(), reader = await open(directory, true);
+  const rows = [
+    { ...source('1', 'Silver Forest', 'silver forest north gate'), topics: 'ÉLF' },
+    { ...source('2', 'Ocean', 'silver ocean south gate'), topics: 'élf' },
+    { ...source('3', 'Silver', 'silver distant forest', 'ct'), topics: 'other' },
+  ];
+  await reader.upsertDocuments(rows);
+  await reader.upsertVectorDocuments(rows.map((document) => ({ document, vector: [1, 0] })));
+  const before = await inventory(directory);
+  for (const mode of ['browse', 'lexical', 'semantic', 'hybrid'] as const) {
+    for (const [filter, expected] of [
+      ['topics = ÉLF', ['1', '2']], ['topics IN [ÉLF, missing]', ['1', '2']],
+      ['tags = ÉLF', ['1', '2']], ['topics != ÉLF', ['3']], ['topics NOT IN [ÉLF, missing]', ['3']],
+    ] as const) {
+      const result = mode === 'browse' ? await reader.browse({ filter }) : await reader.search('silver', { mode, filter });
+      expect([...result.ids].sort(), `${mode}: ${filter}`).toEqual(expected);
+    }
+  }
+  expect(await inventory(directory)).toEqual(before);
+});
+
+it('combines literal tags and selected OR groups before browse, lexical and vector candidate limits without rewriting the index', async () => {
+  const { directory } = await seed(), reader = await open(directory, true);
+  const rows = [
+    { ...source('1', 'Silver Forest', 'silver forest north gate'), topics: 'unrelated' },
+    { ...source('2', 'Ocean', 'silver ocean south gate'), topics: "fantasy, mermaid, creator's pick" },
+    { ...source('3', 'Silver', 'silver distant forest', 'ct'), topics: "fantasy, elf, literal') OR true --" },
+  ];
+  await reader.upsertDocuments(rows);
+  await reader.upsertVectorDocuments(rows.map((document, index) => ({ document, vector: index === 0 ? [1, 0] : index === 1 ? [0, 1] : [0.8, 0.6] })));
+  const before = await inventory(directory);
+  const all = { tags: [' FANTASY '], tagGroups: [[' MERMAID ', 'dragon'], ["creator's pick", 'absent']] };
+  expect((await reader.browse(all)).ids).toEqual(['2']);
+  expect((await reader.search('silver', { ...all, maxCandidates: 1 })).ids).toEqual(['2']);
+  expect((await reader.search('silver', { ...all, mode: 'semantic', maxCandidates: 1 })).ids).toEqual(['2']);
+  expect((await reader.search('silver', { ...all, mode: 'hybrid', maxCandidates: 1 })).ids).toEqual(['2']);
+  const any = { tags: ['unrelated'], tagGroups: [['mermaid', 'dragon']], tagMode: 'any' as const };
+  expect((await reader.browse(any)).ids).toEqual(['2', '1']);
+  expect((await reader.search('silver', { ...any, excludeTagGroups: [[' MERMAID ', 'absent']] })).ids).toEqual(['1']);
+  expect((await reader.browse({ ...any, exclude: ['unrelated'] })).ids).toEqual(['2']);
+  expect((await reader.search('silver', { ...all, filter: 'source = ct' })).ids).toEqual([]);
+  expect((await reader.search('silver', { tagGroups: [["literal') OR true --"]] })).ids).toEqual(['3']);
+  expect(await inventory(directory)).toEqual(before);
+});
+
+it('executes the bounded thousand-member generated filter independently of the smaller user-filter grammar', async () => {
+  const { directory } = await seed(), reader = await open(directory, true);
+  const document = { ...source('2', 'Ocean', 'silver ocean south gate'), topics: 'selected-999' };
+  await reader.upsertDocuments([document]);
+  await reader.upsertVectorDocuments([{ document, vector: [0, 1] }]);
+  const before = await inventory(directory);
+  const tagGroups = Array.from({ length: 10 }, (_, group) => Array.from({ length: 100 }, (_, index) => `selected-${group * 100 + index}`));
+  expect((await reader.browse({ tagGroups, tagMode: 'any' })).ids).toEqual(['2']);
+  expect((await reader.search('silver', { tagGroups, tagMode: 'any', maxCandidates: 1 })).ids).toEqual(['2']);
+  expect((await reader.search('silver', { tagGroups, tagMode: 'any', mode: 'semantic', maxCandidates: 1 })).ids).toEqual(['2']);
+  await expect(reader.browse({ tagGroups: [...tagGroups, ['too-many']] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  await expect(reader.search('silver', { tagGroups: [Array.from({ length: 102 }, (_, index) => `tag-${index}`)] })).rejects.toMatchObject({ code: 'INVALID_INPUT' });
+  expect(await inventory(directory)).toEqual(before);
+});
+
+it('uses the actual fallback tag list and retains missing tags when excluding a group', async () => {
+  const { directory } = await seed({ nullableTags: true });
+  const reader = await open(directory, true), before = await inventory(directory);
+  expect((await reader.browse({ tagGroups: [['demo']] })).ids).toEqual(['3']);
+  expect((await reader.search('silver', { tagGroups: [['demo']], mode: 'semantic', maxCandidates: 1 })).ids).toEqual(['3']);
+  expect((await reader.browse({ excludeTagGroups: [['demo']] })).ids).toEqual(['2', '1']);
+  expect((await reader.search('silver', { excludeTagGroups: [['demo']], mode: 'semantic' })).ids).toEqual(['1', '2']);
+  expect(await inventory(directory)).toEqual(before);
+});
+
+it('refuses grouped membership on scalar-only legacy tag metadata instead of silently using string equality', async () => {
+  const { directory } = await seed(), connection = await connect(directory);
+  for (const name of ['cards', 'card_vectors']) {
+    const table = await connection.openTable(name);
+    try {
+      await table.dropColumns(['topics', 'tags']);
+      await table.addColumns([{ name: 'topics', valueSql: "'demo'" }]);
+    } finally { table.close(); }
+  }
+  connection.close();
+  const reader = await open(directory, true), before = await inventory(directory);
+  expect((await reader.browse()).ids).toEqual(['3', '2', '1']);
+  expect((await reader.search('silver', { filter: 'topics = demo' })).ids).toHaveLength(3);
+  await expect(reader.browse({ tagGroups: [['demo']] })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  await expect(reader.search('silver', { tagGroups: [['demo']] })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  await expect(reader.search('silver', { tagGroups: [['demo']], mode: 'semantic' })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  expect(await inventory(directory)).toEqual(before);
+});
+
+it('checks tag-list support only in the search legs that actually run', async () => {
+  const { directory } = await seed(), connection = await connect(directory), table = await connection.openTable('cards');
+  try {
+    await table.dropColumns(['topics', 'tags']);
+    await table.addColumns([{ name: 'topics', valueSql: "'demo'" }]);
+  } finally { table.close(); connection.close(); }
+  const reader = await open(directory, true), before = await inventory(directory);
+  expect((await reader.search('silver', { tagGroups: [['demo']], mode: 'semantic', maxCandidates: 1 })).ids).toEqual(['1']);
+  expect((await reader.search('silver', { tagGroups: [['demo']], mode: 'hybrid', semanticRatio: 1, maxCandidates: 1 })).ids).toEqual(['1']);
+  await expect(reader.search('silver', { tagGroups: [['demo']] })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  await expect(reader.search('silver', { tagGroups: [['demo']], mode: 'hybrid' })).rejects.toMatchObject({ code: 'UNAVAILABLE' });
   expect(await inventory(directory)).toEqual(before);
 });
 

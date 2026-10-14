@@ -24,6 +24,7 @@ import type { SearchMatch } from '@character-unity/archive-client';
 import { searchSnapshot } from '../native/search-snapshot.js';
 import type { LibraryIndex, LibrarySearchCard } from '../library-index.js';
 import { mergeSearchPage } from '../library-search-merge.js';
+import { fold, normalizeTagGroupFilters } from '@character-unity/store/library-query';
 
 export interface ExistingArchiveOptions {
   databasePath: string; filesDirectory: string; objectsDirectory?: string;
@@ -92,6 +93,7 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
   const archiveId = bookkeeping ? (db.prepare("SELECT value FROM unity_archive_meta WHERE key = 'archive_id'").get() as { value: string } | undefined)?.value ?? existingArchiveId : existingArchiveId;
   const readInstance = randomUUID();
   const databaseGeneration = () => JSON.stringify([readInstance, db.pragma('data_version', { simple: true }), db.prepare('SELECT total_changes() AS n').get()]);
+  let tagProjection: { generation: string; lossy: boolean } | undefined;
   const capabilities: ArchiveCapabilities = { lexical: !!options.search, semantic: options.search?.semantic ?? false,
     browse: !!options.search, filterFields: options.search?.filterFields ?? [],
     browseSorts: options.search?.sorts ?? [],
@@ -403,6 +405,7 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
     archiveId, sink, put,
     async list(query: ArchiveQuery = {}) {
       query.signal?.throwIfAborted();
+      const groups = normalizeTagGroupFilters(query);
       if (query.sort === 'downloads') throw new NativeArchiveError('INVALID_INPUT', 'The existing Archive has no download-count metric to sort by');
       if (query.mode === 'browse' && query.q?.trim()) throw new NativeArchiveError('INVALID_INPUT', 'Browse mode does not accept query text');
       if (query.mode && query.mode !== 'browse' && !query.q?.trim()) throw new NativeArchiveError('INVALID_INPUT', 'A search mode requires a query');
@@ -424,8 +427,6 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
         if (query.filter) searchFilters.push(`(${query.filter})`);
         if (query.provider) searchFilters.push(`source = ${quoted(query.provider)}`);
         if (query.minTokens) searchFilters.push(`tokenCount >= ${query.minTokens}`);
-        if (query.tags?.length) searchFilters.push(`(${query.tags.map((tag) => `topics = ${quoted(tag)}`).join(query.tagMode === 'any' ? ' OR ' : ' AND ')})`);
-        for (const tag of query.exclude ?? []) searchFilters.push(`NOT (topics = ${quoted(tag)})`);
         const flags = { greetings: 'hasAlternateGreetings', lorebook: 'hasLorebook', gallery: 'hasGallery', embeddedImages: 'hasEmbeddedImages', expressions: 'hasExpressions', systemPrompt: 'hasSystemPrompt', exampleDialogues: 'hasExampleDialogues' };
         for (const flag of query.has ?? []) if (flag !== 'portrait' && flag !== 'followed') searchFilters.push(`${flags[flag]} = true`);
         existingFilter(query, bookkeeping); // Reject unsupported filters before an expensive native query.
@@ -438,7 +439,29 @@ export async function openExistingArchive(options: ExistingArchiveOptions) {
           if (!creators.length) eligibleIds = [];
           else searchFilters.push(`(${Array.from({ length: Math.ceil(creators.length / 64) }, (_, index) => `author IN [${creators.slice(index * 64, index * 64 + 64).map(quoted).join(',')}]`).join(' OR ')})`);
         }
-        const constraints = { filter: searchFilters.join(' AND '), ...(eligibleIds ? { eligibleIds } : {}), ...(excludedIds.length ? { excludedIds } : {}), ...(query.signal ? { signal: query.signal } : {}) };
+        // Legacy projections split comma tags and Unicode-lowercase them. Such
+        // memberships are resolved from exact SQL tags before Lance's top-k,
+        // never repaired, copied, or filtered only after ranking.
+        const values = [...(query.tags ?? []), ...(query.exclude ?? []), ...groups.tagGroups.flat(), ...groups.excludeTagGroups.flat()];
+        if (values.length && tagProjection?.generation !== sourceBefore) {
+          const lossy = !!db.prepare(`SELECT 1 FROM card_tags WHERE instr(tag, ',') > 0
+            OR length(CAST(tag AS BLOB)) <> length(tag)
+            OR tag <> trim(tag, char(9)||char(10)||char(11)||char(12)||char(13)||' ') LIMIT 1`).get();
+          tagProjection = { generation: sourceBefore, lossy };
+        }
+        const ambiguous = !!values.length && (tagProjection?.lossy === true || values.some((value) => {
+          const tag = fold(value.trim()); return tag.includes(',') || [...tag].some((character) => character.charCodeAt(0) > 127);
+        }));
+        if (ambiguous) {
+          const exact = existingFilter(query, bookkeeping);
+          const matched = (db.prepare(`SELECT c.id FROM cards c WHERE ${exact.clause} ORDER BY c.id LIMIT 10001`).all(...exact.params) as { id: number }[]).map((row) => String(row.id));
+          if (matched.length > 10_000) throw new ArchiveError('UNAVAILABLE', 'These exact tags are ambiguous in the legacy search index; narrow metadata filters to at most 10000 matching cards');
+          const previous = eligibleIds ? new Set(eligibleIds) : undefined;
+          eligibleIds = previous ? matched.filter((id) => previous.has(id)) : matched;
+        }
+        const constraints = { filter: searchFilters.join(' AND '), ...(ambiguous || !values.length ? {} : {
+          tags: query.tags ?? [], exclude: query.exclude ?? [], tagMode: query.tagMode ?? 'all', ...groups,
+        }), ...(eligibleIds ? { eligibleIds } : {}), ...(excludedIds.length ? { excludedIds } : {}), ...(query.signal ? { signal: query.signal } : {}) };
         if (!query.q?.trim()) {
           const result = await options.search!.browse({ ...constraints, sort: query.sort ?? 'updated', offset: windowOffset, limit: windowLimit,
             ...(library?.cards.length ? { mergeCandidates: true } : {}) });

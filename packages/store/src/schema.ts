@@ -8,6 +8,7 @@ import { chatFingerprintSchema, chatImportReceiptSchema, chatReferenceSchema, ch
 import { librarySchema } from './library-schema.js';
 import { archiveSchema } from './archive-schema.js';
 import { contentSchema } from './content-schema.js';
+import { metaTagSchema } from './meta-tags-schema.js';
 /** Append migrations; never edit a migration that has been applied to real data. */
 export const migrations = [{
   version: 1,
@@ -135,4 +136,5 @@ export const migrations = [{
   { version: 13, name: 'archive_references_and_import_identity', statements: [...archiveSchema, ...chatReferenceSchema] },
   { version: 14, name: 'deleted_card_asset_retention', statements: deletedCardAssetMaintenanceSchema },
   { version: 15, name: 'chat_import_receipts', statements: chatImportReceiptSchema },
-  { version: 16, name: 'standalone_content', statements: contentSchema }] as const;
+  { version: 16, name: 'standalone_content', statements: contentSchema },
+  { version: 17, name: 'workspace_meta_tag_catalogs', statements: metaTagSchema }] as const;

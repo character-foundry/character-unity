@@ -7,6 +7,7 @@ import { createCardService } from '@character-unity/cards';
 import { createHubService } from '@character-unity/cards/hub';
 import { createChatService } from '@character-unity/cards/chat';
 import { createStatisticsService } from '@character-unity/cards/statistics';
+import { createMetaTagService } from '@character-unity/api/meta-tags';
 import type { StatisticsReader } from '@character-unity/store/statistics';
 import { createContentService } from '@character-unity/content';
 import type { ContentStore } from '@character-unity/store/content';
@@ -47,5 +48,5 @@ export function composeServices(storage: { store: UnityStore; hub: ReturnType<ty
   const chat = storage.chat ? createChatService(store, storage.chat, assets, undefined, { ...(reader ? { archive: reader } : {}) }) : undefined;
   const statistics = storage.statistics ? createStatisticsService(store, storage.statistics) : undefined;
   const content = storage.content ? createContentService(store, storage.content) : undefined;
-  return { store, assets, cards, ...(content ? { content } : {}), ...(statistics ? { statistics } : {}), ...(native ? { nativeArchive: native } : {}), ...(libraryIndex ? { libraryIndex: libraryIndex.service(store) } : {}), ...(chat ? { chat } : {}), ...(archive ? { archive } : {}), hub, remote, remotes: createRemoteConnectionsService(store, storage.outbox, connections, remote) };
+  return { store, assets, cards, metaTags: createMetaTagService(store), ...(content ? { content } : {}), ...(statistics ? { statistics } : {}), ...(native ? { nativeArchive: native } : {}), ...(libraryIndex ? { libraryIndex: libraryIndex.service(store) } : {}), ...(chat ? { chat } : {}), ...(archive ? { archive } : {}), hub, remote, remotes: createRemoteConnectionsService(store, storage.outbox, connections, remote) };
 }

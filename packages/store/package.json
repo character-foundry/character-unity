@@ -18,7 +18,8 @@
     "./chat": "./src/chat.ts",
     "./statistics": "./src/statistics.ts",
     "./content": "./src/content.ts",
-    "./library-query": "./src/library-query.ts"
+    "./library-query": "./src/library-query.ts",
+    "./meta-tags": "./src/meta-tags.ts"
   },
   "scripts": {
     "type-check": "tsc -p tsconfig.json"

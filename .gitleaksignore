@@ -1,0 +1,7 @@
+# Exact historical test-only findings, reviewed before public publication.
+# This PEM is constructed at test runtime from a freshly generated ephemeral key;
+# the source contains a template expression, not an embedded private credential.
+f1ace24c473e43a041f4b168b233c378f5eda6a9:apps/api/src/sync.test.ts:private-key:381
+# Synthetic signed-sync vector, byte-identical to the public Foundry SDK fixture.
+# Never use this deterministic test key as an operational signing credential.
+f1ace24c473e43a041f4b168b233c378f5eda6a9:scripts/fixtures/sync-http-v1.json:generic-api-key:11

@@ -9,6 +9,7 @@ import {
 import type { LibrarySearch, SavedSearch, SearchPage } from '@/lib/library-search';
 import { HeartIcon } from '@/components/ui';
 import { TagPicker } from './tag-picker';
+import { MetaTagFilters } from './meta-tag-selector';
 
 // One sticky bar under the top bar: everyday filters on one row, the rest behind Filters.
 // The top bar's box is the text search, so the bar has none.
@@ -88,7 +89,7 @@ export function FilterBar({ page = 'library', tags, search, update, replace, cou
   const { settings } = useSettings();
   const [minTokens, setMinTokens] = useDebouncedText(search.minTokens, useCallback((value: string) => update({ minTokens: value }), [update]), 500);
   const [expr, setExpr, flushExpr] = useDebouncedText(search.expr, useCallback((value: string) => update({ expr: value }), [update]), 600);
-  const [open, setOpen] = useState(() => !!search.expr.trim());
+  const [open, setOpen] = useState(() => !!search.expr.trim() || !!search.metaTags.length || !!search.excludeMetaTags.length);
   const [help, setHelp] = useState(false);
   const [savedState, setSavedState] = useState<{ owner: string; page: SearchPage; rows: SavedSearch[] }>(() => ({ owner: client.scopeKey, page, rows: loadSavedSearches(client, page) }));
   const saved = savedState.owner === client.scopeKey && savedState.page === page ? savedState.rows : [];
@@ -97,7 +98,7 @@ export function FilterBar({ page = 'library', tags, search, update, replace, cou
   const params = writeSearch(search).toString();
   const applied = saved.find((item) => item.params === params);
 
-  const advanced = search.exclude.length + search.has.length + (search.source ? 1 : 0) + (search.minTokens ? 1 : 0)
+  const advanced = search.exclude.length + search.has.length + search.metaTags.length + search.excludeMetaTags.length + (search.source ? 1 : 0) + (search.minTokens ? 1 : 0)
     + (search.favorite === 'not_fav' ? 1 : 0) + (search.expr.trim() ? 1 : 0);
   const hidden = [settings.hideNsfw ? 'NSFW' : '', settings.bannedTags.length ? `${settings.bannedTags.length} tag${settings.bannedTags.length === 1 ? '' : 's'}` : ''].filter(Boolean);
 
@@ -147,6 +148,8 @@ export function FilterBar({ page = 'library', tags, search, update, replace, cou
 
       {open && (
         <div id="library-filters" className="border-t border-starlight/10 px-3 py-1.5 sm:px-4">
+          <div className="mb-2"><MetaTagFilters include={search.metaTags} exclude={search.excludeMetaTags}
+            onInclude={(metaTags) => update({ metaTags })} onExclude={(excludeMetaTags) => update({ excludeMetaTags })} /></div>
           <form onSubmit={(event) => { event.preventDefault(); flushExpr(); }} className="mb-2 flex items-center gap-2">
             <label className={cn(box, 'min-w-0 flex-1 gap-2 px-2.5')}>
               <span className="shrink-0 text-starlight/50">Advanced search</span>

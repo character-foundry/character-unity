@@ -2,7 +2,8 @@ import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
-import { connect } from '@lancedb/lancedb';
+import { connect, Index, makeArrowTable } from '@lancedb/lancedb';
+import { Schema } from 'apache-arrow';
 import { afterEach, beforeEach, expect, it } from 'vitest';
 import { openLibraryIndex } from './library-index.js';
 import type { LibraryIndex, LibraryIndexEvent, LibraryProjection } from './library-index.js';
@@ -86,6 +87,123 @@ it('adds only changed owned projections to the existing Lance directory and sear
   expect(documents).toHaveLength(2);
   const connection = await connect(root);
   expect(await connection.tableNames()).toEqual(['unity_library_search_v1']); connection.close();
+});
+
+it('uses the same selected OR groups and exclusions across owned browse, lexical and semantic results without further indexing', async () => {
+  const index = await open();
+  await index.apply(event(1, { cardId: 'unrelated', projection: { ...projection(), tags: ['unrelated'] } }));
+  await index.apply(event(1, { cardId: 'mermaid', projection: { ...projection('Ocean', 'A woodland ocean guide'), tags: ['Fantasy', 'Mermaid', "creator's pick", 'selected-999'] } }));
+  await index.apply(event(1, { cardId: 'elf', projection: { ...projection('Elf'), tags: ['Fantasy', 'Elf', "literal') OR true --"] } }));
+  const before = await inventory(), indexed = [...documents];
+  const all = { tags: [' FANTASY '], tagGroups: [[' MERMAID ', 'dragon'], ["creator's pick", 'absent']] };
+  for (const mode of ['browse', 'lexical', 'semantic', 'hybrid'] as const) {
+    const result = await index.search('owner-a', { ...all, mode, ...(mode === 'browse' ? {} : { q: 'woodland' }) });
+    expect(result.cards.map((card) => card.libraryCardId)).toEqual(['mermaid']);
+  }
+  const any = { tags: ['unrelated'], tagGroups: [['mermaid', 'dragon']], tagMode: 'any' as const };
+  expect((await index.search('owner-a', any)).cards.map((card) => card.libraryCardId).sort()).toEqual(['mermaid', 'unrelated']);
+  expect((await index.search('owner-a', { ...any, excludeTagGroups: [[' MERMAID ', 'absent']] })).cards.map((card) => card.libraryCardId)).toEqual(['unrelated']);
+  expect((await index.search('owner-a', { ...any, exclude: ['unrelated'] })).cards.map((card) => card.libraryCardId)).toEqual(['mermaid']);
+  expect((await index.search('owner-a', { ...all, filter: 'source = ct' })).cards).toEqual([]);
+  expect((await index.search('owner-a', { tagGroups: [["literal') OR true --"]] })).cards.map((card) => card.libraryCardId)).toEqual(['elf']);
+  const tagGroups = Array.from({ length: 10 }, (_, group) => Array.from({ length: 100 }, (_, member) => `selected-${group * 100 + member}`));
+  expect((await index.search('owner-a', { tagGroups, tagMode: 'any', mode: 'semantic', q: 'woodland' })).cards.map((card) => card.libraryCardId)).toEqual(['mermaid']);
+  expect(await inventory()).toEqual(before);
+  expect(documents).toEqual(indexed);
+});
+
+it('indexes new owned tag arrays exactly without splitting commas or folding non-ASCII letters', async () => {
+  const index = await open();
+  await index.apply(event(1, { cardId: 'exact', projection: { ...projection(), tags: ['sea, sky', 'ÉLF'] } }));
+  await index.apply(event(1, { cardId: 'different', projection: { ...projection(), tags: ['sea', 'sky', 'élf'] } }));
+  await index.apply(event(1, { cardId: 'padded', projection: { ...projection(), tags: [' padded '] } }));
+  const before = await inventory(), indexed = [...documents];
+  expect((await index.search('owner-a', { tagGroups: [['sea, sky']] })).cards.map((card) => card.libraryCardId)).toEqual(['exact']);
+  expect((await index.search('owner-a', { tagGroups: [['ÉLF']], mode: 'semantic', q: 'woodland' })).cards.map((card) => card.libraryCardId)).toEqual(['exact']);
+  expect((await index.search('owner-a', { tagGroups: [['élf']] })).cards.map((card) => card.libraryCardId)).toEqual(['different']);
+  expect((await index.search('owner-a', { tags: ['SEA, SKY'], tagGroups: [['Élf']] })).cards).toMatchObject([{ libraryCardId: 'exact', tags: ['sea, sky', 'ÉLF'] }]);
+  expect((await index.search('owner-a', { tagGroups: [['padded']] })).cards).toEqual([]);
+  expect(await inventory()).toEqual(before);
+  expect(documents).toEqual(indexed);
+});
+
+it('keeps owned typed tag equality, lists and exclusions on the exact ASCII-folded membership policy in every search mode', async () => {
+  const index = await open();
+  await index.apply(event(1, { cardId: 'exact', projection: { ...projection(), tags: ['ÉLF', 'sea, sky', ' padded '] } }));
+  await index.apply(event(1, { cardId: 'different', projection: { ...projection(), tags: ['élf', 'sea', 'sky', 'padded'] } }));
+  const before = await inventory(), indexed = [...documents];
+  for (const mode of ['browse', 'lexical', 'semantic', 'hybrid'] as const) {
+    for (const [filter, ids] of [
+      ['topics = ÉLF', ['exact']], ['topics IN [ÉLF, "sea, sky"]', ['exact']],
+      ['topics != ÉLF', ['different']], ['topics NOT IN [ÉLF]', ['different']],
+      ['tags = ÉLF', ['exact']], ['topics = élf', ['different']],
+      ['topics = "sea, sky"', ['exact']], ['topics = " padded "', ['exact']], ['topics = padded', ['different']],
+    ] as const) {
+      const result = await index.search('owner-a', { mode, filter, ...(mode === 'browse' ? {} : { q: 'woodland' }) });
+      expect(result.cards.map((card) => card.libraryCardId).sort(), `${mode}: ${filter}`).toEqual(ids);
+    }
+  }
+  expect(documents).toEqual(indexed);
+  expect(await inventory()).toEqual(before);
+});
+
+it('refuses tag-filtered reads of persisted legacy owned projections without silently missing exact tags or rewriting the index', async () => {
+  const index = await open();
+  const exact = { ...projection(), tags: ['sea, sky', 'ÉLF'] };
+  await index.apply(event(1, { projection: exact }));
+  await index.apply(event(1, { cardId: 'second-legacy', projection: exact }));
+  await index.apply(event(1, { workspaceId: 'owner-b', cardId: 'healthy', projection: projection() }));
+  await index.close(); readers.splice(readers.indexOf(index), 1);
+  // Fixture for a table created by the prior writer: raw summary tags remain
+  // intact, but the membership columns split commas and Unicode-lowercase.
+  const connection = await connect(root), table = await connection.openTable('unity_library_search_v1');
+  const actual = await table.schema(), rows = await table.query().toArray();
+  const legacySchema = new Schema(actual.fields, new Map([...actual.metadata].filter(([key]) => key !== 'unity.library.tag-policy')));
+  const legacyRows = rows.map((row) => ({ ...row, vector: Array.from(row.vector),
+    tags: row.workspaceId === 'owner-a' ? ['sea', 'sky', 'élf'] : Array.from(row.tags),
+    topics: row.workspaceId === 'owner-a' ? ['sea', 'sky', 'élf'] : Array.from(row.topics) }));
+  table.close();
+  const legacy = await connection.createTable('unity_library_search_v1', makeArrowTable(legacyRows, { schema: legacySchema }), { mode: 'overwrite' });
+  await legacy.createIndex('searchText', { config: Index.fts({ withPosition: true }) });
+  legacy.close(); connection.close();
+  let queryEmbeddings = 0;
+  const reopened = await openLibraryIndex({ lanceDirectory: root, space, documentEmbedder, queryEmbedder: { space, async embed() { queryEmbeddings++; return [1, 0]; } } });
+  readers.push(reopened);
+  const before = await inventory(), indexed = [...documents];
+  for (const mode of ['browse', 'lexical', 'semantic', 'hybrid'] as const) {
+    for (const filter of [{ tagGroups: [['sea, sky']] }, { tagGroups: [['ÉLF']] }, { excludeTagGroups: [['sea']] }, { tags: ['sea'] },
+      { filter: 'topics = ÉLF' }, { filter: 'topics IN [ÉLF]' }, { filter: 'topics != ÉLF' }, { filter: 'tags = "sea, sky"' }]) {
+      await expect(reopened.search('owner-a', { mode, ...(mode === 'browse' ? {} : { q: 'woodland' }), ...filter }))
+        .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+    }
+  }
+  expect((await reopened.search('owner-a', {})).cards).toHaveLength(2);
+  expect((await reopened.search('owner-a', { filter: 'source = unity' })).cards).toHaveLength(2);
+  expect((await reopened.search('owner-a', { filter: 'topics EXISTS' })).cards).toHaveLength(2);
+  expect((await reopened.search('owner-a', { filter: 'name = "topics = ÉLF"' })).cards).toEqual([]);
+  expect((await reopened.search('owner-b', { tagGroups: [['fantasy']] })).cards).toMatchObject([{ libraryCardId: 'healthy' }]);
+  expect(queryEmbeddings).toBe(0);
+  expect(documents).toEqual(indexed);
+  expect(await inventory()).toEqual(before);
+  // A deliberate delivery may fix one row; it must not bless all old rows or
+  // reuse the successful validation of another workspace at the new version.
+  await reopened.apply(event(2, { projection: exact }));
+  const partial = await inventory(), afterDelivery = [...documents];
+  await expect(reopened.search('owner-a', { tagGroups: [['sea, sky']], mode: 'semantic', q: 'woodland' }))
+    .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  expect(queryEmbeddings).toBe(0);
+  expect(documents).toEqual(afterDelivery);
+  expect(await inventory()).toEqual(partial);
+  expect((await reopened.search('owner-b', { tagGroups: [['fantasy']] })).cards).toHaveLength(1);
+  const writer = await connect(root), changed = await writer.openTable('unity_library_search_v1');
+  await changed.update({ where: "workspaceId = 'owner-b'", valuesSql: { tags: "['wrong']", topics: "['wrong']" } });
+  changed.close(); writer.close();
+  const changedFiles = await inventory();
+  await expect(reopened.search('owner-b', { tagGroups: [['fantasy']], mode: 'semantic', q: 'woodland' }))
+    .rejects.toMatchObject({ code: 'UNAVAILABLE' });
+  expect(queryEmbeddings).toBe(0);
+  expect(documents).toEqual(afterDelivery);
+  expect(await inventory()).toEqual(changedFiles);
 });
 
 it('keeps portrait presence as metadata for native thumbnails and filtering without copying image bytes', async () => {

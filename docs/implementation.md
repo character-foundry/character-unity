@@ -1,5 +1,29 @@
 # Implementation status and acceptance gates
 
+## Graphical Meta-tags, 2026-10-14
+
+The native **Meta-tags** page manages workspace-owned named groups, member tags
+and spelling variants with explicit Save, version conflicts and reviewed legacy
+JSON import. Include/exclude controls share exact OR-group semantics across
+Library, Archive, SQL, IndexedDB and indexed search. Raw tags and original files
+are unchanged; no new database, migration of the corpus, indexing or idle polling
+is introduced. SQL schema 17 adds only Unity catalog metadata; browser schema 4
+and its existing database stay in place. See [usage and explicit legacy-index
+limits](meta-tags.md).
+
+Final `pnpm check` passes: 1,059 tests across 126 files, all 13 conformance
+reports, lint, types, builds, SDK/smoke/Archive probes and local Worker rehearsals.
+All 95 browser workflows pass: 70 native local, 13 account/TLS, 11 browser-only
+and one cross-origin browser–Archive workflow. Meta-tag controls, persistence,
+search and isolation are exercised in all three profiles, including actual
+workerd/D1 restart persistence. Late file reads, stale catalog writes, reversed
+search responses and failed head refreshes have regression coverage. Independent
+Standards and Spec rereviews are clear; desktop/mobile captures were inspected.
+Evidence is in ignored `runtime/meta-tags-final-check.log` and conformance/browser
+reports. Archive SQL, originals, versions and original Lance indexes remain
+unchanged after the rehearsals. These checks do not claim live migration, remote
+deployment or a fresh Docker rehearsal.
+
 ## Remaining non-migration implementation, completed 2026-10-14
 
 Implemented since the native sharing checkpoint below:

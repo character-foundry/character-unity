@@ -8,6 +8,7 @@ import { request, transaction } from './transaction.js';
 import { createBrowserArchiveOperations, deleteImportClaims, findImportMatchInTransaction, importClaims, importStores } from './archive.js';
 import { createBrowserSearchOutbox, enqueueSearchJob } from './search-outbox.js';
 import { assetAgeKey, retirementKey } from './maintenance.js';
+import { createBrowserMetaTags } from './meta-tags.js';
 
 function* get<T>(tx: IDBTransaction, store: string, id: string): Generator<IDBRequest, T | undefined, unknown> {
   return yield* request<T | undefined>(tx.objectStore(store).get(id));
@@ -83,6 +84,7 @@ export function createBrowserStore(db: IDBDatabase): UnityStore {
   return {
     ...archive,
     ...createBrowserSearchOutbox(db),
+    ...createBrowserMetaTags(db),
     readiness: () => inspectDatabase(db),
     async findSyncFork() { throw new StoreError('INVALID_INPUT', 'Signed sync writes require a SQL host'); },
     async createWorkspace(input) {

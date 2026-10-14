@@ -7,6 +7,7 @@ import type { LibrarySearch, SavedSearch } from '@/lib/library-search';
 import { archiveIsFiltered, archiveMode, archiveModes, archiveOrders, modeAvailable } from '@/lib/archive-search';
 import type { ArchiveStatus } from '@/lib/archive-search';
 import { TagPicker } from './tag-picker';
+import { MetaTagFilters } from './meta-tag-selector';
 
 const field = 'min-w-0 rounded-md border border-nebula/30 bg-cosmic-teal px-2.5 py-1.5 text-[13px] text-starlight';
 const label = 'flex min-w-0 flex-col gap-1 text-[12px] text-starlight/60';
@@ -78,9 +79,10 @@ export function ArchiveSearchBar({ search, submit, retry, status, tags, loading 
       {draft.expr && <label className={label}>Additional card-text expression (from the saved URL)
         <input aria-label="Additional Archive text" value={draft.expr} className={field} onChange={(event) => patch({ expr: event.target.value })} />
       </label>}
-      <details open={!!draft.archiveFilter || !!draft.tags.length || !!draft.exclude.length || !!draft.has.length || !!draft.source || !!draft.minTokens}>
+      <details open={!!draft.archiveFilter || !!draft.tags.length || !!draft.exclude.length || !!draft.has.length || !!draft.source || !!draft.minTokens || !!draft.metaTags.length || !!draft.excludeMetaTags.length}>
         <summary className="cursor-pointer text-[13px] font-medium text-starlight/75">Filters and saved searches</summary>
         <div className="mt-2 space-y-3">
+          <MetaTagFilters include={draft.metaTags} exclude={draft.excludeMetaTags} onInclude={(metaTags) => patch({ metaTags })} onExclude={(excludeMetaTags) => patch({ excludeMetaTags })} />
           <div className="grid gap-2 sm:grid-cols-2">
             <TagPicker label="Include tags" tone="include" value={draft.tags} options={tags} blocked={draft.exclude} onChange={(tags) => patch({ tags })} />
             <TagPicker label="Exclude tags" tone="exclude" value={draft.exclude} options={tags} blocked={draft.tags} onChange={(exclude) => patch({ exclude })} />

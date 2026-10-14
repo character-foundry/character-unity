@@ -34,7 +34,7 @@ if (process.env.UNITY_WEB_DIR) {
   const root = resolve(process.env.UNITY_WEB_DIR);
   await access(resolve(root, 'index.html'));
   app.get('/', serveStatic({ path: resolve(root, 'index.html') }));
-  for (const route of ['/explore', '/archive', '/new', '/search', '/settings', '/content', '/stats', '/sharing', '/remotes', '/chat-apps', '/card/:id', '/card/:id/edit', '/card/:id/fork']) {
+  for (const route of ['/explore', '/archive', '/new', '/search', '/settings', '/content', '/meta-tags', '/stats', '/sharing', '/remotes', '/chat-apps', '/card/:id', '/card/:id/edit', '/card/:id/fork']) {
     app.get(route, serveStatic({ path: resolve(root, 'index.html') }));
   }
   app.get('/assets/*', serveStatic({ root }));

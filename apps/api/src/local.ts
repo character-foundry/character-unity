@@ -21,6 +21,7 @@ export function createLocalApi(services: Awaited<ReturnType<typeof openLocalServ
   const app = createApi({ store: services.store, cards: services.cards, hub: services.hub, ...(services.archive ? { archive: services.archive } : {}), ...(services.nativeArchive ? { nativeArchive: services.nativeArchive } : {}),
     ...(services.libraryIndex ? { libraryIndex: services.libraryIndex } : {}),
     ...(services.statistics ? { statistics: services.statistics } : {}),
+    metaTags: services.metaTags,
     ...(services.content ? { content: services.content } : {}),
     ...(services.chat ? { chat: services.chat } : {}), authenticate(request) {
     if (!trusted(request, !['GET', 'HEAD'].includes(request.method))) return null;

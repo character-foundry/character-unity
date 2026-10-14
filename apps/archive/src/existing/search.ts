@@ -10,6 +10,8 @@ import { ArchiveError } from '@character-unity/archive-client/contract';
 import { normalizedVector } from '../embeddings.js';
 import type { DocumentEmbedder, QueryEmbedder } from '../embeddings.js';
 import { compileSearchFilter, searchFilterFields } from '../search-filter.js';
+import { compileTagGroupFilter } from '../tag-group-filter.js';
+import type { TagGroupFilter } from '../tag-group-filter.js';
 import { evaluateSearch, parseSearchExpression } from '../search-query.js';
 import { hybridRank } from '../semantic-search.js';
 import { buildSearchDocument } from '../search-document.js';
@@ -23,7 +25,7 @@ export interface ExistingSearchOptions {
   /** Required with an embedder: its old SQLite metadata identifies the vector space. */
   databasePath?: string;
 }
-export interface ExistingSearchQuery {
+export interface ExistingSearchQuery extends TagGroupFilter {
   mode?: 'lexical' | 'semantic' | 'hybrid';
   /** Legacy typed fields: source = chub, topics = fantasy, tokenCount >= 100;
    * AND/OR/NOT, parentheses, IN lists and ranges. Never raw SQL. Text search
@@ -150,11 +152,11 @@ export async function openExistingSearch(options: ExistingSearchOptions) {
     const sorts = Object.entries(browseOrders).filter(([, order]) => schema.fields.some((field) => field.name === order.column)).map(([sort]) => sort as ArchiveSort);
     let closed = false;
     function ready() { if (closed) throw new ArchiveError('UNAVAILABLE', 'Existing Lance connection is closed'); }
-    function predicate(query: Pick<ExistingSearchQuery, 'filter' | 'eligibleIds' | 'excludedIds'>, fields = lexicalFields) {
+    function predicate(query: Pick<ExistingSearchQuery, 'filter' | 'eligibleIds' | 'excludedIds'> & TagGroupFilter, fields = lexicalFields) {
       if (query.eligibleIds && (query.eligibleIds.length > 10_000 || new Set(query.eligibleIds).size !== query.eligibleIds.length)) invalid('Existing search accepts at most 10,000 unique eligible IDs; use metadata filters for broader subsets');
       if (query.excludedIds && (query.excludedIds.length > 10_000 || new Set(query.excludedIds).size !== query.excludedIds.length)) invalid('Existing search accepts at most 10,000 unique excluded IDs');
       const eligible = query.eligibleIds?.map(cardId), excluded = query.excludedIds?.map(cardId);
-      return [compileSearchFilter(query.filter ?? '', fields), eligible ? eligible.length ? `id IN (${eligible.map(quoted).join(', ')})` : 'false' : '',
+      return [compileSearchFilter(query.filter ?? '', fields), compileTagGroupFilter(query, fields), eligible ? eligible.length ? `id IN (${eligible.map(quoted).join(', ')})` : 'false' : '',
         excluded?.length ? `id NOT IN (${excluded.map(quoted).join(', ')})` : ''].filter(Boolean).map((value) => `(${value})`).join(' AND ');
     }
     return {
@@ -185,7 +187,7 @@ export async function openExistingSearch(options: ExistingSearchOptions) {
       },
       /** Server-side filtered paging, including broad subsets larger than the
        * search candidate budget. Only this page's IDs cross the Lance boundary. */
-      async browse(query: Pick<ExistingSearchQuery, 'filter' | 'eligibleIds' | 'excludedIds' | 'signal'> & { sort?: ArchiveSort; offset?: number; limit?: number; mergeCandidates?: boolean } = {}) {
+      async browse(query: Pick<ExistingSearchQuery, 'filter' | 'eligibleIds' | 'excludedIds' | 'signal'> & TagGroupFilter & { sort?: ArchiveSort; offset?: number; limit?: number; mergeCandidates?: boolean } = {}) {
         ready();
         const offset = query.offset ?? 0, limit = query.limit ?? 48, sort = query.sort ?? 'updated';
         if (!Number.isSafeInteger(offset) || offset < 0 || offset > 10_000_000 || !Number.isSafeInteger(limit) || limit < 1 || limit > (query.mergeCandidates ? 10_100 : 100)) invalid('Invalid existing Archive browse page');
@@ -221,7 +223,9 @@ export async function openExistingSearch(options: ExistingSearchOptions) {
         const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(query.signal ? [query.signal] : [])]);
         const deadlineAt = Date.now() + 25_000;
         function timeout() { signal.throwIfAborted(); return { timeoutMs: Math.max(1, Math.min(15_000, deadlineAt - Date.now())) }; }
-        const predicate = restrict(compileSearchFilter(query.filter ?? '', lexicalFields));
+        const usesLexical = mode === 'lexical' || mode === 'hybrid' && ratio < 1;
+        const predicate = restrict([compileSearchFilter(query.filter ?? '', lexicalFields), usesLexical ? compileTagGroupFilter(query, lexicalFields) : '']
+          .filter(Boolean).map((value) => `(${value})`).join(' AND '));
         const matches = new Map<string, SearchMatch>();
         const titles = new Map<string, string>();
         let complete = true;
@@ -291,7 +295,8 @@ export async function openExistingSearch(options: ExistingSearchOptions) {
         if (mode === 'lexical' || (mode === 'hybrid' && ratio === 0)) scores = await lexicalSearch();
         else {
           if (!vectorTable || !options.embedder || !dimensions) throw new ArchiveError('UNAVAILABLE', 'Existing Archive semantic search needs its vector table and embedding provider');
-          const predicate = restrict(compileSearchFilter(query.filter ?? '', vectorFields), 'card_id');
+          const predicate = restrict([compileSearchFilter(query.filter ?? '', vectorFields), compileTagGroupFilter(query, vectorFields)]
+            .filter(Boolean).map((value) => `(${value})`).join(' AND '), 'card_id');
           const vector = normalizedVector(await options.embedder.embed(text, signal), dimensions);
           let request = vectorTable.vectorSearch(vector).column('vector').distanceType('cosine')
             .select(['card_id', 'section', 'matchText', '_distance']).limit(limit + 1);

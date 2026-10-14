@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Locator, Page, TestInfo } from '@playwright/test';
+import type { MetaTagCatalog } from '../../packages/store/src/meta-tags.js';
 import { download, expect, gif, importCard, moduleRisum, notes, parse, png, save, screenshot, test, type Imported } from './fixtures.js';
 
 const origin = 'http://127.0.0.1:19432';
@@ -15,6 +16,98 @@ interface RemoteFixture { publisher: Credentials; receiver: Credentials; editor:
 const accounts = async () => JSON.parse(await readFile('runtime/e2e-native-hub.json', 'utf8')) as AccountFixture;
 const remoteFixture = async () => JSON.parse(await readFile('runtime/e2e-remote.json', 'utf8')) as RemoteFixture;
 const headers = (actor: Credentials, host = origin) => ({ origin: host, 'x-unity-actor': actor.account.id });
+
+test('native account Meta-tags persist, distinguish literal Library tags and isolate accounts and workspaces', async ({ page, browser, diagnostics }, info) => {
+  diagnostics.expectedStatuses.add(401);
+  const data = await accounts(), alice = data.accounts.Alice, bob = data.accounts.Bob;
+  const aliceAudit = audit(page, alice), second = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const other = await second.newPage(), bobAudit = audit(other, bob), name = 'Account Fantasy Guild';
+  async function createGroup(target: Page, member: string, workspace: string) {
+    await target.getByRole('button', { name: 'Create Meta-tag', exact: true }).click();
+    await target.getByLabel('Meta-tag name', { exact: true }).fill(name);
+    const input = target.getByRole('combobox', { name: 'Member tags', exact: true });
+    await input.fill(member); await input.press('Enter');
+    const saving = target.waitForResponse((response) => new URL(response.url()).pathname === `/api/workspaces/${workspace}/meta-tags`
+      && response.request().method() === 'PUT');
+    await target.getByRole('button', { name: 'Save Meta-tags', exact: true }).click();
+    const response = await saving;
+    expect(response.ok(), await response.text()).toBe(true);
+    const catalog = await response.json() as MetaTagCatalog;
+    await expect(target.getByRole('button', { name: 'Save Meta-tags', exact: true })).toBeDisabled();
+    const group = catalog.groups.find((group) => group.name === name);
+    expect(group?.members).toEqual([member]);
+    return group!;
+  }
+  try {
+    await login(page, alice);
+    const imported = await importCard(page, 'Native account Meta-tag Aster', 'json');
+    expect(imported.card.workspaceId).toBe(alice.workspaces!.library);
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    await page.getByRole('link', { name: 'Meta-tags', exact: true }).click();
+    const primary = await createGroup(page, 'browser-regression', alice.workspaces!.library);
+    await page.reload();
+    await expect(page.getByLabel('Meta-tag name', { exact: true })).toHaveValue(name);
+    await expect(page.getByRole('button', { name: 'Remove browser-regression', exact: true })).toBeVisible();
+    await expect((await accountMenu(page)).getByRole('combobox', { name: 'Workspace', exact: true })).toHaveValue(alice.workspaces!.library);
+    await page.keyboard.press('Escape');
+    await fit(page); await screenshot(page, info, 'native-account-meta-tags-saved-and-reloaded');
+
+    await page.getByRole('link', { name: 'Library', exact: true }).click();
+    const literal = page.getByRole('combobox', { name: 'Include tags', exact: true });
+    await literal.fill(name); await literal.press('Enter');
+    await expect(page.getByText('No cards match these filters', { exact: true })).toBeVisible();
+    expect(new URL(page.url()).searchParams.get('tags')).toBe(name);
+    expect(new URL(page.url()).searchParams.has('metaTags')).toBe(false);
+    await page.getByRole('button', { name: `Remove ${name}`, exact: true }).click();
+    await page.getByRole('button', { name: 'Filters', exact: true }).click();
+    const querying = page.waitForResponse((response) => new URL(response.url()).pathname === `/api/workspaces/${alice.workspaces!.library}/card-summaries`
+      && new URL(response.url()).searchParams.has('tagGroups'));
+    await page.getByLabel('Include Meta-tags', { exact: true }).selectOption(primary.id);
+    const result = await querying;
+    expect(result.ok(), await result.text()).toBe(true);
+    expect(JSON.parse(new URL(result.url()).searchParams.get('tagGroups')!)).toEqual([[name, 'browser-regression']]);
+    await expect(page.getByRole('button', { name: 'Quick view Native account Meta-tag Aster', exact: true })).toBeVisible();
+    expect(new URL(page.url()).searchParams.get('metaTags')).toBe(primary.id);
+    expect(new URL(page.url()).searchParams.has('tags')).toBe(false);
+    await fit(page); await screenshot(page, info, 'native-account-library-explicit-meta-tag-filter');
+
+    await page.getByRole('link', { name: 'Meta-tags', exact: true }).click();
+    await (await accountMenu(page)).getByRole('combobox', { name: 'Workspace', exact: true }).selectOption(alice.workspaces!.second);
+    await expect((await accountMenu(page)).getByRole('combobox', { name: 'Workspace', exact: true })).toHaveValue(alice.workspaces!.second);
+    await page.keyboard.press('Escape');
+    await page.getByRole('link', { name: 'Meta-tags', exact: true }).click();
+    await expect(page.getByText('No Meta-tags yet. Create one or review a legacy JSON import.', { exact: true })).toBeVisible();
+    const secondary = await createGroup(page, 'secondary-only', alice.workspaces!.second);
+    expect(secondary.id).not.toBe(primary.id);
+    await (await accountMenu(page)).getByRole('combobox', { name: 'Workspace', exact: true }).selectOption(alice.workspaces!.library);
+    await expect((await accountMenu(page)).getByRole('combobox', { name: 'Workspace', exact: true })).toHaveValue(alice.workspaces!.library);
+    await page.keyboard.press('Escape');
+    await page.getByRole('link', { name: 'Meta-tags', exact: true }).click();
+    await expect(page.getByLabel('Meta-tag name', { exact: true })).toHaveValue(name);
+    await expect(page.getByRole('button', { name: 'Remove browser-regression', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove secondary-only', exact: true })).toHaveCount(0);
+
+    await login(other, bob); await other.goto(`${origin}/meta-tags`);
+    await expect(other.getByText('No Meta-tags yet. Create one or review a legacy JSON import.', { exact: true })).toBeVisible();
+    const bobGroup = await createGroup(other, 'bob-only', bob.workspaces!.library);
+    expect(bobGroup.id).not.toBe(primary.id);
+    await other.reload();
+    await expect(other.getByLabel('Meta-tag name', { exact: true })).toHaveValue(name);
+    await expect(other.getByRole('button', { name: 'Remove bob-only', exact: true })).toBeVisible();
+    await expect(other.getByRole('button', { name: 'Remove browser-regression', exact: true })).toHaveCount(0);
+    await expect((await accountMenu(other)).getByRole('combobox', { name: 'Workspace', exact: true })).toHaveValue(bob.workspaces!.library);
+    await other.keyboard.press('Escape');
+    await fit(other); await screenshot(other, info, 'native-account-meta-tags-mobile-isolated-bob');
+    expect((await other.request.get(`${origin}/api/workspaces/${alice.workspaces!.library}/meta-tags`, { headers: headers(bob) })).status()).toBe(403);
+    await other.goto(origin);
+    await expect(other.getByRole('button', { name: 'Quick view Native account Meta-tag Aster', exact: true })).toHaveCount(0);
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Remove browser-regression', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Remove bob-only', exact: true })).toHaveCount(0);
+    await assertAudit(aliceAudit, info, 'meta-tags-alice-immutable-request-audit');
+    await assertAudit(bobAudit, info, 'meta-tags-bob-immutable-request-audit');
+  } finally { await second.close(); }
+});
 
 function audit(page: Page, actor: Credentials) {
   const errors: string[] = [], unpinned: string[] = [], requests: string[] = [];

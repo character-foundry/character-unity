@@ -164,6 +164,24 @@ try {
   assert.deepEqual(await (await a.request.get(`${origin}${cardPath}/original`, { headers: headers(alice) })).body(), original);
   passed.push('native Vite shell, account profile, actor-pinned import/edit/view/tokenizer and exact original bytes');
 
+  await a.getByRole('link', { name: 'Meta-tags', exact: true }).click();
+  await a.getByRole('button', { name: 'Create Meta-tag', exact: true }).click();
+  await a.getByLabel('Meta-tag name', { exact: true }).fill('Worker Fantasy Guild');
+  const member = a.getByRole('combobox', { name: 'Member tags', exact: true });
+  await member.fill('worker-proof'); await member.press('Enter');
+  const savingGroups = a.waitForResponse((response) => response.url().endsWith('/meta-tags') && response.request().method() === 'PUT');
+  await a.getByRole('button', { name: 'Save Meta-tags', exact: true }).click();
+  const savedGroups = await savingGroups; assert.equal(savedGroups.status(), 200);
+  const catalog = await savedGroups.json(), metaPath = new URL(savedGroups.url()).pathname;
+  await expect(a.getByRole('button', { name: 'Save Meta-tags', exact: true })).toBeDisabled();
+  await a.reload(); await expect(a.getByLabel('Meta-tag name', { exact: true })).toHaveValue('Worker Fantasy Guild');
+  await a.getByRole('link', { name: 'Library', exact: true }).click();
+  await a.getByRole('button', { name: 'Filters', exact: true }).click();
+  await a.getByLabel('Include Meta-tags', { exact: true }).selectOption(catalog.groups[0].id);
+  await expect(a.getByRole('button', { name: 'Quick view Worker Aster', exact: true })).toBeVisible();
+  assert.deepEqual(await (await a.request.get(`${origin}${cardPath}/original`, { headers: headers(alice) })).body(), original);
+  passed.push('native Meta-tag controls, D1 persistence after reload, grouped Library search and unchanged original');
+
   await a.goto(`${origin}/sharing`); await a.getByRole('button', { name: 'Publish saved revisions', exact: true }).click();
   await a.getByRole('checkbox', { name: 'Select Worker Aster', exact: true }).check();
   await a.getByRole('button', { name: 'Review 1 selected', exact: true }).click();
@@ -172,6 +190,7 @@ try {
   const publishing = a.waitForResponse((response) => response.url().endsWith('/hub/publications') && response.request().method() === 'POST');
   await review.getByRole('button', { name: 'Publish selected revisions', exact: true }).click(); assert.equal((await publishing).status(), 201);
   await login(b, bob); await b.goto(`${origin}/sharing`);
+  assert.equal((await b.request.get(`${origin}${metaPath}`, { headers: headers(bob) })).status(), 403);
   await publicationRow(b, 'Worker Aster').getByRole('button', { name: 'View publication', exact: true }).click();
   const detail = b.getByRole('dialog', { name: 'Published character', exact: true });
   const forking = b.waitForResponse((response) => response.url().endsWith('/forks') && response.request().method() === 'POST');
@@ -218,10 +237,11 @@ try {
 
   await stop(); await start(); await b.reload(); await expect(b.getByRole('heading', { name: 'Worker Aster by Bob', exact: true, level: 1 })).toBeVisible();
   assert.deepEqual(await (await a.request.get(`${origin}${cardPath}/original`, { headers: headers(alice) })).body(), original);
+  assert.deepEqual(await (await a.request.get(`${origin}${metaPath}`, { headers: headers(alice) })).json(), catalog);
   assert.deepEqual(await (await a.request.get(`${referencePath}/original`, { headers: headers(alice) })).body(), linkedOriginal);
   assert.deepEqual(aliceUnpinned, []); assert.deepEqual(bobUnpinned, []); assert.deepEqual(browserArchiveReads, []);
   assert.deepEqual({ rows: archiveRows(), files: await inventory(join(archiveRoot, 'files')), versions: await inventory(join(archiveRoot, 'versions')) }, archiveBefore);
-  passed.push('workerd restart preserves D1/R2, sessions, forks and linked originals; Archive originals/rows/queues unchanged');
+  passed.push('workerd restart preserves D1/R2, sessions, Meta-tags, forks and linked originals; Archive originals/rows/queues unchanged');
 
   await stop(); await start('browser'); const local = await browser.newPage({ viewport: { width: 390, height: 844 } }), apiReads = [];
   audit(local); local.on('request', (request) => { if (new URL(request.url()).pathname.startsWith('/api/')) apiReads.push(request.url()); });
@@ -246,7 +266,7 @@ try {
   passed.push('browser-light native UI import/edit/restart keeps same-origin IndexedDB with no D1/R2/account API calls');
   await writeFile('runtime/worker-rehearsal.json', JSON.stringify({ version: 2, runtime: 'local-wrangler-workerd', schemaVersion,
     passed, screenshots: await readdir(artifactRoot), remoteDeployment: false, liveMigration: false }, null, 2) + '\n');
-  console.log('Native Worker and browser-light rehearsals passed: accounts, editor, tokenizer, sharing/forks, Archive references, stats and restart');
+  console.log('Native Worker and browser-light rehearsals passed: accounts, editor, Meta-tags, tokenizer, sharing/forks, Archive references, stats and restart');
 } finally {
   await browser?.close(); await stop(); await stopArchive(); await rm(root, { recursive: true, force: true });
 }

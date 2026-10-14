@@ -80,6 +80,28 @@ describe('native Archive store', () => {
     expect(archive.status()).toMatchObject({ cards: 3, providers: { chub: 2, ct: 1 } });
   });
 
+  it('combines literal tags with bounded OR groups and pins grouped query paging without rewriting originals', async () => {
+    await archive.put(scraped('1', { name: 'Forest mage' }, { tags: ['Fantasy', 'female'] }));
+    await archive.put(scraped('2', { name: 'Forest knight' }, { tags: ['Fantasy', 'male'] }));
+    await archive.put(scraped('3', { name: 'Space robot' }, { tags: ['SciFi', 'robot'] }));
+    await archive.put(scraped('4', { name: 'Night vampire' }, { tags: ['Vampire', 'male'] }));
+    const names = (query: Parameters<NativeArchive['list']>[0]) => archive.list(query).cards.map((card) => card.name).sort();
+    expect(names({ tags: ['male'], tagGroups: [[' FANTASY ', 'SciFi']] })).toEqual(['Forest knight']);
+    expect(names({ tags: ['male'], tagGroups: [['fantasy', 'scifi']], tagMode: 'any' })).toEqual(['Forest knight', 'Forest mage', 'Night vampire', 'Space robot']);
+    expect(names({ tagGroups: [['fantasy', 'scifi'], ['female', 'robot']] })).toEqual(['Forest mage', 'Space robot']);
+    expect(names({ tagGroups: [['fantasy', 'scifi']], excludeTagGroups: [['female', 'robot']] })).toEqual(['Forest knight']);
+    expect(names({ tagGroups: [['fantasy', 'scifi']], exclude: ['male'], excludeTagGroups: [['robot']] })).toEqual(['Forest mage']);
+    const before = await archive.card('chub:1'), original = before.versionList[0]!.objects[0]!;
+    const accepted = (await archive.object(original.sha256)).bytes;
+    const first = archive.list({ tagGroups: [['fantasy', 'scifi']], sort: 'name', limit: 1 });
+    expect(archive.list({ tagGroups: [['SCIFI', ' Fantasy ']], sort: 'name', limit: 1, offset: 1, snapshot: first.snapshot }).total).toBe(3);
+    expect(() => archive.list({ tagGroups: [['vampire']], sort: 'name', limit: 1, offset: 1, snapshot: first.snapshot })).toThrow('query changed');
+    archive.close(); archive = await openNativeArchive(directory);
+    expect(names({ tagGroups: [['fantasy', 'scifi']], excludeTagGroups: [['female', 'robot']] })).toEqual(['Forest knight']);
+    expect((await archive.card('chub:1')).versionList).toEqual(before.versionList);
+    expect((await archive.object(original.sha256)).bytes).toEqual(accepted);
+  });
+
   it('hides blocked records everywhere and tells the run loop not to fetch them', async () => {
     await archive.put(scraped('1'));
     archive.block('chub', '1');

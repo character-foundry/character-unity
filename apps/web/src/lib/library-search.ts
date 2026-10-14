@@ -1,9 +1,13 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useLibraryClient } from './library-client';
 import type { LibraryClient, LibraryQuery } from './unity';
 import { toListItem } from './adapt';
 import type { CardListItem } from '@/types/card';
+import { readMetaTags } from './meta-tags';
+import { resolveMetaTagFilters } from '@character-unity/store/meta-tags';
+import { libraryChanged, useLibraryVersion } from './library-events';
+export { libraryChanged, useLibraryVersion } from './library-events';
 
 /** Library search state as it lives in the URL. Defaults are left out so links stay short. */
 export interface LibrarySearch {
@@ -11,8 +15,10 @@ export interface LibrarySearch {
   /** The Filters drawer's advanced search; combined with the top box's `q` as `(q) (expr)`. */
   expr: string;
   tags: string[];
+  metaTags: string[];
   tagMode: 'all' | 'any';
   exclude: string[];
+  excludeMetaTags: string[];
   has: string[];
   fork: '' | 'only' | 'none';
   favorite: '' | 'fav' | 'not_fav';
@@ -24,7 +30,7 @@ export interface LibrarySearch {
   archiveMode: string;
   archiveFilter: string;
 }
-export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], tagMode: 'all', exclude: [], has: [], fork: '', favorite: '', source: '', minTokens: '', sort: '', archiveMode: '', archiveFilter: '' };
+export const emptySearch: LibrarySearch = { q: '', expr: '', tags: [], metaTags: [], tagMode: 'all', exclude: [], excludeMetaTags: [], has: [], fork: '', favorite: '', source: '', minTokens: '', sort: '', archiveMode: '', archiveFilter: '' };
 
 export const sortOptions = [
   { value: 'edited', label: 'Recently edited' },
@@ -85,8 +91,10 @@ export function readSearch(params: URLSearchParams): LibrarySearch {
     q: params.get('search') ?? params.get('q') ?? '',
     expr: params.get('expr') ?? '',
     tags: list(params.get('tags') ?? params.get('tag')),
+    metaTags: list(params.get('metaTags')),
     tagMode: params.get('match') === 'any' ? 'any' : 'all',
     exclude: list(params.get('exclude')),
+    excludeMetaTags: list(params.get('excludeMetaTags')),
     has: list(params.get('has')),
     fork: fork === 'only' || fork === 'none' ? fork : '',
     favorite: favorite === 'fav' || favorite === 'not_fav' ? favorite : '',
@@ -103,8 +111,10 @@ export function writeSearch(search: LibrarySearch): URLSearchParams {
   if (search.q.trim()) params.set('search', search.q.trim());
   if (search.expr.trim()) params.set('expr', search.expr.trim());
   if (search.tags.length) params.set('tags', search.tags.join(','));
+  if (search.metaTags.length) params.set('metaTags', search.metaTags.join(','));
   if (search.tagMode === 'any') params.set('match', 'any');
   if (search.exclude.length) params.set('exclude', search.exclude.join(','));
+  if (search.excludeMetaTags.length) params.set('excludeMetaTags', search.excludeMetaTags.join(','));
   if (search.has.length) params.set('has', search.has.join(','));
   if (search.fork) params.set('fork', search.fork);
   if (search.favorite) params.set('favorite', search.favorite);
@@ -132,20 +142,13 @@ export function useSearchState(history: 'replace' | 'push' = 'replace') {
   return { search: readSearch(params), update, replace };
 }
 export function isFiltered(search: LibrarySearch) {
-  return !!(search.q.trim() || search.expr.trim() || search.tags.length || search.exclude.length || search.has.length || search.fork
+  return !!(search.q.trim() || search.expr.trim() || search.tags.length || search.metaTags.length || search.exclude.length || search.excludeMetaTags.length || search.has.length || search.fork
     || search.favorite || search.source || search.minTokens);
 }
 export const sameTag = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 
 // ---- Tag counts ----------------------------------------------------------------------------------
 
-let tagVersion = 0;
-const tagListeners = new Set<() => void>();
-/** Call after imports, edits or deletes so tag counts reload. */
-export function libraryChanged() { tagVersion++; for (const listener of tagListeners) listener(); }
-export function useLibraryVersion() {
-  return useSyncExternalStore((listener) => { tagListeners.add(listener); return () => tagListeners.delete(listener); }, () => tagVersion);
-}
 interface LibraryCache { tags: { tag: string; count: number }[]; followed: string[]; views: Map<string, View> }
 const caches = new WeakMap<LibraryClient, LibraryCache>();
 function cacheFor(client: LibraryClient) {
@@ -208,7 +211,7 @@ interface View { cards: unknown[]; total: number; scrollY: number }
  * An infinite list for one query `key` (namespace it per page). Pages come from `fetchRange`; a remembered
  * query shows its loaded range and scroll position at once, then refreshes that range.
  */
-export function useFeed<T extends { id: string }>(key: string, fetchRange: (offset: number, count: number) => Promise<{ cards: T[]; total: number }>) {
+export function useFeed<T extends { id: string }>(key: string, fetchRange: (offset: number, count: number, signal: AbortSignal) => Promise<{ cards: T[]; total: number }>) {
   const client = useLibraryClient(), views = cacheFor(client).views;
   const version = useLibraryVersion();
   const cachedView = () => views.get(key) as { cards: T[]; total: number; scrollY: number } | undefined;
@@ -218,6 +221,7 @@ export function useFeed<T extends { id: string }>(key: string, fetchRange: (offs
   const [loading, setLoading] = useState(!cached);
   const [error, setError] = useState<string | null>(null);
   const request = useRef(0);
+  const pending = useRef<AbortController | null>(null);
   const busy = useRef(false);
   const fetcher = useRef(fetchRange); fetcher.current = fetchRange;
   const current = state.key === key ? state : { key, cards: cachedView()?.cards ?? [], total: cachedView()?.total ?? 0 };
@@ -225,26 +229,35 @@ export function useFeed<T extends { id: string }>(key: string, fetchRange: (offs
   // A new query starts over; a remembered one refreshes the range it had loaded, keeping its height.
   useEffect(() => {
     const id = ++request.current, remembered = views.get(key);
-    busy.current = true; setError(null);
-    if (!remembered) { setLoading(true); setState({ key, cards: [], total: 0 }); }
-    fetcher.current(0, Math.max(PAGE_SIZE, remembered?.cards.length ?? 0)).then((result) => {
-      if (id !== request.current) return;
+    const controller = new AbortController(); pending.current?.abort(); pending.current = controller;
+    busy.current = true; setLoading(true); setError(null);
+    if (!remembered) setState({ key, cards: [], total: 0 });
+    fetcher.current(0, Math.max(PAGE_SIZE, remembered?.cards.length ?? 0), controller.signal).then((result) => {
+      if (id !== request.current || controller.signal.aborted) return;
       setState({ key, ...result });
       views.set(key, { ...result, scrollY: views.get(key)?.scrollY ?? 0 });
     }).catch((failure: unknown) => {
-      if (id === request.current) setError(failure instanceof Error ? failure.message : 'Cards could not be loaded.');
-    }).finally(() => { if (id === request.current) { busy.current = false; setLoading(false); } });
-    return () => { request.current++; };
+      if (id === request.current && !controller.signal.aborted) {
+        // A failed refreshed head must not leave an old rule snapshot pageable.
+        views.delete(key); setState({ key, cards: [], total: 0 });
+        setError(failure instanceof Error ? failure.message : 'Cards could not be loaded.');
+      }
+    }).finally(() => {
+      if (pending.current === controller) pending.current = null;
+      if (id === request.current) { busy.current = false; setLoading(false); }
+    });
+    return () => { request.current++; controller.abort(); pending.current?.abort(); pending.current = null; };
   }, [key, version, views]);
 
   const hasMore = current.cards.length < current.total;
   const loadMore = useCallback(async () => {
     if (busy.current || !hasMore) return;
     const id = ++request.current, offset = current.cards.length;
+    const controller = new AbortController(); pending.current = controller;
     busy.current = true; setLoading(true); setError(null);
     try {
-      const result = await fetcher.current(offset, PAGE_SIZE);
-      if (id !== request.current) return;
+      const result = await fetcher.current(offset, PAGE_SIZE, controller.signal);
+      if (id !== request.current || controller.signal.aborted) return;
       const seen = new Set(current.cards.map((card) => card.id));
       const cards = [...current.cards, ...result.cards.filter((card) => !seen.has(card.id))];
       // An empty page means cards were removed while browsing; stop at what is loaded.
@@ -252,8 +265,9 @@ export function useFeed<T extends { id: string }>(key: string, fetchRange: (offs
       setState({ key, cards, total });
       views.set(key, { cards, total, scrollY: views.get(key)?.scrollY ?? 0 });
     } catch (failure) {
-      if (id === request.current) setError(failure instanceof Error ? failure.message : 'More cards could not be loaded.');
+      if (id === request.current && !controller.signal.aborted) setError(failure instanceof Error ? failure.message : 'More cards could not be loaded.');
     } finally {
+      if (pending.current === controller) pending.current = null;
       if (id === request.current) { busy.current = false; setLoading(false); }
     }
   }, [current.cards, hasMore, key, views]);
@@ -308,13 +322,30 @@ export function excludedTags(search: Pick<LibrarySearch, 'exclude'>, hidden: { t
 
 export function useLibraryFeed(search: LibrarySearch, hidden: { tags: readonly string[]; hideNsfw: boolean }) {
   const client = useLibraryClient();
+  const version = useLibraryVersion();
+  const pinnedGroups = useRef<{ client: LibraryClient; version: number; key: string; groups: Pick<LibraryQuery, 'tagGroups' | 'excludeTagGroups'> } | null>(null);
   const query: LibraryQuery = { q: searchText(search), tags: search.tags, tagMode: search.tagMode, exclude: excludedTags(search, hidden), has: search.has,
     ...(search.fork ? { fork: search.fork } : {}), ...(search.favorite ? { favorite: search.favorite } : {}),
     ...(search.source ? { source: search.source } : {}), ...(search.minTokens ? { minTokens: Number(search.minTokens) } : {}), sort: sortOptions.some((option) => option.value === search.sort) ? search.sort : 'edited' };
-  return useFeed<CardListItem>(`library:${JSON.stringify(query)}`, async (offset, count) => {
+  const key = `library:${JSON.stringify(query)}:${JSON.stringify([search.metaTags, search.excludeMetaTags])}`;
+  const activeOwner = useRef({ client, version, key }); activeOwner.current = { client, version, key };
+  return useFeed<CardListItem>(key, async (offset, count, signal) => {
     const workspace = client.workspaceId;
+    // Paging keeps the same rule snapshot. Refreshing starts from zero and reloads
+    // definitions; editing a group cannot quietly change the middle of a feed.
+    const pin = pinnedGroups.current;
+    let groups = offset > 0 && pin?.key === key && pin.client === client && pin.version === version ? pin.groups : null;
+    if (!groups) {
+      groups = search.metaTags.length || search.excludeMetaTags.length
+        ? resolveMetaTagFilters(await readMetaTags(client, signal), { metaTags: search.metaTags, excludeMetaTags: search.excludeMetaTags }) : {};
+      signal.throwIfAborted();
+      const owner = activeOwner.current;
+      if (owner.client !== client || owner.key !== key || owner.version !== version) throw new DOMException('The library search was superseded', 'AbortError');
+      pinnedGroups.current = { client, version, key, groups };
+    }
     return fetchPages(offset, count, async (from, limit) => {
-      const page = await client.listCards({ ...query, offset: from, limit });
+      signal.throwIfAborted();
+      const page = await client.listCards({ ...query, ...groups, offset: from, limit }, signal);
       return { items: page.cards.map((summary) => toListItem(workspace, summary)), total: page.total };
     });
   });

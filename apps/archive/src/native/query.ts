@@ -1,11 +1,12 @@
-import { parseLibraryQuery } from '@character-unity/store/library-query';
+import { fold, normalizeTagGroupFilters, parseLibraryQuery } from '@character-unity/store/library-query';
 import type { QueryNode } from '@character-unity/store/library-query';
 import type { SearchFilterField } from '@character-unity/archive-client';
+import { nativeArchiveSorts, nativeArchiveFlags } from '@character-unity/archive-client/native';
+import type { NativeArchiveQuery } from '@character-unity/archive-client/native';
 
-export const archiveSorts = ['updated', 'added', 'newest', 'oldest', 'name', 'name_desc', 'tokens_desc', 'tokens_asc',
-  'stars', 'favorites', 'chats', 'downloads', 'greetings', 'lorebook'] as const;
+export const archiveSorts = nativeArchiveSorts;
 export type ArchiveSort = typeof archiveSorts[number];
-export const archiveFlags = ['greetings', 'lorebook', 'gallery', 'embeddedImages', 'expressions', 'portrait', 'systemPrompt', 'exampleDialogues', 'followed'] as const;
+export const archiveFlags = nativeArchiveFlags;
 export type ArchiveFlag = typeof archiveFlags[number];
 export interface ArchiveCapabilities {
   lexical: boolean; semantic: boolean; browse: boolean;
@@ -16,30 +17,11 @@ export interface ArchiveCapabilities {
 export const isArchiveSort = (value: string): value is ArchiveSort => (archiveSorts as readonly string[]).includes(value);
 export const isArchiveFlag = (value: string): value is ArchiveFlag => (archiveFlags as readonly string[]).includes(value);
 
-export interface ArchiveQuery {
-  /** Existing LanceDB search; semantic modes require a compatible configured query embedder. */
-  mode?: 'browse' | 'lexical' | 'semantic' | 'hybrid';
-  /** Typed Lance metadata expression, never raw SQL. Requires the existing search index. */
-  filter?: string;
-  /** Repeat the first page's snapshot to reject changed data, index generations or query parameters. */
-  snapshot?: string;
+export interface ArchiveQuery extends NativeArchiveQuery {
   /** HTTP-owned cancellation; never accepted as a caller-supplied query parameter. */
   signal?: AbortSignal;
   /** Trusted API proxy only, never a URL parameter. */
   libraryWorkspaceId?: string;
-  /** The library's search syntax: words, "phrases", OR, NOT/-, parentheses, name:, creator:, description:, tag:. */
-  q?: string;
-  tags?: readonly string[];
-  tagMode?: 'all' | 'any';
-  exclude?: readonly string[];
-  has?: readonly ArchiveFlag[];
-  provider?: string;
-  minTokens?: number;
-  /** Creators for the `followed` flag (the library keeps the follow list). */
-  creators?: readonly string[];
-  sort?: ArchiveSort;
-  offset?: number;
-  limit?: number;
 }
 
 const columns: Record<string, string> = { name: 'name', creator: 'creator', description: 'description' };
@@ -52,8 +34,8 @@ function ftsString(value: string): string | null {
 
 function termSql(node: Extract<QueryNode, { kind: 'term' }>, params: (string | number)[]): string {
   if (node.field === 'tag') {
-    params.push(node.value.toLowerCase());
-    return 'EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND t.folded = ?)';
+    params.push(fold(node.value.trim()));
+    return 'EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND lower(t.tag) = ?)';
   }
   const match = ftsString(node.value);
   if (!match) return '0';
@@ -88,20 +70,17 @@ export function archiveFilterSql(query: ArchiveQuery): { where: string[]; params
   const params: (string | number)[] = [];
   const parsed = query.q ? parseLibraryQuery(query.q) : null;
   if (parsed) where.push(nodeSql(parsed, params));
-  const tags = [...new Set((query.tags ?? []).map((tag) => tag.toLowerCase()))];
-  if (tags.length) {
-    if (query.tagMode === 'any') {
-      where.push(`EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND t.folded IN (${tags.map(() => '?').join(', ')}))`);
-      params.push(...tags);
-    } else for (const tag of tags) {
-      where.push('EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND t.folded = ?)');
-      params.push(tag);
-    }
+  const tags = [...new Set((query.tags ?? []).map((tag) => fold(tag.trim())).filter(Boolean))];
+  const groups = normalizeTagGroupFilters(query), included: string[] = [];
+  for (const group of [...tags.map((tag) => [tag]), ...groups.tagGroups]) {
+    included.push('EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND lower(t.tag) IN (SELECT value FROM json_each(?)))');
+    params.push(JSON.stringify(group));
   }
-  const exclude = [...new Set((query.exclude ?? []).map((tag) => tag.toLowerCase()))];
-  if (exclude.length) {
-    where.push(`NOT EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND t.folded IN (${exclude.map(() => '?').join(', ')}))`);
-    params.push(...exclude);
+  if (included.length) where.push(`(${included.join(query.tagMode === 'any' ? ' OR ' : ' AND ')})`);
+  const exclude = [...new Set((query.exclude ?? []).map((tag) => fold(tag.trim())).filter(Boolean))];
+  for (const group of [exclude, ...groups.excludeTagGroups]) if (group.length) {
+    where.push('NOT EXISTS (SELECT 1 FROM card_tags t WHERE t.card_id = c.id AND lower(t.tag) IN (SELECT value FROM json_each(?)))');
+    params.push(JSON.stringify(group));
   }
   if (query.provider) { where.push('c.provider = ?'); params.push(query.provider); }
   if (query.minTokens) { where.push('c.tokens >= ?'); params.push(query.minTokens); }

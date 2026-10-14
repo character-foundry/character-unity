@@ -8,6 +8,7 @@ import type { NativeArchive } from './store.js';
 import { createScheduler } from './scheduler.js';
 import { createNativeArchiveApp, nativeAdminPrefix, nativeReadPrefix } from './app.js';
 import { serve } from '@hono/node-server';
+import { serializeNativeArchiveQuery } from '@character-unity/archive-client/native';
 
 const token = 'test-admin-token-0123456789abcdef';
 const encoder = new TextEncoder();
@@ -54,6 +55,37 @@ describe('native Archive service', () => {
     const admin = (path: string, init: RequestInit = {}) => app.request(`${nativeAdminPrefix}${path}`, { ...init, headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', ...init.headers as Record<string, string> } });
     return { demo, scheduler, app, admin };
   };
+
+  it('validates bounded JSON tag groups on the public read route and pins normalized group paging', async () => {
+    const { app } = setup();
+    for (const [recordId, name, tags] of [['a', 'Aster', ['Fantasy', 'female']], ['b', 'Birch', ['SciFi', 'robot']]] as const) {
+      await archive.put({ provider: 'demo', recordId, url: `https://demo.test/${recordId}`, tags: [...tags],
+        objects: [{ role: 'card', bytes: cardBytes(name), mediaType: 'application/json' }] });
+    }
+    const before = await archive.card('demo:a');
+    const read = (params: URLSearchParams) => app.request(`${nativeReadPrefix}/cards?${params}`);
+    const first = await read(serializeNativeArchiveQuery({ tagGroups: [[' Fantasy ', 'SciFi']], sort: 'name', limit: 1 }));
+    expect(first.status).toBe(200);
+    const body = await first.json(); expect(body.total).toBe(2); expect(body.cards[0].name).toBe('Aster');
+    const second = await read(serializeNativeArchiveQuery({ tagGroups: [['SCIFI', 'fantasy']], sort: 'name', limit: 1, offset: 1, snapshot: body.snapshot }));
+    expect(second.status).toBe(200); expect((await second.json()).cards[0].name).toBe('Birch');
+    expect((await read(serializeNativeArchiveQuery({ tagGroups: [['robot']], sort: 'name', offset: 1, snapshot: body.snapshot }))).status).toBe(409);
+    const excluded = await read(serializeNativeArchiveQuery({ tagGroups: [['fantasy', 'scifi']], excludeTagGroups: [['female']] }));
+    expect(excluded.status).toBe(200); expect((await excluded.json()).cards.map((card: { name: string }) => card.name)).toEqual(['Birch']);
+    const boundary = await read(serializeNativeArchiveQuery({ tagGroups: [Array.from({ length: 101 }, (_, index) => index === 100 ? 'fantasy' : `absent-${index}`)] }));
+    expect(boundary.status).toBe(200); expect((await boundary.json()).total).toBe(1);
+    for (const value of [null, 0, {}, [['fantasy', 1]], [[]], [[' ']], [['x'.repeat(129)]],
+      Array.from({ length: 21 }, () => ['fantasy']), [Array.from({ length: 102 }, () => 'fantasy')],
+      Array.from({ length: 10 }, () => Array.from({ length: 101 }, () => 'fantasy'))]) {
+      const response = await read(new URLSearchParams({ tagGroups: JSON.stringify(value) }));
+      expect(response.status).toBe(400); expect(await response.json()).toMatchObject({ error: { code: 'INVALID_INPUT' } });
+    }
+    expect((await read(new URLSearchParams({ tagGroups: JSON.stringify(Array.from({ length: 20 }, () => ['fantasy'])), excludeTagGroups: '[["robot"]]' }))).status).toBe(400);
+    const duplicate = new URLSearchParams({ tagGroups: '[["fantasy"]]' }); duplicate.append('tagGroups', '[["robot"]]');
+    expect((await read(duplicate)).status).toBe(400);
+    expect(() => serializeNativeArchiveQuery({ tagGroups: Array.from({ length: 10 }, () => Array.from({ length: 100 }, () => 'x'.repeat(128))) })).toThrow('URL exceeds');
+    expect((await archive.card('demo:a')).versionList).toEqual(before.versionList);
+  });
 
   it('guards admin routes with the token and never returns secrets', async () => {
     const { app, admin } = setup();

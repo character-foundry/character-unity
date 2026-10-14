@@ -49,6 +49,24 @@ export async function librarySearchCases(store: UnityStore, workspaceId: string)
   expect(await ids({ tags: ['fantasy'], excludeTags: ['nsfw'] })).toEqual(sorted(wolf.card.id, fork.card.id));
   expect(await ids({ excludeTags: ['NSFW', 'robot'] })).toEqual(sorted(wolf.card.id, fork.card.id));
   expect(await ids({ tag: 'scifi' })).toEqual([zed.card.id]);
+  // Named groups are independently OR-expanded, never reverse aliases or query text.
+  expect(await ids({ tags: ['male'], tagGroups: [[' FANTASY ', 'SciFi']] })).toEqual([wolf.card.id]);
+  expect(await ids({ tagGroups: [['fantasy', 'scifi'], ['female', 'robot']] })).toEqual(sorted(ember.card.id, fork.card.id, zed.card.id));
+  expect(await ids({ tags: ['male'], tagGroups: [['female', 'robot']], tagMode: 'any' })).toEqual(sorted(ember.card.id, wolf.card.id, zed.card.id, fork.card.id));
+  expect(await ids({ tagGroups: [['fantasy', 'scifi']], excludeTagGroups: [['NSFW', 'robot']] })).toEqual(sorted(wolf.card.id, fork.card.id));
+  expect(await ids({ tags: ['fantasy'], excludeTags: ['nsfw'], excludeTagGroups: [['male']] })).toEqual([fork.card.id]);
+  expect(await ids({ q: 'name:zed', tagGroups: [['robot', 'male']] })).toEqual([zed.card.id]);
+  expect(await ids({ tagGroups: [["robot') OR 1=1 --", 'absent']] })).toEqual([]);
+  const thousand = Array.from({ length: 10 }, (_, group) => Array.from({ length: 100 }, (_, member) => group === 9 && member === 99 ? 'robot' : `missing-${group}-${member}`));
+  expect(await ids({ tagGroups: thousand, tagMode: 'any' })).toEqual([zed.card.id]);
+  expect(await ids({ tagGroups: [Array.from({ length: 101 }, (_, member) => member === 100 ? 'robot' : `missing-${member}`)] })).toEqual([zed.card.id]);
+  for (const filter of [
+    { tagGroups: Array.from({ length: 21 }, () => ['robot']) },
+    { tagGroups: [Array.from({ length: 102 }, () => 'robot')] },
+    { tagGroups: thousand, excludeTagGroups: [['female']] },
+    { tagGroups: [['x'.repeat(129)]] }, { tagGroups: [[]] }, { excludeTagGroups: [['  ']] },
+    { tagGroups: Array<string[]>(1) }, { tagGroups: [Array<string>(1)] },
+  ]) await expect(store.listCardSummaries(workspaceId, filter)).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   // Content flags and forks.
   expect(await ids({ has: ['lorebook'] })).toEqual([ember.card.id]);
   expect(await ids({ has: ['greetings'] })).toEqual([ember.card.id]);
@@ -128,4 +146,23 @@ export async function librarySearchCases(store: UnityStore, workspaceId: string)
   expect((await store.listCardTags(workspaceId)).map((entry) => entry.tag.toLowerCase())).not.toContain('nsfw');
   expect((await store.listCardSummaries(workspaceId, { ids: [fork.card.id] })).items[0]!.card.forkedFromRevisionId).toBe(ember.revision.id);
   expect((await store.revisionsMissingMetrics({ limit: 100 })).map((item) => item.revisionId)).not.toContain(ember.revision.id);
+
+  // The globally-unioned library remains within D1's binding budget even with
+  // 32 text terms, 20 raw tags, 20 OR groups and 100 excluded raw tags.
+  const budgetTags = Array.from({ length: 20 }, (_, index) => `budget-${index}`);
+  const budget = await store.createCard(input(card({ name: 'Budget owner', tags: budgetTags })));
+  const reference = await store.addArchiveReference({ workspaceId, pin: { archiveId: 'group-fixture', cardId: 'source', versionId: 'v1' },
+    fileHash: 'b'.repeat(64), summary: { name: 'Budget reference', creator: '', description: 'budget', tags: budgetTags,
+      source: 'chub', format: 'json', changedAt: '2026-10-14T12:00:00.000Z', tokensTotal: null, flags: [], portrait: false } });
+  const groupedPage = await store.listLibrarySummaries(workspaceId, { q: Array.from({ length: 32 }, () => 'budget').join(' '), tags: budgetTags,
+    tagGroups: budgetTags.map((tag) => [tag, `absent-${tag}`]), excludeTags: Array.from({ length: 100 }, (_, index) => `excluded-${index}`) });
+  expect(groupedPage.total).toBe(2);
+  expect(groupedPage.items.map((item) => 'reference' in item ? item.reference.id : item.card.id).sort()).toEqual(sorted(budget.card.id, reference.id));
+  expect((await store.getRevision(workspaceId, budget.revision.id)).document).toEqual(card({ name: 'Budget owner', tags: budgetTags }));
+  const exact = await store.createCard(input(card({ name: 'Exact tags', tags: ['Ä', 'sea, sky', '  padded  '] })));
+  const other = await store.createCard(input(card({ name: 'Distinct tags', tags: ['ä', 'sea', 'sky'] })));
+  expect(await ids({ tagGroups: [['Ä']] })).toEqual([exact.card.id]);
+  expect(await ids({ tagGroups: [['ä']] })).toEqual([other.card.id]);
+  expect(await ids({ tagGroups: [['sea, sky']] })).toEqual([exact.card.id]);
+  expect(await ids({ tagGroups: [['padded']] })).toEqual([]);
 }

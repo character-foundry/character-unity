@@ -4,12 +4,14 @@ import { Bool, DataType, Field, FixedSizeList, Float32, Float64, Schema, Utf8 } 
 import { ArchiveError } from '@character-unity/archive-client/contract';
 import type { SearchMatch } from '@character-unity/archive-client';
 import type { LibraryIndexMutation, LibraryIndexProjection } from '@character-unity/archive-client/native';
+import { fold } from '@character-unity/store/library-query';
 import type { ArchiveCardSummary } from './native/store.js';
 import type { ArchiveQuery } from './native/query.js';
 import { normalizedVector } from './embeddings.js';
 import type { DocumentEmbedder, QueryEmbedder } from './embeddings.js';
 import { buildSearchDocument, searchDocumentSchema, searchSourceColumns } from './search-document.js';
-import { compileSearchFilter, searchFilterFields } from './search-filter.js';
+import { compileSearchFilterPlan, searchFilterFields } from './search-filter.js';
+import { compileTagGroupFilter } from './tag-group-filter.js';
 import { evaluateSearch, parseSearchExpression } from './search-query.js';
 import { hybridRank } from './semantic-search.js';
 
@@ -24,6 +26,7 @@ export interface LibraryIndexOptions {
   queryEmbedder?: QueryEmbedder; documentEmbedder?: DocumentEmbedder;
 }
 const tableName = 'unity_library_search_v1';
+const tagPolicyKey = 'unity.library.tag-policy', exactTagPolicy = 'exact-ascii-v1';
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`;
 const textFields = ['description', 'personality', 'scenario', 'first_mes', 'mes_example', 'system_prompt', 'post_history_instructions'] as const;
 function invalid(message: string): never { throw new ArchiveError('INVALID_INPUT', message); }
@@ -100,7 +103,12 @@ function projectionDocument(event: LibraryIndexEvent) {
     hasAlternateGreetings: !!p?.alternate_greetings.length, hasLorebook: !!p?.lorebookEntries, hasGallery: !!card?.flags.gallery,
     hasExpressions: !!card?.flags.expressions, hasEmbeddedImages: !!card?.flags.embeddedImages, hasSystemPrompt: !!card?.flags.systemPrompt, hasExampleDialogues: !!card?.flags.exampleDialogues });
   const document = buildSearchDocument(source, Date.now());
-  if (p) document.searchText = [p.name, p.creator, p.tags.join(' '), ...textFields.map((key) => p[key]), ...p.alternate_greetings].filter(Boolean).join('\n');
+  if (p) {
+    // Owned projections already have exact arrays. The legacy CSV projection
+    // must not split literal commas or apply Unicode-wide case folding here.
+    document.tags = document.topics = p.tags.map(fold);
+    document.searchText = [p.name, p.creator, p.tags.join(' '), ...textFields.map((key) => p[key]), ...p.alternate_greetings].filter(Boolean).join('\n');
+  }
   return { ...document, searchText: String(document.searchText), workspaceId: event.workspaceId, revisionId: event.revisionId, eventSequence: event.eventSequence,
     deleted: event.operation === 'delete', libraryHasPortrait: p?.hasPortrait === true,
     summary: card ? JSON.stringify(card) : '', matchText: String(document.searchText).slice(0, 8192) };
@@ -118,10 +126,13 @@ export async function openLibraryIndex(options: LibraryIndexOptions) {
     new Field('libraryHasPortrait', new Bool(), false),
     new Field('matchText', new Utf8(), false),
     new Field('vector', new FixedSizeList(options.space.dimensions, new Field('item', new Float32(), true)), true),
-  ], new Map([['unity.library.model', options.space.model], ['unity.library.dimensions', String(options.space.dimensions)]]));
+  ], new Map([['unity.library.model', options.space.model], ['unity.library.dimensions', String(options.space.dimensions)],
+    // Creation only: a later partial upsert must never bless an old table.
+    [tagPolicyKey, exactTagPolicy]]));
   const connection = await connect(options.lanceDirectory, { readConsistencyInterval: 0 });
   let table: Awaited<ReturnType<typeof connection.openTable>> | undefined, closed = false;
   let writes = Promise.resolve();
+  const verifiedTags = new Map<string, number>();
   const semantic = !!(options.queryEmbedder && options.documentEmbedder);
   async function getTable(create = false) {
     if (closed) throw new ArchiveError('UNAVAILABLE', 'Library search index is closed');
@@ -142,6 +153,41 @@ export async function openLibraryIndex(options: LibraryIndexOptions) {
     if (!(await selected.listIndices()).some((index) => index.indexType === 'FTS' && index.columns.includes('searchText'))) {
       await selected.createIndex('searchText', { config: Index.fts({ withPosition: true, lowercase: true, asciiFolding: true }) });
     }
+  }
+  async function verifyLegacyTags(selected: NonNullable<typeof table>, workspaceId: string, version: number, columns: string[], signal: AbortSignal) {
+    if (verifiedTags.get(workspaceId) === version) return;
+    const refuse = () => { throw new ArchiveError('UNAVAILABLE', 'This workspace has unverified legacy tag projections; explicitly rebuild its owned search projections before using tag filters'); };
+    let count = 0, bytes = 0;
+    const deadline = Date.now() + 15_000;
+    for (let offset = 0; offset <= 10_000; offset += 64) {
+      signal.throwIfAborted();
+      const limit = Math.min(64, 10_001 - offset);
+      const rows = await selected.query().where(`workspaceId = ${quote(workspaceId)} AND deleted = false`)
+        .select(['summary', ...columns]).offset(offset).limit(limit).toArray({ timeoutMs: Math.max(1, deadline - Date.now()) });
+      for (const row of rows) {
+        if (++count > 10_000 || typeof row.summary !== 'string' || row.summary.length > 65_536 || (bytes += Buffer.byteLength(row.summary)) > 8 * 1024 * 1024) refuse();
+        let raw: unknown;
+        try { raw = JSON.parse(row.summary); } catch { refuse(); }
+        if (!raw || typeof raw !== 'object' || !('tags' in raw) || !Array.isArray(raw.tags) || raw.tags.length > 200
+          || raw.tags.some((tag: unknown) => typeof tag !== 'string' || tag.length > 120)) refuse();
+        const expected = (raw as { tags: string[] }).tags.map(fold);
+        for (const column of columns) {
+          const value: unknown = row[column];
+          if (!value || typeof value !== 'object' || !(Symbol.iterator in value) || typeof value[Symbol.iterator] !== 'function') refuse();
+          let index = 0;
+          for (const tag of value as Iterable<unknown>) if (typeof tag !== 'string' || tag !== expected[index++]) refuse();
+          if (index !== expected.length) refuse();
+          for (const tag of expected) bytes += Buffer.byteLength(tag);
+          if (bytes > 8 * 1024 * 1024) refuse();
+        }
+      }
+      if (rows.length < limit) break;
+      if (Date.now() >= deadline) refuse();
+    }
+    signal.throwIfAborted();
+    if (version !== await selected.version()) throw new ArchiveError('SNAPSHOT_CHANGED', 'Library projections changed during tag validation; retry the search');
+    if (verifiedTags.size >= 128) verifiedTags.clear();
+    verifiedTags.set(workspaceId, version);
   }
   return {
     capabilities: { enabled: true, semantic, ...(!semantic ? { reason: 'The existing Archive embedding provider is not configured; library upserts remain pending' } : {}) },
@@ -181,12 +227,17 @@ export async function openLibraryIndex(options: LibraryIndexOptions) {
       identity(workspaceId, 'workspace'); query.signal?.throwIfAborted();
       const selected = await getTable();
       if (!selected) return { cards: [], scores: new Map(), matches: new Map(), complete: true, snapshot: 'absent' };
-      const before = await selected.version(), fields = searchFilterFields(schema), filters = [`workspaceId = ${quote(workspaceId)}`, 'deleted = false'];
-      if (query.filter) filters.push(compileSearchFilter(query.filter, fields));
+      const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(query.signal ? [query.signal] : [])]);
+      const before = await selected.version(), actualSchema = await selected.schema(), fields = searchFilterFields(actualSchema), filters = [`workspaceId = ${quote(workspaceId)}`, 'deleted = false'];
+      const filterPlan = compileSearchFilterPlan(query.filter ?? '', fields, { listCase: 'ascii' });
+      filters.push(filterPlan.sql);
       if (query.provider) filters.push(`source = ${quote(query.provider)}`);
       if (query.minTokens) filters.push(`tokenCount >= ${query.minTokens}`);
-      if (query.tags?.length) filters.push(`(${query.tags.map((tag) => `array_contains(topics, ${quote(tag.toLowerCase())})`).join(query.tagMode === 'any' ? ' OR ' : ' AND ')})`);
-      for (const tag of query.exclude ?? []) filters.push(`NOT array_contains(topics, ${quote(tag.toLowerCase())})`);
+      const tagFilter = compileTagGroupFilter(query, fields);
+      if ((tagFilter || filterPlan.listFields.length) && actualSchema.metadata.get(tagPolicyKey) !== exactTagPolicy) {
+        await verifyLegacyTags(selected, workspaceId, before, fields.filter((field) => ['tags', 'topics'].includes(field.name) && field.type === 'strings').map((field) => field.name), signal);
+      }
+      filters.push(tagFilter);
       const flagFields = { greetings: 'hasAlternateGreetings', lorebook: 'hasLorebook', gallery: 'hasGallery', expressions: 'hasExpressions', embeddedImages: 'hasEmbeddedImages', systemPrompt: 'hasSystemPrompt', exampleDialogues: 'hasExampleDialogues' };
       for (const flag of query.has ?? []) {
         if (flag === 'portrait') filters.push('libraryHasPortrait = true');
@@ -201,7 +252,6 @@ export async function openLibraryIndex(options: LibraryIndexOptions) {
         if (card.libraryOwned !== true || card.libraryCardId !== row.id || card.id !== `unity:${row.id}`) throw new ArchiveError('INTEGRITY', 'Library projection identity does not match its row');
         cards.set(card.id, card); return card.id;
       }
-      const signal = AbortSignal.any([AbortSignal.timeout(25_000), ...(query.signal ? [query.signal] : [])]);
       async function lexical(): Promise<Map<string, number>> {
         const universe = await selected!.query().where(predicate).select(['id', 'summary']).limit(10_001).toArray({ timeoutMs: 15_000 });
         if (universe.length > 10_000) throw new ArchiveError('TOO_LARGE', 'Narrow library projection filters to at most 10,000 candidates');

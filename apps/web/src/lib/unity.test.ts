@@ -15,6 +15,29 @@ async function fixture() {
 }
 
 describe('native immutable library client', () => {
+  it('transports exact OR groups separately from literal tags and natural-language text', async () => {
+    const { client, connection, fetcher } = await fixture();
+    fetcher.mockResolvedValueOnce(Response.json({ cards: [], total: 0 }));
+    await client.listCards({ q: 'a forest guardian', tags: ['friendly'],
+      tagGroups: [['Fantasy Guild', 'fantasy', "witch’s guild, adventure"]], excludeTagGroups: [['dark', 'gore']], tagMode: 'all' });
+    const params = new URL(String(fetcher.mock.calls.at(-1)?.[0]), 'https://unity.test').searchParams;
+    expect(params.get('q')).toBe('a forest guardian');
+    expect(params.get('tags')).toBe('friendly');
+    expect(JSON.parse(params.get('tagGroups')!)).toEqual([['Fantasy Guild', 'fantasy', "witch’s guild, adventure"]]);
+    expect(JSON.parse(params.get('excludeTagGroups')!)).toEqual([['dark', 'gore']]);
+    expect(new Headers(fetcher.mock.calls.at(-1)?.[1]?.headers).get('x-unity-actor')).toBe('alice');
+    connection.dispose();
+  });
+
+  it('refuses an oversized group query before sending a request rather than truncating members', async () => {
+    const { client, connection, fetcher } = await fixture();
+    fetcher.mockClear();
+    await expect(client.listCards({ tagGroups: [Array.from({ length: 100 }, (_, i) => `${i}${'x'.repeat(127)}`)] }))
+      .rejects.toThrow('Select fewer meta-tags');
+    expect(fetcher).not.toHaveBeenCalled();
+    connection.dispose();
+  });
+
   it('constructs explicit revision-bound asset and original URLs without descriptor URI fallback', () => {
     expect(assetUrl('workspace /?', 'card /?', 'head /?', 'declared/100'))
       .toBe('/api/workspaces/workspace%20%2F%3F/cards/card%20%2F%3F/asset?revisionId=head+%2F%3F&path=declared%2F100');

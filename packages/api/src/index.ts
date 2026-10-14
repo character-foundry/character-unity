@@ -25,12 +25,13 @@ import { statisticsRoutes } from './statistics.js';
 import { ContentError, type ContentService } from '@character-unity/content';
 import { contentRoutes } from './content.js';
 import type { StatisticsService } from '@character-unity/cards/statistics';
+import { metaTagRoutes, type MetaTagService } from './meta-tags.js';
 export type { LibraryIndexService, LibraryIndexStatus } from './library-index.js';
 
 /** Shared Architect/hub API. Hosts supply storage, card operations and authentication. */
 export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; cards?: CardService; archive?: ArchiveImportService; nativeArchive?: NativeArchiveService; hub?: HubService; content?: ContentService;
   /** Largest upload body (card file or asset form); hosted profiles pass hostedUploadByteLimit. */
-  uploadByteLimit?: number; remotes?: RemoteConnectionsService; chat?: ChatService; statistics?: StatisticsService; libraryIndex?: LibraryIndexService; authenticate?: Authenticate } = {}) {
+  uploadByteLimit?: number; remotes?: RemoteConnectionsService; chat?: ChatService; statistics?: StatisticsService; metaTags?: MetaTagService; libraryIndex?: LibraryIndexService; authenticate?: Authenticate } = {}) {
   const app = new Hono();
   app.use('*', disposeUnusedResponseBody);
   app.onError((error, c) => {
@@ -74,6 +75,7 @@ export function createApi(options: { store?: Pick<UnityStore, 'readiness'>; card
   });
   if (options.chat) app.route('/api/workspaces', chatRoutes(options));
   app.route('/api/workspaces', statisticsRoutes(options));
+  app.route('/api/workspaces', metaTagRoutes(options));
   app.route('/api/content',contentRoutes(options));
   if (options.nativeArchive) app.route('/api/workspaces', nativeArchiveRoutes(options));
   if (options.libraryIndex) app.route('/api/workspaces', libraryIndexRoutes(options));

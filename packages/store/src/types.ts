@@ -1,4 +1,5 @@
 import type { LibraryFilter, LibrarySort } from './library-query.js';
+export type { MetaTag, MetaTagCatalog, MetaTagSelection, MetaTagStore, MetaTagWrite, ResolvedMetaTagFilters } from './meta-tags.js';
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 export type CardDocument = { [key: string]: JsonValue };
 
