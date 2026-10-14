@@ -10,14 +10,16 @@ for this verification to commit
 [`76990644da2b8d79bd57a2a7f3c6e46a5b6aee92`](https://github.com/character-foundry/character-foundry/commit/76990644da2b8d79bd57a2a7f3c6e46a5b6aee92).
 Review: [Foundry draft PR #52](https://github.com/character-foundry/character-foundry/pull/52).
 
-Publishing status checked 2026-10-13: the remote `feat/unity-identity` branch is
-at `0e464d69f5722073845954f06c46affb68539eb4`. The identity/lineage/sync work
-described below is already on that branch, though not a released SDK version.
-Only the later pinned `7699064` is unpublished: it raises identity limits from
+Branch status verified 2026-10-14: the remote `feat/unity-identity` branch contains
+the pinned `76990644da2b8d79bd57a2a7f3c6e46a5b6aee92`. A fresh temporary Git
+repository successfully fetched that exact SHA; the previous fresh-bootstrap
+SHA-fetch blocker is resolved. Identity/lineage/sync remain
+development APIs on that branch, not on default `master` or in a released npm SDK.
+The pinned `7699064` raises identity limits from
 256 to 8,192 asset bindings, 4 to 32 Mi UTF-16 canonical code units and 100,000
 to 2 million JSON nodes, plus a 1,500-asset regression. It changes no schema or
-hash format. Bootstrap fetches the exact SHA, so a branch push is sufficient;
-an npm release is not required. Publishing remains explicitly held.
+hash format. Bootstrap fetches the exact SHA, so the verified branch push is
+sufficient to make the pin available; an npm release is not required.
 
 It adds `@character-foundry/character-foundry/identity`: canonical content identity,
 asset digest bindings, explicit save/fork lineage and publication sanitization.

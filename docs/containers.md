@@ -11,12 +11,13 @@ fetches/builds that SDK inside the builder; no sibling checkout, developer
 The final stage contains the bundled apps and native SQLite dependency closure.
 No compiler, Git checkout or SDK source is copied from the builder.
 
-Fresh image builds are currently **blocked by the held Foundry publication**:
-`foundry-sdk.json` pins `76990644da2b8d79bd57a2a7f3c6e46a5b6aee92`, which is not
-yet available from its configured public repository. A prepared local SDK checkout
-can verify local bundles/staging, but it does not prove a fresh Docker bootstrap.
-Do not substitute the released SDK: it lacks the card-identity code this app uses.
-The build/rehearsal commands below apply once the owner releases that pin.
+The Foundry SHA-fetch blocker was resolved on 2026-10-14: the remote
+`feat/unity-identity` branch now contains the exact
+`76990644da2b8d79bd57a2a7f3c6e46a5b6aee92` pin in `foundry-sdk.json`. Fresh
+bootstrap/image builds can fetch it without an npm release. Identity/sync remain
+unreleased development APIs, absent from default `master` and the released SDK;
+do not substitute that SDK. The current native image build and Docker rehearsal
+still need to be run. Local bundle/staging checks alone do not prove them.
 
 The Node process runs as UID/GID 1000. Compose uses a read-only root filesystem,
 ephemeral `/tmp`, no capabilities and a dedicated writable volume at `/data`.
@@ -88,7 +89,8 @@ Do not clear that site storage as part of this UI switch.
 
 Linux host networking was exercised by the earlier scaffold container rehearsal;
 the native UI's current distribution has only been staged and checked locally.
-Fresh container verification remains gated on the held Foundry publication below.
+Fresh container verification remains outstanding; the Foundry pin is now public,
+so its previous SHA-fetch gate no longer applies.
 Host networking has different
 availability/semantics on other platforms; see Docker's
 [host network documentation](https://docs.docker.com/engine/network/drivers/host/).
@@ -127,8 +129,9 @@ graceful termination. The local-profile checks use one isolated volume and a tem
 This tests HTTP transport and cookie headers, not browser certificate installation.
 
 CI builds and runs this rehearsal separately from `pnpm check`; it does not push
-an image or deploy. It cannot pass its fresh-build stage until the held Foundry
-commit is published; local staging alone is not container verification.
+an image or deploy. The pinned Foundry commit is now available for its fresh-build
+stage, but this does not establish that the current build/rehearsal passed; local
+staging alone is not container verification.
 The clean install validates the dependencies actually used by
 Unity's Node profile. Archive has a [separate image and native search rehearsal](archive-native-runtime.md).
 These probes do **not** validate full legacy search parity,
