@@ -50,9 +50,11 @@ native browser report directories. Older totals below describe historical
 checkpoints, not this expanded tree.
 
 Live Archive/provider/writer takeover and migration remain excluded. Foundry pin
-`7699064` is still held locally; only its Risu-sized identity-limit commit is
-unpublished, while earlier identity/lineage/sync work is on the remote feature
-branch. Fresh Docker bootstrap remains gated by that exact SHA. Public deployment,
+`7699064`, including its Risu-sized identity-limit update, was pushed on
+2026-10-14. A fresh temporary Git repository fetched the exact SHA successfully;
+the prior bootstrap fetch blocker is resolved. Identity/lineage/sync remain
+unreleased development APIs, not an npm release or code merged into default
+`master`. Fresh Docker build/rehearsal is still unperformed. Public deployment,
 full-library browser backup/eviction recovery and reconciliation of pre-existing
 legacy Architect worktree changes are not claimed. An unchanged Archive reference
 still cannot publish directly; save a changed owned fork first.

@@ -29,7 +29,8 @@ and are disabled in the hub profile. Templates, presets and editor preferences
 remain available. These browser features do not provision a publicly hosted hub.
 
 Existing Archive database/files/LanceDB stay in place. Live writer takeover is
-on hold, along with live embedding-provider acceptance and Foundry publishing.
+on hold, along with live embedding-provider acceptance. The pinned Foundry commit
+is now public and fetchable; its identity/sync APIs remain unreleased npm features.
 Archive favorites now add exact-version library references, not copied cards.
 Unchanged reads and editor drafts resolve through Archive; the first changed Save
 creates an owned fork and retains inherited asset locators. File import checks
